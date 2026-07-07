@@ -10,6 +10,7 @@
 from cyp.contracts.models import (
     AnalystReport,
     ApprovalDecision,
+    Balances,
     Candle,
     DerivativesData,
     ExecutionResult,
@@ -17,6 +18,7 @@ from cyp.contracts.models import (
     OnchainData,
     OrderBook,
     OrderIntent,
+    Position,
     PricePlan,
     ProtectiveOrder,
     RiskAssessment,
@@ -29,6 +31,7 @@ from cyp.contracts.models import (
 __all__ = [
     "AnalystReport",
     "ApprovalDecision",
+    "Balances",
     "Candle",
     "DerivativesData",
     "ExecutionResult",
@@ -36,6 +39,7 @@ __all__ = [
     "OnchainData",
     "OrderBook",
     "OrderIntent",
+    "Position",
     "PricePlan",
     "ProtectiveOrder",
     "RiskAssessment",

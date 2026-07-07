@@ -181,6 +181,27 @@ class ExecutionResult(BaseModel):
     error: str | None = None
 
 
+# ---- 账户/持仓（venue ↔ portfolio ↔ risk 复用）-----------------------------
+
+class Position(BaseModel):
+    symbol: str
+    venue: str
+    side: Literal["long", "short"]
+    instrument: Instrument = "spot"
+    size_base: Decimal = Field(ge=0)     # 基础币数量
+    entry_price: Decimal
+    leverage: float = Field(default=1.0, ge=1.0)
+
+    def notional_at(self, price: Decimal) -> Decimal:
+        return self.size_base * price
+
+
+class Balances(BaseModel):
+    quote_ccy: str = "USDT"
+    free_quote: Decimal = Decimal(0)     # 可用计价币
+    total_quote: Decimal = Decimal(0)    # 账户净值近似（含持仓市值）
+
+
 # ---- 复盘层：TradeReview ----------------------------------------------------
 
 class TradeReview(BaseModel):
