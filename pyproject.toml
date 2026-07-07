@@ -7,7 +7,7 @@ name = "cyp-agent"
 version = "0.1.0"
 description = "半自动加密货币多智能体交易助手（CEX 现货/合约 + 链上 DeFi，人在环，风控优先）"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 license = { text = "MIT" }
 
 # 核心依赖：零密钥即可跑模拟盘。LLM / 链上按需选装 extras。
