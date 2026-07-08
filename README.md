@@ -47,8 +47,10 @@ pip install -e ".[dev]"
 # 2. 复制配置，默认 paper 模式 + 规则信号（零密钥）
 cp .env.example .env
 
-# 3. 跑一个完整闭环（模拟盘，CLI 审批）
-python -m cyp.examples.run --symbol BTC/USDT --mode paper
+# 3. 跑一个完整闭环（离线合成行情，零密钥）
+python -m cyp.examples.run --symbol BTC/USDT --approve auto   # 自动批准（演示）
+python -m cyp.examples.run --symbol BTC/USDT --approve cli    # 人工审批（半自动）
+#   --data cex 可切换为真实只读行情（无需密钥，需联网）
 
 # 4. 启动仪表盘（另开终端）
 uvicorn apps.server.main:app --reload      # 后端 REST + SSE
