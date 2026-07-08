@@ -78,8 +78,18 @@ class Settings(BaseSettings):
     binance_api_secret: str | None = Field(default=None, validation_alias="BINANCE_API_SECRET")
     live_ack: bool = False          # 实盘确认（防误开实盘）；mode=live 时必须为 True
 
+    # OKX（模拟交易 = OKX Demo Trading；需 API passphrase）
+    okx_api_key: str | None = Field(default=None, validation_alias="OKX_API_KEY")
+    okx_api_secret: str | None = Field(default=None, validation_alias="OKX_API_SECRET")
+    okx_password: str | None = Field(default=None, validation_alias="OKX_PASSWORD")
+    okx_demo: bool = True           # True = OKX Demo（模拟盘，sandbox）；实盘需显式关
+
     # 告警
     alert_webhook: str | None = None
+
+    @property
+    def okx_configured(self) -> bool:
+        return bool(self.okx_api_key and self.okx_api_secret and self.okx_password)
 
     # 链上（M3）
     evm_rpc_url: str | None = None

@@ -52,4 +52,13 @@ def build_registry(settings: Settings) -> VenueRegistry:
         api_secret=settings.binance_api_secret,
         read_only=cex_read_only,
     ))
+    # OKX：模拟交易（Demo/sandbox）。有 demo API 凭据即可下单，否则只读。
+    reg.register(CexVenue(
+        exchange_id="okx",
+        api_key=settings.okx_api_key,
+        api_secret=settings.okx_api_secret,
+        password=settings.okx_password,
+        read_only=not settings.okx_configured,
+        sandbox=settings.okx_demo,
+    ))
     return reg

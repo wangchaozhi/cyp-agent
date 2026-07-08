@@ -22,6 +22,7 @@ from cyp.contracts import (
     ProtectiveOrder,
 )
 from cyp.observability import get_logger
+from cyp.venue.adapters import get_adapter
 from cyp.venue.base import PreflightReport, VenueCaps
 
 
@@ -29,21 +30,29 @@ class CexVenue:
     kind = "cex"
 
     def __init__(self, exchange_id: str = "binance", api_key: str | None = None,
-                 api_secret: str | None = None, read_only: bool = True,
+                 api_secret: str | None = None, password: str | None = None,
+                 read_only: bool = True, sandbox: bool = False,
                  quote_ccy: str = "USDT", est_slippage_bps: Decimal = Decimal("10"),
                  client=None) -> None:
         self.id = exchange_id
         self._api_key = api_key
         self._api_secret = api_secret
+        self._password = password        # OKX 等需要 API passphrase
+        self._sandbox = sandbox          # True = 交易所 Demo/模拟盘（如 OKX Demo Trading）
+        self._sandbox_set = False
         self.quote_ccy = quote_ccy
         self._est_slippage_bps = est_slippage_bps
+        self.adapter = get_adapter(exchange_id)
         self.caps = VenueCaps(spot=True, perp=True, native_protective_orders=True, read_only=read_only)
         self._client = client            # 注入的假交易所（测试）或惰性构造的 ccxt
         self._fills: dict[str, ExecutionResult] = {}   # client_id -> 结果（幂等）
         self.log = get_logger("cex")
 
     def is_configured(self) -> bool:
-        return True if self.caps.read_only else bool(self._api_key and self._api_secret)
+        if self.caps.read_only:
+            return True
+        need_pw = self.id == "okx"
+        return bool(self._api_key and self._api_secret and (self._password or not need_pw))
 
     def _ccxt(self):
         if self._client is None:
@@ -52,8 +61,14 @@ class CexVenue:
             except ImportError as e:  # pragma: no cover
                 raise RuntimeError("需要 ccxt：pip install ccxt") from e
             cls = getattr(ccxt, self.id)
-            self._client = cls({"apiKey": self._api_key, "secret": self._api_secret,
-                                "enableRateLimit": True})
+            cfg = {"apiKey": self._api_key, "secret": self._api_secret, "enableRateLimit": True}
+            if self._password:
+                cfg["password"] = self._password
+            self._client = cls(cfg)
+        # 启用交易所模拟盘（幂等）
+        if self._sandbox and not self._sandbox_set and hasattr(self._client, "set_sandbox_mode"):
+            self._client.set_sandbox_mode(True)
+            self._sandbox_set = True
         return self._client
 
     async def close(self) -> None:
@@ -144,16 +159,9 @@ class CexVenue:
             else ("buy" if intent.side == "long" else "sell")
 
         if intent.instrument == "perp":
-            for setter, arg in ((ex.set_margin_mode, intent.margin_mode),
-                                (ex.set_leverage, int(intent.leverage))):
-                try:
-                    await setter(arg, intent.symbol)
-                except Exception:  # noqa: BLE001 —— 已设置过会报错，忽略
-                    pass
+            await self.adapter.configure_perp(ex, intent)
 
-        params = {"clientOrderId": intent.client_id}
-        if intent.instrument == "perp":
-            params["reduceOnly"] = is_close
+        params = self.adapter.entry_params(intent, is_close)
         otype = "market" if intent.order_type == "market" else "limit"
         try:
             order = await ex.create_order(intent.symbol, otype, entry_side, amount,
@@ -170,7 +178,7 @@ class CexVenue:
         protective: list[ProtectiveOrder] = []
         if not is_close and (intent.stop_loss or intent.take_profit):
             try:
-                protective = await self._place_protective(ex, intent, filled)
+                protective = await self.adapter.place_protective(ex, intent, filled)
             except Exception as e:  # noqa: BLE001
                 # ★ 有仓必有保护：保护单失败 → 立即市价平掉裸仓
                 self.log.error("protective_failed_flatten", symbol=intent.symbol, error=str(e))
@@ -183,26 +191,11 @@ class CexVenue:
             client_id=intent.client_id, order_id=str(order.get("id")), status="filled",
             filled_base=filled, avg_price=avg, fee_quote=fee, protective_orders=protective))
 
-    async def _place_protective(self, ex, intent: OrderIntent, amount: Decimal) -> list[ProtectiveOrder]:
-        close_side = "sell" if intent.side == "long" else "buy"
-        out: list[ProtectiveOrder] = []
-        if intent.stop_loss is not None:
-            o = await ex.create_order(intent.symbol, "STOP_MARKET", close_side, float(amount), None,
-                                      {"stopPrice": float(intent.stop_loss), "reduceOnly": True,
-                                       "clientOrderId": f"{intent.client_id}-sl"})
-            out.append(ProtectiveOrder(kind="stop_loss", order_id=str(o.get("id")),
-                                       trigger_price=intent.stop_loss))
-        for i, tp in enumerate(intent.take_profit):
-            o = await ex.create_order(intent.symbol, "TAKE_PROFIT_MARKET", close_side, float(amount), None,
-                                      {"stopPrice": float(tp), "reduceOnly": True,
-                                       "clientOrderId": f"{intent.client_id}-tp{i}"})
-            out.append(ProtectiveOrder(kind="take_profit", order_id=str(o.get("id")), trigger_price=tp))
-        return out
-
     async def _flatten(self, ex, intent: OrderIntent, amount: Decimal) -> None:
         close_side = "sell" if intent.side == "long" else "buy"
-        await ex.create_order(intent.symbol, "market", close_side, float(amount), None,
-                              {"reduceOnly": True, "clientOrderId": f"{intent.client_id}-flat"})
+        params = self.adapter.entry_params(intent, is_close=True)
+        params["clientOrderId"] = f"{intent.client_id}-flat"
+        await ex.create_order(intent.symbol, "market", close_side, float(amount), None, params)
 
     def _remember(self, intent: OrderIntent, res: ExecutionResult) -> ExecutionResult:
         self._fills[intent.client_id] = res

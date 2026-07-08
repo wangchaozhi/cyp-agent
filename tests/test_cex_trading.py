@@ -76,8 +76,9 @@ def test_protective_failure_flattens_naked_position():
     res = run(_venue(fake).place(_intent()))
     assert res.status == "failed"
     assert "平裸仓" in (res.error or "")
-    # 应有一笔市价 reduceOnly 平仓（fail-safe）
-    flat = [c for c in fake.calls if c["type"] == "market" and c["params"].get("reduceOnly")]
+    # 应有一笔市价平仓（fail-safe），clientOrderId 以 -flat 标识
+    flat = [c for c in fake.calls if c["type"] == "market"
+            and str(c["params"].get("clientOrderId", "")).endswith("-flat")]
     assert len(flat) == 1
 
 
