@@ -184,10 +184,14 @@ class Orchestrator:
         gross = sum((p.notional_at(ref) for p in positions), Decimal(0))
         symbol_exp = sum((p.notional_at(ref) for p in positions if p.symbol == symbol), Decimal(0))
 
+        # 合约维持保证金率 = 账户净值 / 现有永续名义（无永续仓则 None，规则跳过）
+        perp_notional = sum((p.notional_at(ref) for p in positions if p.instrument == "perp"), Decimal(0))
+        margin_ratio = (equity / perp_notional) if perp_notional > 0 else None
+
         rctx = RiskContext(
             equity_quote=equity, ref_price=ref,
             gross_exposure_quote=gross, symbol_exposure_quote=symbol_exp,
-            kill=self.settings.kill, reconciling=self.reconciling,
+            kill=self.settings.kill, reconciling=self.reconciling, margin_ratio=margin_ratio,
             est_slippage_bps=pf.est_slippage_bps, est_liq_price=pf.est_liq_price,
         )
         assessment = risk_assess(proposal, rctx, cfg)

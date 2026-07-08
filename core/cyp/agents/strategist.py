@@ -52,6 +52,15 @@ class Strategist:
         atr = ind["atr"] or float(ref) * 0.02
         atr_dec = Decimal(str(atr))
         side = "long" if net > 0 else "short"
+
+        # 工具与杠杆：允许永续且置信足够时用合约，杠杆由置信度决定（封顶 max_leverage）
+        max_lev = float(cfg.max_leverage)
+        if getattr(ctx.settings, "allow_perp", False) and confidence >= 0.25 and max_lev > 1:
+            instrument = "perp"
+            leverage = max(1.0, min(max_lev, float(round(1 + confidence * (max_lev - 1)))))
+        else:
+            instrument = "spot"
+            leverage = 1.0
         if side == "long":
             stop = ref - K_STOP * atr_dec
             tps = [ref + K_TP * atr_dec]
@@ -72,8 +81,9 @@ class Strategist:
                 thesis = refined.strip()
 
         return TradeProposal(
-            symbol=snap.symbol, venue=venue_id, side=side, instrument="spot",
-            size_quote=size_quote.quantize(Decimal("0.01")), leverage=1.0,
+            symbol=snap.symbol, venue=venue_id, side=side, instrument=instrument,
+            size_quote=size_quote.quantize(Decimal("0.01")), leverage=leverage,
+            margin_mode="isolated",
             entry=PricePlan(type="market"),
             stop_loss=stop.quantize(Decimal("0.01")),
             take_profit=[t.quantize(Decimal("0.01")) for t in tps],

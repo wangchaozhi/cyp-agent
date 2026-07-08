@@ -72,10 +72,13 @@ class PaperVenue:
         equity = self._free_quote
         for pos in self._positions.values():
             mark = self._marks.get(pos.symbol, pos.entry_price)
-            if pos.side == "long":
-                equity += pos.size_base * mark
-            else:  # short：以入场名义 + 反向浮盈近似
-                equity += pos.size_base * (Decimal(2) * pos.entry_price - mark)
+            upnl = pos.size_base * (mark - pos.entry_price) if pos.side == "long" \
+                else pos.size_base * (pos.entry_price - mark)
+            if pos.instrument == "perp":
+                margin = (pos.size_base * pos.entry_price) / Decimal(str(pos.leverage))
+                equity += margin + upnl
+            else:  # 现货：持仓市值
+                equity += pos.size_base * pos.entry_price + upnl
         return Balances(quote_ccy=self.quote_ccy, free_quote=self._free_quote, total_quote=equity)
 
     # ---- 执行 --------------------------------------------------------------
@@ -116,7 +119,10 @@ class PaperVenue:
         if intent.reduce_only or intent.side == "flat":
             res = self._close(intent, key, price, fee)
         else:
-            self._free_quote -= intent.size_quote + fee
+            # 现货扣全额名义；合约只扣保证金 = 名义 / 杠杆
+            cost = (intent.size_quote / Decimal(str(intent.leverage))
+                    if intent.instrument == "perp" else intent.size_quote)
+            self._free_quote -= cost + fee
             self._positions[key] = Position(
                 symbol=intent.symbol, venue=self.id, side=intent.side, instrument=intent.instrument,
                 size_base=size_base, entry_price=price, leverage=intent.leverage,
@@ -144,10 +150,13 @@ class PaperVenue:
         pos = self._positions.pop(key, None)
         if pos is None:
             return ExecutionResult(client_id=intent.client_id, status="rejected", error="无持仓可平")
-        if pos.side == "long":
-            proceeds = pos.size_base * price
+        upnl = pos.size_base * (price - pos.entry_price) if pos.side == "long" \
+            else pos.size_base * (pos.entry_price - price)
+        if pos.instrument == "perp":
+            margin = (pos.size_base * pos.entry_price) / Decimal(str(pos.leverage))
+            proceeds = margin + upnl        # 退回保证金 + 已实现盈亏
         else:
-            proceeds = pos.size_base * (Decimal(2) * pos.entry_price - price)
+            proceeds = pos.size_base * pos.entry_price + upnl
         self._free_quote += proceeds - fee
         return ExecutionResult(
             client_id=intent.client_id, order_id=self._next_id("close"), status="filled",
