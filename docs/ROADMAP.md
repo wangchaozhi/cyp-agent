@@ -102,10 +102,10 @@
 
 - [x] 接入第二家 CEX（**OKX**）：交易所适配层（tdMode/mgnMode/统一保护单）+ **OKX Demo 模拟交易**
       （sandbox + passphrase），`--venue okx` 可用；假交易所离线测参数差异（非重写，验证成立）
-- [~] Venue 注册表支持多 CEX 并存（paper/binance/okx 已注册）；跨所行情聚合/最优场所待补
+- [x] Venue 注册表多 CEX 并存（paper/binance/okx）；**跨所行情聚合**（最优买卖场所 + 跨所价差）`/api/market`
 - [x] 组合级风控：跨场所聚合持仓 → 总敞口 + 单标的集中度 + **相关性簇同向净敞口护栏**
 - [~] 策略官感知现有组合：硬护栏已按组合聚合校验；策略官侧主动规避待硬化
-- [ ] 组合仪表盘：全账户净值/敞口热力图/相关性
+- [x] 组合仪表盘：`/api/portfolio` + 面板（净值/总敞口/相关性簇同向敞口对上限）；敞口热力图待补
 - [ ] （可选）跨所价差/资金费套利线索（仅提示，不自动执行）
 
 **验收**：多所同时运行；组合相关性敞口超限被否决；组合看板可用。
@@ -120,7 +120,8 @@
 - [x] 回测引擎：`Backtester` 入场**复用同一套** 分析师→策略官→风控（Orchestrator+PaperVenue），
       按 bar 高低价触发止损/止盈平仓，完成 round-trip
 - [x] 绩效评估：总收益/最大回撤/夏普/胜率/盈亏比（`compute_metrics` 纯函数，单测）
-- [~] 策略参数化：阈值经 RiskConfig/Settings 可配；「策略配置」打包与择优待补
+- [x] 策略参数化：`StrategyConfig` 打包（权重/入场阈值/ATR 止损止盈倍数/单笔风险）+
+      `grid()` 扫参 + `sweep()` 按目标函数排序择优（`python -m cyp.backtest.sweep`）
 - [ ] 复盘经验与回测结果打通，辅助策略择优
 - [ ] 仪表盘：回测报告页（现为 CLI `python -m cyp.backtest.run`）
 

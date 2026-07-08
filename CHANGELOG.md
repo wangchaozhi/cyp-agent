@@ -4,18 +4,25 @@
 
 ## [未发布]
 
-### M5（部分）· 回测引擎
+### M5（部分）· 策略参数化择优 + 回测引擎
+- **策略参数化**：`StrategyConfig` 打包策略官可调参（分析师权重/入场阈值/ATR 止损止盈
+  倍数/单笔风险），策略官配置驱动；`grid()` 笛卡尔积 + `sweep()` 批量回测按目标函数
+  （默认 收益-回撤）排序择优；`python -m cyp.backtest.sweep`。最优配置可直接注入 Orchestrator。
+
 - **回测/模拟/实盘三档统一**：`Backtester` 入场复用 Orchestrator 全管线
   （分析师→策略官→风控→PaperVenue），仅在回测层补按 bar 高低价触发的止损/止盈平仓，
   完成 round-trip；`HistoricalData` 按游标回放窗口快照。
 - **绩效**：`compute_metrics` 纯函数——总收益/最大回撤/夏普/胜率/盈亏比。
 - **CLI**：`python -m cyp.backtest.run`（合成历史，零密钥离线）。
 
-### M4（部分）· 组合级风控 + OKX 模拟交易 + 交易所适配层
+### M4（部分）· 组合级风控 + 跨所聚合 + OKX 模拟交易 + 交易所适配层
 - **组合级风控**：跨场所聚合持仓（`aggregate_positions` 失败隔离）→ `PortfolioView`
   计算总敞口/单标的/相关性簇同向净敞口；新护栏 `correlated_exposure`——相关性簇
   （majors/alt 聚类）内同向净敞口 ≤ 账户×`max_correlated_exposure`，避免押重相关篮子。
   编排器按 `risk_venues` 聚合，server/CLI 传入执行场所 + 注册表其它场所。
+- **跨所行情聚合**：`MarketAggregator`——多场所报价、最优买卖场所、跨所价差(bps)
+  （套利/异常线索，仅提示）；`GET /api/market`。
+- **组合仪表盘**：`GET /api/portfolio` + 面板（净值/总敞口/相关性簇同向敞口对上限）。
 
 - **交易所适配层** `venue/adapters.py`：把各家 ccxt 抹不平的差异（保护单参数、
   持仓/保证金模式）收敛到 adapter；CexVenue 通用流程不变，仅委托 configure_perp/
