@@ -21,22 +21,22 @@
 
 **目标**：PaperVenue 上端到端跑通 采集→分析→决策→风控→审批→执行→复盘，无任何外部密钥可演示。
 
-功能条目：
-- [ ] 契约 `contracts/models.py`（7 步全部数据结构）+ TS 类型生成脚本
-- [ ] `Venue` 抽象 + `PaperVenue`（确定性滑点撮合）+ `CexVenue` 只读行情（Binance 现货）
-- [ ] 数据管线：行情/K线/订单簿 + 指标（pandas-ta）+ 资金费（只读）+ 情绪（mock）
-- [ ] 分析师团：technical（真实）、derivatives（真实资金费/OI）、sentiment（mock 降级）
-- [ ] 首席策略官（LLM + 规则降级）
-- [ ] **确定性风控引擎**：单笔风险/止损必填/单仓上限/日回撤熔断（每条带单测）
-- [ ] 风控官（LLM 软评审 + 降级跳过）
-- [ ] 审批门（CLI 交互）+ `examples/run.py`
-- [ ] 交易员 → PaperVenue 模拟成交 + 复盘官
-- [ ] 运行时最小版（[RUNTIME.md](RUNTIME.md)）：入场即挂模拟保护单、启动对账、扫描/监控双循环
-- [ ] `orchestrator` 串联 + `events` + `memory` 检查点/续跑 + `ResilientLLM`
-- [ ] `apps/server`（REST + SSE）+ `apps/web` 最小仪表盘（信号流/待审批/持仓）
-- [ ] 可观测：trace/span、结构化日志脱敏、`metrics.snapshot()`
+功能条目（进度：`x`=完成 `~`=部分）：
+- [x] 契约 `contracts/models.py`（7 步全部数据结构，Decimal 计价）
+- [x] `Venue` 抽象 + `PaperVenue`（确定性撮合 + 幂等 + 入场挂保护单）+ `CexVenue` 只读行情
+- [x] 数据管线：纯 Python 指标（SMA/EMA/RSI/MACD/ATR/BOLL）+ 合成/真实两种行情源
+- [x] 分析师团：technical/derivatives（真实规则）、sentiment/onchain（缺数据降级）
+- [x] 首席策略官（规则定数字 + LLM 仅润色论述）
+- [x] **确定性风控引擎**：14 条硬护栏（单笔风险/止损必填/回撤熔断/…），25 单测
+- [x] 风控官（LLM 软评审只收紧 + 无 LLM 透传）
+- [x] 审批门（CLI 交互 + 仪表盘按钮）+ `examples/run.py`
+- [x] 交易员 → PaperVenue 模拟成交 + 复盘官
+- [x] `orchestrator` 串联 7 步 + `events` 总线 + `memory` 检查点 + `ResilientLLM`
+- [x] `apps/server`（FastAPI REST + SSE）+ `apps/web` 仪表盘（事件流/待审批/持仓/KillSwitch）
+- [~] 运行时（[RUNTIME.md](RUNTIME.md)）：入场挂保护单 ✓；启动对账 / 扫描·监控双循环 待补
+- [~] 可观测：LLM metrics ✓；trace/span、结构化日志脱敏 待补
 
-**验收**：`--mode paper` 无密钥跑完整闭环；「无止损被拒」「超仓被缩」等风控用例过 CI；仪表盘能看到全流程。
+**验收**：无密钥离线跑完整闭环 ✓（`python -m cyp.examples.run`）；「无止损被拒」「超仓被缩」「Kill Switch 否决」等风控用例过 CI ✓（73 tests）；仪表盘全流程可见 ✓。剩余 `~` 两项收尾即 M0 完全体。
 
 ---
 
