@@ -31,6 +31,7 @@
 | 总敞口上限 ≤ 账户 × `max_gross_exposure` | 100%（现货）/ 视保证金 | 否决 |
 | 单标的集中度 ≤ `max_symbol_concentration` | 30% | 缩仓 |
 | 相关性簇同向净敞口 ≤ `max_correlated_exposure`（跨场所聚合，majors/alt 聚类） | 50% | 缩仓/否决 |
+| 组合 CVaR ≤ 账户净值 × `max_cvar_pct`（尾部损失护栏） | 3% | 否决 |
 | 下单频率 ≤ `max_orders_per_window` | 10/小时 | 否决 |
 | 预估滑点 ≤ `max_slippage_bps` | 30 bps | 否决 |
 | Kill Switch 开启 | — | 全部否决 |
@@ -94,6 +95,12 @@
 | `CYP_MODE` | `paper`（默认）/ `live` | `live` 需满足前置校验（Key 权限正确、Kill Switch 未触发、风控配置已审阅） |
 | `CYP_APPROVAL` | `cli` / `dashboard` / `auto` | `auto` 仅 M6，且受策略白名单 + 低 risk_score + 小额三重约束 |
 | `RiskConfig.*` | 见 §2/§3 | 实盘阈值应显式设置且比默认更保守 |
+
+尾部风险相关新增：
+
+| 配置 | 默认 | 说明 |
+| --- | --- | --- |
+| `CYP_MAX_CVAR_PCT` | `0.03` | 组合 CVaR 尾部损失上限，占账户净值比例；超限拒绝新开仓 |
 
 ## 7. 风控相关的工程纪律
 

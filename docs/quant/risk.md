@@ -1,6 +1,17 @@
 # 尾部风险模型
 
-目标：把“最坏时候会亏多少”变成确定性护栏，而不是只看平均收益和普通回撤。本分册规划 `risk/measures.py` 与 `risk/rules.py` 的新增模型。
+目标：把“最坏时候会亏多少”变成确定性护栏，而不是只看平均收益和普通回撤。本分册对应 `risk/measures.py` 与 `risk/rules.py`。
+
+当前实现状态：
+
+| 能力 | 状态 | 代码 |
+| --- | --- | --- |
+| 非负损失序列 | 已实现 | `losses_from_returns` |
+| Historical VaR | 已实现 | `historical_var` |
+| CVaR / Expected Shortfall | 已实现 | `conditional_value_at_risk` |
+| 计价币尾部风险 | 已实现 | `tail_risk_quote` |
+| CVaR 硬护栏 | 已实现 | `rule_cvar_limit` |
+| 参数 VaR / EVT | 待实现 | 后续扩展 |
 
 ## 损失定义
 
@@ -51,7 +62,7 @@ min_samples = 250
 VaR_alpha = mu_loss + z_alpha * sigma_loss
 ```
 
-仅可作为对照，不作为加密实盘唯一护栏。加密收益厚尾、跳跃、非平稳，正态 VaR 容易过度乐观。
+仅可作为对照，不作为加密实盘唯一护栏。加密收益厚尾、跳跃、非平稳，正态 VaR 容易过度乐观。当前尚未实现。
 
 ## CVaR / Expected Shortfall
 
@@ -66,6 +77,13 @@ CVaR_alpha = mean(loss | loss >= VaR_alpha)
 ```text
 CVaR_95 <= equity * daily_drawdown_limit
 CVaR_99 <= equity * max_drawdown_limit / 3
+```
+
+当前硬护栏：
+
+```text
+portfolio_cvar_quote <= equity_quote * max_cvar_pct
+default max_cvar_pct = 0.03
 ```
 
 规则语义：

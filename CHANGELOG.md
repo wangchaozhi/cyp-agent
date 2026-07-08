@@ -7,8 +7,14 @@
 ### 文档 · 数学模型规格完善
 - 新增 `docs/quant/` 规格分册：validation / stats / risk / sizing / portfolio /
   signals_execution，补齐公式、默认阈值、数据要求、降级路径和测试清单。
-- 同步 Q1 量化状态：`validate.py`、`pbo.py`、`stats.py`、EWMA 波动率与
-  波动率目标仓位基础件已落地；VaR/CVaR、成本模型、协方差/组合优化仍待实现。
+- 同步 Q1 量化状态：`validate.py`、`pbo.py`、`stats.py`、EWMA 波动率、
+  波动率目标仓位、VaR/CVaR 基础件已落地；成本模型、协方差/组合优化仍待实现。
+
+### Q1 · 尾部风险护栏
+- 新增 `risk/measures.py`：非负损失序列、Historical VaR、CVaR / Expected Shortfall、
+  `tail_risk_quote` 计价币尾部风险。
+- 新增 `rule_cvar_limit`：`portfolio_cvar_quote > equity * max_cvar_pct` 时拒绝新开仓；
+  默认 `CYP_MAX_CVAR_PCT=0.03`，平仓/减仓仍放行。
 
 ### M5（部分）· 策略参数化择优 + 回测引擎
 - **策略参数化**：`StrategyConfig` 打包策略官可调参（分析师权重/入场阈值/ATR 止损止盈
@@ -71,7 +77,7 @@
 - **可观测**：结构化 JSON 日志（自动脱敏）+ trace/span + RunMetrics。
 
 ### 工程
-- 无密钥、离线、确定性可端到端跑通；当前测试 165 passed。
+- 无密钥、离线、确定性可端到端跑通；当前测试 174 passed。
 - 参考交易所锁定 Binance；OKX 等推到 M4「多所」。
 
 [未发布]: https://example.com/cyp-agent

@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | [validation.md](validation.md) | 无前视、walk-forward、purged K-fold、PBO | `validate.py` / `pbo.py` 已有纯 Python 实现 |
 | [stats.md](stats.md) | Sharpe、PSR、Deflated Sharpe、MinTRL | `stats.py` 已有纯 Python 实现 |
-| [risk.md](risk.md) | VaR、CVaR、EVT、尾部护栏 | 待实现 |
+| [risk.md](risk.md) | VaR、CVaR、EVT、尾部护栏 | Historical VaR / CVaR + CVaR 护栏已实现；EVT 待实现 |
 | [sizing.md](sizing.md) | 波动率目标、分数 Kelly、止损自适应 | EWMA + vol-target 已有实现；Kelly 待实现 |
 | [portfolio.md](portfolio.md) | 协方差、HRP、ERC、MVO、Black-Litterman | 组合硬护栏已有；优化器待实现 |
 | [signals_execution.md](signals_execution.md) | regime、协整、Kalman、微观结构、执行模型 | 待实现 |

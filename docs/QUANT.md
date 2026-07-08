@@ -17,7 +17,7 @@
 | [quant/README.md](quant/README.md) | 数学模型规格索引 + 默认通过阈值 | — |
 | [quant/validation.md](quant/validation.md) | walk-forward、purged K-fold、PBO、无前视 | `backtest/validate.py`、`backtest/pbo.py` |
 | [quant/stats.md](quant/stats.md) | Sharpe、PSR、Deflated Sharpe、MinTRL | `backtest/stats.py` |
-| [quant/risk.md](quant/risk.md) | VaR、CVaR、EVT、压力测试 | `risk/measures.py`（待）+ `risk/rules.py` |
+| [quant/risk.md](quant/risk.md) | VaR、CVaR、EVT、压力测试 | `risk/measures.py`、`risk/rules.py` |
 | [quant/sizing.md](quant/sizing.md) | EWMA、波动率目标、Kelly、止损自适应 | `data/volatility.py`、`agents/strategist.py` |
 | [quant/portfolio.md](quant/portfolio.md) | 协方差、HRP、ERC、MVO、Black-Litterman | `portfolio/`（待扩展） |
 | [quant/signals_execution.md](quant/signals_execution.md) | regime、协整、Kalman、微观结构、执行模型 | `agents/`、`execution/`（待扩展） |
@@ -54,7 +54,7 @@
 | `data/volatility.py` | ✅ 已实现 | EWMA、realized volatility、candles returns；纯 Python 单测 |
 | `StrategyConfig.vol_target` / `stop_mode="vol"` | ✅ 已实现 | 波动率目标仓位与 EWMA 自适应止损进入策略官 |
 | `backtest/costs.py` / `mc.py` | ⏳ 待做 | 成本压力与 bootstrap |
-| `risk/measures.py` | ⏳ 待做 | VaR/CVaR 护栏 |
+| `risk/measures.py` + `rule_cvar_limit` | ✅ 已实现 | Historical VaR / CVaR + 组合 CVaR 确定性护栏 |
 | `portfolio/covariance.py` / `alloc.py` | ⏳ 待做 | 实测协方差、HRP/ERC/MVO |
 
 ## 3. 能力地图（方法编目）
@@ -79,8 +79,9 @@
 | --- | --- | --- | --- | --- |
 | EWMA 波动率 | RiskMetrics λ 衰减方差 | `data/volatility.py` | — | **T1** |
 | GARCH(1,1)/EGARCH | 条件异方差，波动聚集与杠杆效应 | `data/volatility.py` | arch | T2 |
-| 历史/参数 VaR | 分位数损失 | `risk/measures.py` | numpy | **T1** |
-| CVaR / Expected Shortfall | 尾部条件期望（相干风险测度）→ 护栏 | `risk/rules.py` | numpy | **T1** |
+| 历史 VaR | 分位数损失 | `risk/measures.py` | — | **T1** |
+| CVaR / Expected Shortfall | 尾部条件期望（相干风险测度）→ 护栏 | `risk/rules.py` | — | **T1** |
+| 参数 VaR | 正态/厚尾参数模型 | `risk/measures.py` | numpy/scipy | T2 |
 | 极值理论(EVT/POT) | 广义帕累托拟合尾部 | `risk/measures.py` | scipy | T3 |
 
 ### 3.3 仓位与资金管理
@@ -163,7 +164,7 @@
 - [x] `backtest/pbo.py`：CPCV → PBO 过拟合概率
 - [ ] `backtest/mc.py` + `backtest/costs.py`：bootstrap 置信区间 + 真实成本(手续费+点差+冲击√size+资金费)
 - [x] `data/volatility.py`：EWMA 波动率 → 波动率目标仓位 + 波动自适应止损
-- [ ] `risk/measures.py` + 护栏：历史 VaR / **CVaR 上限**（新增确定性护栏）
+- [x] `risk/measures.py` + 护栏：历史 VaR / **CVaR 上限**（新增确定性护栏）
 - [ ] `portfolio/covariance.py`：EWMA/Ledoit-Wolf 协方差 → **实测相关性**替换静态聚类
 
 **验收**：同一策略在 walk-forward OOS 上给出 Deflated Sharpe 与 PBO；扫参择优改为「OOS + PBO 门槛」而非样本内最优；CVaR 超限能否决；相关性护栏用实测协方差。
