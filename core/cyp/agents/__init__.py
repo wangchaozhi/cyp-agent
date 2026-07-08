@@ -13,7 +13,7 @@ from cyp.agents.analysts import (
 from cyp.agents.base import AgentContext, Vote, blend, stance_sign
 from cyp.agents.reviewer import Reviewer
 from cyp.agents.risk_officer import RiskOfficer
-from cyp.agents.strategist import Strategist
+from cyp.agents.strategist import DEFAULT_WEIGHTS, Strategist, StrategyConfig
 from cyp.agents.trader import Trader
 
 __all__ = [
@@ -27,6 +27,8 @@ __all__ = [
     "SentimentAnalyst",
     "OnchainAnalyst",
     "Strategist",
+    "StrategyConfig",
+    "DEFAULT_WEIGHTS",
     "RiskOfficer",
     "Trader",
     "Reviewer",

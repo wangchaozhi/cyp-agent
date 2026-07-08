@@ -15,7 +15,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from cyp.agents import ANALYSTS, AgentContext, Reviewer, RiskOfficer, Strategist, Trader
+from cyp.agents import ANALYSTS, AgentContext, Reviewer, RiskOfficer, Strategist, StrategyConfig, Trader
 from cyp.alerts import Alerter, build_alerter
 from cyp.approval import ApprovalGate, AutoApprove
 from cyp.config import Settings
@@ -67,6 +67,7 @@ class Orchestrator:
         portfolio: PortfolioTracker | None = None,
         alerter: Alerter | None = None,
         risk_venues: list | None = None,
+        strategy: StrategyConfig | None = None,
     ) -> None:
         self.settings = settings
         self.data = data_source
@@ -82,7 +83,7 @@ class Orchestrator:
         self.alerter = alerter or build_alerter(settings)
         self.log = get_logger("orchestrator")
         self.reconciling = False   # 对账未完成时置 True → 风控引擎冻结新开仓
-        self.strategist = Strategist()
+        self.strategist = Strategist(strategy)
         self.risk_officer = RiskOfficer()
         self.trader = Trader()
         self.reviewer = Reviewer()

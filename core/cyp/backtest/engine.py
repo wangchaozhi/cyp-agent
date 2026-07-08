@@ -11,6 +11,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel
 
+from cyp.agents import StrategyConfig
 from cyp.approval import AutoApprove
 from cyp.backtest.data import HistoricalData
 from cyp.backtest.metrics import compute_metrics
@@ -30,7 +31,8 @@ class BacktestReport(BaseModel):
 
 class Backtester:
     def __init__(self, settings: Settings, symbol: str, candles: list[Candle],
-                 window: int = 60, initial_quote: Decimal = Decimal("10000")) -> None:
+                 window: int = 60, initial_quote: Decimal = Decimal("10000"),
+                 strategy: StrategyConfig | None = None) -> None:
         self.settings = settings
         self.symbol = symbol
         self.candles = candles
@@ -38,7 +40,8 @@ class Backtester:
         self.initial = float(initial_quote)
         self.venue = PaperVenue(initial_quote=initial_quote)
         self.data = HistoricalData(symbol, candles, window)
-        self.orch = Orchestrator(settings, self.data, self.venue, approval=AutoApprove())
+        self.orch = Orchestrator(settings, self.data, self.venue,
+                                 approval=AutoApprove(), strategy=strategy)
         self.equity_curve: list[float] = []
         self.trades: list[dict] = []
         self.active: dict | None = None

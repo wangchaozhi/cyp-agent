@@ -3,5 +3,7 @@
 from cyp.backtest.data import HistoricalData
 from cyp.backtest.engine import Backtester, BacktestReport
 from cyp.backtest.metrics import compute_metrics
+from cyp.backtest.optimize import SweepResult, default_objective, grid, sweep
 
-__all__ = ["Backtester", "BacktestReport", "HistoricalData", "compute_metrics"]
+__all__ = ["Backtester", "BacktestReport", "HistoricalData", "compute_metrics",
+           "sweep", "grid", "SweepResult", "default_objective"]

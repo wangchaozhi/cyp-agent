@@ -9,19 +9,31 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+from pydantic import BaseModel, Field
+
 from cyp.agents.base import AgentContext, stance_sign
 from cyp.config import RiskConfig
 from cyp.contracts import AnalystReport, MarketSnapshot, PricePlan, TradeProposal
 from cyp.data import indicator_snapshot
 
-AGENT_WEIGHT = {"technical": 1.0, "derivatives": 0.9, "sentiment": 0.6, "onchain": 0.8}
-_ENTER_THRESHOLD = 0.12
-K_STOP = Decimal("2")
-K_TP = Decimal("3")
+DEFAULT_WEIGHTS = {"technical": 1.0, "derivatives": 0.9, "sentiment": 0.6, "onchain": 0.8}
+
+
+class StrategyConfig(BaseModel):
+    """策略官的可调参数——用于回测扫参择优。"""
+
+    weights: dict[str, float] = Field(default_factory=lambda: dict(DEFAULT_WEIGHTS))
+    enter_threshold: float = 0.12          # |综合分| 低于此则不开仓
+    k_stop: Decimal = Decimal("2")         # 止损 = ATR × k_stop
+    k_tp: Decimal = Decimal("3")           # 止盈 = ATR × k_tp
+    risk_per_trade: Decimal | None = None  # 单笔风险预算；None → 用 RiskConfig.max_risk_per_trade
 
 
 class Strategist:
     id = "strategist"
+
+    def __init__(self, config: StrategyConfig | None = None) -> None:
+        self.config = config or StrategyConfig()
 
     async def run(
         self,
@@ -32,8 +44,9 @@ class Strategist:
         ctx: AgentContext,
         venue_id: str = "paper",
     ) -> TradeProposal:
+        sc = self.config
         # 1) 加权综合（跳过降级维度）
-        contribs = [(stance_sign(r.stance) * r.confidence, AGENT_WEIGHT.get(r.agent, 0.5))
+        contribs = [(stance_sign(r.stance) * r.confidence, sc.weights.get(r.agent, 0.5))
                     for r in reports if not r.degraded]
         tot_w = sum(w for _, w in contribs)
         net = sum(s * w for s, w in contribs) / tot_w if tot_w > 0 else 0.0
@@ -41,7 +54,7 @@ class Strategist:
 
         ind = indicator_snapshot(snap.ohlcv)
         last_close = ind["last_close"]
-        if last_close is None or abs(net) < _ENTER_THRESHOLD:
+        if last_close is None or abs(net) < sc.enter_threshold:
             return TradeProposal(
                 symbol=snap.symbol, venue=venue_id, side="flat", size_quote=Decimal(0),
                 confidence=confidence, thesis="多维信号不足或冲突，本轮不开仓。",
@@ -62,14 +75,14 @@ class Strategist:
             instrument = "spot"
             leverage = 1.0
         if side == "long":
-            stop = ref - K_STOP * atr_dec
-            tps = [ref + K_TP * atr_dec]
+            stop = ref - sc.k_stop * atr_dec
+            tps = [ref + sc.k_tp * atr_dec]
         else:
-            stop = ref + K_STOP * atr_dec
-            tps = [ref - K_TP * atr_dec]
+            stop = ref + sc.k_stop * atr_dec
+            tps = [ref - sc.k_tp * atr_dec]
 
         stop_frac = abs(ref - stop) / ref if ref > 0 else Decimal("0.02")
-        risk_budget = equity * cfg.max_risk_per_trade
+        risk_budget = equity * (sc.risk_per_trade or cfg.max_risk_per_trade)
         size_quote = (risk_budget / stop_frac) if stop_frac > 0 else Decimal(0)
 
         thesis = self._thesis(reports, net, side)
