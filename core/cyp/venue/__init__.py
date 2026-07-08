@@ -1,5 +1,6 @@
 """统一交易场所抽象：CEX / 链上 / 模拟盘对上层长得一样。"""
 
+from cyp.venue.aggregator import MarketAggregator
 from cyp.venue.base import PreflightReport, Venue, VenueCaps, VenueKind
 from cyp.venue.cex import CexVenue
 from cyp.venue.paper import PaperVenue
@@ -14,4 +15,5 @@ __all__ = [
     "CexVenue",
     "VenueRegistry",
     "build_registry",
+    "MarketAggregator",
 ]
