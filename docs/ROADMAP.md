@@ -33,25 +33,28 @@
 - [x] 交易员 → PaperVenue 模拟成交 + 复盘官
 - [x] `orchestrator` 串联 7 步 + `events` 总线 + `memory` 检查点 + `ResilientLLM`
 - [x] `apps/server`（FastAPI REST + SSE）+ `apps/web` 仪表盘（事件流/待审批/持仓/KillSwitch）
-- [~] 运行时（[RUNTIME.md](RUNTIME.md)）：入场挂保护单 ✓；启动对账 / 扫描·监控双循环 待补
-- [~] 可观测：LLM metrics ✓；trace/span、结构化日志脱敏 待补
+- [x] 运行时（[RUNTIME.md](RUNTIME.md)）：入场挂保护单 + 启动对账（对账门冻结开仓）+ 扫描·监控双循环
+- [x] 可观测：结构化 JSON 日志脱敏 + trace/span（每步一 span）+ RunMetrics
 
-**验收**：无密钥离线跑完整闭环 ✓（`python -m cyp.examples.run`）；「无止损被拒」「超仓被缩」「Kill Switch 否决」等风控用例过 CI ✓（73 tests）；仪表盘全流程可见 ✓。剩余 `~` 两项收尾即 M0 完全体。
+**验收**：✅ 全部达成——无密钥离线跑完整闭环（`python -m cyp.examples.run`，含 `--loop N` 运行时）；
+风控用例（无止损/超仓/Kill Switch/对账冻结）过 CI；仪表盘全流程可见。**M0 完全体 done。**
 
 ---
 
 ## M1 · 合约永续
 
-**目标**：把 U/币本位永续纳入分析与风控，仍在模拟盘。
+**目标**：把 U/币本位永续纳入分析与风控，仍在模拟盘。（进度：`x`=完成 `~`=部分）
 
-- [ ] `CexVenue` 合约行情 + 保证金/杠杆/爆仓价读取；`PaperVenue` 支持合约模拟
-- [ ] 数据管线补：持仓量 OI、多空比、基差、爆仓数据流
-- [ ] 衍生品分析师升级：资金费拥挤度、逼空/踩踏、基差信号
-- [ ] 策略官支持 `instrument=perp` + 杠杆决策
-- [ ] 风控引擎补 §2.2 合约专项：杠杆上限、爆仓缓冲、维持保证金、逐仓强制
-- [ ] 仪表盘补：杠杆/爆仓价/资金费展示、保证金健康度
+- [x] `PaperVenue` 合约模拟：保证金记账（名义/杠杆）+ 爆仓价估算 + 平仓浮盈结算
+- [~] `CexVenue` 合约行情 + 资金费/OI 只读读取（best-effort 骨架，实盘校验待 M2）
+- [x] 数据管线：合成源提供资金费/OI/多空比；衍生品分析师消费
+- [x] 衍生品分析师：资金费拥挤度、多空失衡信号
+- [x] 策略官支持 `instrument=perp` + 由置信度决定杠杆（封顶 max_leverage）
+- [x] 风控引擎 §2.2 合约专项：杠杆上限、爆仓缓冲、**维持保证金、逐仓强制**
+- [ ] 仪表盘补：爆仓价/资金费展示、保证金健康度（持仓表已含杠杆）
 
-**验收**：模拟盘跑通一笔永续；杠杆/爆仓缓冲护栏在 CI 被验证否决。
+**验收**：✅ 模拟盘跑通一笔永续（`allow_perp` + `test_orchestrator_perp_end_to_end`）；
+杠杆/爆仓缓冲/逐仓/维持保证金护栏在 CI 被验证否决（`test_risk_perp.py`）。
 
 ---
 
