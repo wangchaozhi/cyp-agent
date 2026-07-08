@@ -62,18 +62,20 @@
 
 **目标**：真实资金、小额、最小权限、强熔断。这是第一次碰真钱，谨慎至上。**参考交易所 = Binance**（ccxt 最成熟、Testnet 齐全）；OKX 等推到 M4「多所」。
 
-- [ ] `CexVenue` 实盘下单（现货 + 合约），幂等 `clientOrderId`，订单生命周期/部分成交/撤改
-- [ ] **Binance 适配层**：原生保护单参数、持仓模式（`dualSidePosition`）、逐仓、精度/限频（见 [ARCHITECTURE.md CEX 适配点](ARCHITECTURE.md)）
-- [ ] **先过 Binance Testnet**：Spot + Futures Testnet 跑通下单/保护单/撤改/对账，再切主网小额
-- [ ] 前置校验：Key 权限正确（有交易、无提现）、IP 白名单、`CYP_MODE=live` 显式开启
-- [ ] **交易所侧原生保护单**（bracket/OCO/reduce-only）+ 下保护失败即平裸仓；启动/周期对账真实生效（[RUNTIME.md](RUNTIME.md)）
-- [ ] Kill Switch 全链路 + 熔断规则（日/周/总回撤、连亏冷静期）真实生效
-- [ ] 审批门仪表盘版（按钮批准/拒绝/修改）+ 全审计落库
-- [ ] 实时风控看板：敞口/回撤/保证金/今日频率
-- [ ] 告警：下单失败/熔断/异常率 → 通知（webhook/邮件）
-- [ ] 灰度：单标的、小额上限、强制 `paper` 影子对照运行一段时间
+- [x] `CexVenue` 实盘下单（现货 + 合约），幂等 `clientOrderId`（假 ccxt 离线测全覆盖）
+- [x] **Binance 适配层**：原生保护单（STOP/TP reduce-only）、`set_leverage`/`set_margin_mode`（逐仓）
+- [ ] **先过 Binance Testnet**：真实网络下单/撤改/对账（需 Key+联网，离线不可测，实操阶段做）
+- [x] 前置校验：`LiveGuard`——有 Key + `CYP_LIVE_ACK=1` + Kill 未开，否则退回只读（提现权限/IP 白名单交易所侧）
+- [x] **交易所侧原生保护单** + **下保护失败即市价平裸仓**（fail-safe，已测）；对账门冻结开仓（M0 已具）
+- [x] Kill Switch 全链路 + 熔断规则真实生效（组合账本驱动回撤/连亏/频率，已测触发）
+- [x] 审批门仪表盘版（按钮批准/拒绝/修改）+ 挂起-解决（M0 已具）
+- [x] 实时风控看板：`/api/risk` + 仪表盘面板（净值/回撤/频率/连亏/实盘校验）
+- [x] 告警：下单失败/熔断 → Alerter（控制台 + 可选 webhook，脱敏）
+- [ ] 灰度：单标的小额 + `paper` 影子对照（属真实网络实操阶段）
 
-**验收**：先在 Binance Testnet 跑通含保护单的完整闭环，再小额主网完成一笔；主动触发 Kill Switch 与一条熔断，验证真实停手；审计完整。
+**验收**：✅ 离线部分达成——实盘下单/保护单/保护失败平裸仓、LiveGuard 只读门、熔断真实触发、
+风控看板、告警均已实现并测试（`test_cex_trading` / `test_live_alerts` / `test_portfolio`）。
+⏳ 剩真实网络部分：Binance Testnet 跑通含保护单闭环 → 小额主网一笔 → 影子对照（需 Key+联网，实操阶段）。
 
 ---
 

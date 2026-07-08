@@ -4,6 +4,18 @@
 
 ## [未发布]
 
+### M2 · CEX 实盘接入（离线部分完成，真实网络实操待做）
+- **实盘下单**：`CexVenue` 现货+合约实盘（ccxt），幂等 `clientOrderId`、原生保护单
+  （STOP/TP reduce-only）、perp 自动 `set_leverage`/`set_margin_mode`（逐仓）；
+  **保护单失败即市价平裸仓**（有仓必有保护 fail-safe）。可注入假交易所离线测全覆盖。
+- **实盘护栏**：`LiveGuard`——mode=live 需「有 Key + `CYP_LIVE_ACK=1` + Kill 未开」，
+  否则退回只读（安全默认）；注册表据此决定 CexVenue 可否下单。
+- **熔断真生效**：`PortfolioTracker` 用净值高水位/已实现亏损/下单时间戳驱动
+  回撤·连亏·频率，接入风控引擎（此前这些字段恒为 0，熔断永不触发——已修复）。
+- **告警**：`Alerter` 多 sink（控制台 + 可选 webhook），字段脱敏、sink 失败隔离；
+  下单失败与熔断/Kill 否决触发告警。
+- **风控看板**：`GET /api/risk` + 仪表盘面板（净值/回撤 meter/频率/连亏/实盘校验）。
+
 ### M1 · 合约永续（模拟盘）
 - **风控**：合约专项硬护栏——逐仓强制（`force_isolated`）、维持保证金率下限（`min_margin_ratio`）；
   杠杆上限与爆仓缓冲复用既有规则。契约新增 `margin_mode`（默认 isolated）。
