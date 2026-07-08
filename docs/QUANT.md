@@ -8,6 +8,20 @@
 
 ---
 
+## 0. 规格分册
+
+本文保留总蓝图、能力地图和 Q 线排期；公式、阈值、数据要求和验收用例放到分册：
+
+| 分册 | 作用 | 对应代码 |
+| --- | --- | --- |
+| [quant/README.md](quant/README.md) | 数学模型规格索引 + 默认通过阈值 | — |
+| [quant/validation.md](quant/validation.md) | walk-forward、purged K-fold、PBO、无前视 | `backtest/validate.py`、`backtest/pbo.py` |
+| [quant/stats.md](quant/stats.md) | Sharpe、PSR、Deflated Sharpe、MinTRL | `backtest/stats.py` |
+| [quant/risk.md](quant/risk.md) | VaR、CVaR、EVT、压力测试 | `risk/measures.py`（待）+ `risk/rules.py` |
+| [quant/sizing.md](quant/sizing.md) | EWMA、波动率目标、Kelly、止损自适应 | `data/volatility.py`、`agents/strategist.py` |
+| [quant/portfolio.md](quant/portfolio.md) | 协方差、HRP、ERC、MVO、Black-Litterman | `portfolio/`（待扩展） |
+| [quant/signals_execution.md](quant/signals_execution.md) | regime、协整、Kalman、微观结构、执行模型 | `agents/`、`execution/`（待扩展） |
+
 ## 1. 第一性原理
 
 1. **严谨性优先于花哨 alpha**。加密里头号杀手是**过拟合**，不是"数学不够强"。当前 `sweep` 从 N 组挑最优＝教科书级多重检验陷阱。补的第一件事是「别自欺」的工具（OOS / Deflated Sharpe / PBO），而非更炫的信号。
@@ -28,7 +42,20 @@
 | 组合 | 簇内同向净敞口上限 | 无协方差 | 均值-方差 / HRP / 风险平价 |
 | 风险度量 | 敞口/回撤/连亏上限 | 无尾部度量 | VaR / CVaR / EVT |
 | 执行 | 固定滑点 + 市价 | 无冲击模型 | Almgren-Chriss / VWAP |
-| 回测 | 单资产单仓 + 网格扫参 | **过拟合风险** | walk-forward / Deflated Sharpe / PBO |
+| 回测 | 单资产单仓 + 网格扫参；已补 PSR/DSR/PBO/walk-forward 基础件 | 反过拟合起步 | walk-forward OOS + DSR/PBO 门禁 + 成本模型 |
+
+## 2.1 当前实现快照
+
+| 模块 | 状态 | 说明 |
+| --- | --- | --- |
+| `backtest/validate.py` | ✅ 已实现 | walk-forward、purged K-fold、embargo；纯 Python 单测 |
+| `backtest/pbo.py` | ✅ 已实现 | CPCV/PBO 基础版；纯 Python 单测 |
+| `backtest/stats.py` | ✅ 已实现 | Sharpe、PSR、Deflated Sharpe、MinTRL；纯 Python 单测 |
+| `data/volatility.py` | ✅ 已实现 | EWMA、realized volatility、candles returns；纯 Python 单测 |
+| `StrategyConfig.vol_target` / `stop_mode="vol"` | ✅ 已实现 | 波动率目标仓位与 EWMA 自适应止损进入策略官 |
+| `backtest/costs.py` / `mc.py` | ⏳ 待做 | 成本压力与 bootstrap |
+| `risk/measures.py` | ⏳ 待做 | VaR/CVaR 护栏 |
+| `portfolio/covariance.py` / `alloc.py` | ⏳ 待做 | 实测协方差、HRP/ERC/MVO |
 
 ## 3. 能力地图（方法编目）
 
@@ -38,10 +65,10 @@
 
 | 方法 | 数学核心 | 插点 | 依赖 | 优先 |
 | --- | --- | --- | --- | --- |
-| Walk-forward（滚动/锚定） | 时序 OOS，训练→验证滚动前移 | `backtest/validate.py` | numpy | **T1** |
-| Purged K-Fold + Embargo | 剔除标签重叠泄漏（López de Prado） | `backtest/validate.py` | numpy | **T1** |
-| Combinatorial Purged CV → PBO | 过拟合概率（Prob. of Backtest Overfitting） | `backtest/pbo.py` | numpy/scipy | **T1** |
-| Deflated Sharpe Ratio | 校正试验次数 + 非正态的夏普显著性 | `backtest/stats.py` | scipy | **T1** |
+| Walk-forward（滚动/锚定） | 时序 OOS，训练→验证滚动前移 | `backtest/validate.py` | — | **T1** |
+| Purged K-Fold + Embargo | 剔除标签重叠泄漏（López de Prado） | `backtest/validate.py` | — | **T1** |
+| Combinatorial Purged CV → PBO | 过拟合概率（Prob. of Backtest Overfitting） | `backtest/pbo.py` | — | **T1** |
+| Deflated Sharpe Ratio | 校正试验次数 + 非正态的夏普显著性 | `backtest/stats.py` | — | **T1** |
 | Monte Carlo / Bootstrap | 交易序列重采样 → 收益/回撤置信区间 | `backtest/mc.py` | numpy | **T1** |
 | 真实成本模型 | 手续费 + 点差 + 冲击(∝√size) + 资金费 | `backtest/costs.py` | — | **T1** |
 | 参数敏感度 / regime 分层绩效 | 稳健性热力图，避免脆弱峰值 | `backtest/robust.py` | numpy | T2 |
@@ -50,7 +77,7 @@
 
 | 方法 | 数学核心 | 插点 | 依赖 | 优先 |
 | --- | --- | --- | --- | --- |
-| EWMA 波动率 | RiskMetrics λ 衰减方差 | `data/volatility.py` | numpy | **T1** |
+| EWMA 波动率 | RiskMetrics λ 衰减方差 | `data/volatility.py` | — | **T1** |
 | GARCH(1,1)/EGARCH | 条件异方差，波动聚集与杠杆效应 | `data/volatility.py` | arch | T2 |
 | 历史/参数 VaR | 分位数损失 | `risk/measures.py` | numpy | **T1** |
 | CVaR / Expected Shortfall | 尾部条件期望（相干风险测度）→ 护栏 | `risk/rules.py` | numpy | **T1** |
@@ -60,7 +87,7 @@
 
 | 方法 | 数学核心 | 插点 | 依赖 | 优先 |
 | --- | --- | --- | --- | --- |
-| 波动率目标 | 仓位∝目标波动/预测波动 | `strategist` + `StrategyConfig` | numpy | **T1** |
+| 波动率目标 | 仓位∝目标波动/预测波动 | `strategist` + `StrategyConfig` | — | **T1** |
 | 分数 Kelly | f\*=μ/σ²（增长最优），取 ¼–½ Kelly | `strategist` | numpy | T2 |
 | 风险预算 / ERC | 各仓风险贡献均衡 | `portfolio/alloc.py` | numpy | T2 |
 
@@ -131,11 +158,11 @@
 
 ### Q1 · 反自欺 + 波动率内核（T1）
 **目标**：让回测可信、波动率有预测性、尾部风险入护栏。
-- [ ] `backtest/validate.py`：walk-forward（滚动/锚定）+ purged K-fold + embargo
-- [ ] `backtest/stats.py`：Deflated Sharpe Ratio + 最小回测长度
-- [ ] `backtest/pbo.py`：CPCV → PBO 过拟合概率
+- [x] `backtest/validate.py`：walk-forward（滚动/锚定）+ purged K-fold + embargo
+- [x] `backtest/stats.py`：PSR + Deflated Sharpe Ratio + 最小回测长度
+- [x] `backtest/pbo.py`：CPCV → PBO 过拟合概率
 - [ ] `backtest/mc.py` + `backtest/costs.py`：bootstrap 置信区间 + 真实成本(手续费+点差+冲击√size+资金费)
-- [ ] `data/volatility.py`：EWMA 波动率 → 波动率目标仓位 + 波动自适应止损
+- [x] `data/volatility.py`：EWMA 波动率 → 波动率目标仓位 + 波动自适应止损
 - [ ] `risk/measures.py` + 护栏：历史 VaR / **CVaR 上限**（新增确定性护栏）
 - [ ] `portfolio/covariance.py`：EWMA/Ledoit-Wolf 协方差 → **实测相关性**替换静态聚类
 

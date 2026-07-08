@@ -4,6 +4,12 @@
 
 ## [未发布]
 
+### 文档 · 数学模型规格完善
+- 新增 `docs/quant/` 规格分册：validation / stats / risk / sizing / portfolio /
+  signals_execution，补齐公式、默认阈值、数据要求、降级路径和测试清单。
+- 同步 Q1 量化状态：`validate.py`、`pbo.py`、`stats.py`、EWMA 波动率与
+  波动率目标仓位基础件已落地；VaR/CVaR、成本模型、协方差/组合优化仍待实现。
+
 ### M5（部分）· 策略参数化择优 + 回测引擎
 - **策略参数化**：`StrategyConfig` 打包策略官可调参（分析师权重/入场阈值/ATR 止损止盈
   倍数/单笔风险），策略官配置驱动；`grid()` 笛卡尔积 + `sweep()` 批量回测按目标函数
@@ -65,7 +71,7 @@
 - **可观测**：结构化 JSON 日志（自动脱敏）+ trace/span + RunMetrics。
 
 ### 工程
-- 无密钥、离线、确定性可端到端跑通；测试 93 passed。
+- 无密钥、离线、确定性可端到端跑通；当前测试 165 passed。
 - 参考交易所锁定 Binance；OKX 等推到 M4「多所」。
 
 [未发布]: https://example.com/cyp-agent

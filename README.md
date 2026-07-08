@@ -37,6 +37,7 @@
 | [docs/RUNTIME.md](docs/RUNTIME.md) | 运行时手册：触发/调度（三条循环）、止损落地（有仓必有保护）、对账恢复 |
 | [docs/RISK.md](docs/RISK.md) | 风控手册：确定性硬护栏、CEX/合约/链上专项风险、Kill Switch |
 | [docs/QUANT.md](docs/QUANT.md) | 量化升级规划：强数学工具编目 + 架构插点 + 验证方法论（Q1→Q4） |
+| [docs/quant/README.md](docs/quant/README.md) | 数学模型规格分册：公式、阈值、数据要求、验收用例 |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | 迭代路线图：M0→M6 每一档的功能条目与验收标准 |
 
 ## 快速开始（M0 目标形态）

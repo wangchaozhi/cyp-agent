@@ -122,6 +122,8 @@
 - [x] 绩效评估：总收益/最大回撤/夏普/胜率/盈亏比（`compute_metrics` 纯函数，单测）
 - [x] 策略参数化：`StrategyConfig` 打包（权重/入场阈值/ATR 止损止盈倍数/单笔风险）+
       `grid()` 扫参 + `sweep()` 按目标函数排序择优（`python -m cyp.backtest.sweep`）
+- [x] 反过拟合统计基础件：PSR / Deflated Sharpe / MinTRL + walk-forward / purged K-fold / PBO
+      （详见 [QUANT.md](QUANT.md) 与 [quant/stats.md](quant/stats.md)）
 - [ ] 复盘经验与回测结果打通，辅助策略择优
 - [ ] 仪表盘：回测报告页（现为 CLI `python -m cyp.backtest.run`）
 
@@ -155,7 +157,7 @@
 ## 量化深化线（Q1–Q4，与 M 里程碑并行）
 
 工程与市场覆盖是 M 线；**数学金融内核**的升级是 Q 线，详见 [QUANT.md](QUANT.md)：
-- **Q1** 反自欺 + 波动率内核：walk-forward / Deflated Sharpe / PBO 防过拟合；EWMA/GARCH 波动率；VaR/CVaR 护栏；实测协方差替换静态相关性聚类。
+- **Q1** 反自欺 + 波动率内核：walk-forward / Deflated Sharpe / PBO 防过拟合；EWMA/GARCH 波动率；VaR/CVaR 护栏；实测协方差替换静态相关性聚类。当前已完成 walk-forward、purged K-fold、PBO、PSR/DSR/MinTRL、EWMA 波动率与波动率目标仓位基础件。
 - **Q2** 更优仓位 + regime + 组合优化：分数 Kelly / 波动率目标；HMM 状态识别；HRP / 风险平价。
 - **Q3** 统计套利 + 微观结构：协整配对 + 卡尔曼；订单簿失衡；Almgren-Chriss 最优执行。
 - **Q4** 进阶：EVT / Copula / meta-labeling（严格 OOS 把关下）。
