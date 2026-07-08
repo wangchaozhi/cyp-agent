@@ -53,6 +53,18 @@ def test_killswitch_toggle():
     run(scenario())
 
 
+def test_risk_board_endpoint():
+    async def scenario():
+        app = create_app(Settings(_env_file=None))
+        async with _client(app) as c:
+            r = (await c.get("/api/risk")).json()
+            assert r["mode"] == "paper" and r["kill"] is False
+            assert set(r["drawdown"]) == {"daily", "weekly", "total"}
+            assert r["live_guard"]["ok"] is True          # paper 恒通过
+            assert "max_orders_per_hour" in r["limits"]
+    run(scenario())
+
+
 def test_approval_404_when_no_pending():
     async def scenario():
         app = create_app(Settings(_env_file=None))

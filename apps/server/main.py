@@ -91,6 +91,26 @@ def create_app(settings: Settings | None = None, data_source=None, venue=None) -
     async def metrics():
         return {"runs": orch.metrics.snapshot(), "llm": orch.llm.metrics.snapshot()}
 
+    @app.get("/api/risk")
+    async def risk():
+        from cyp.live import LiveGuard
+        bal = await venue.balances()
+        equity = bal.total_quote if bal.total_quote > 0 else bal.free_quote
+        snap = orch.portfolio.risk_snapshot(equity)
+        rc = settings.risk
+        guard = LiveGuard.check(settings)
+        return {
+            "mode": settings.mode, "kill": settings.kill, "equity": str(equity),
+            "drawdown": {k: str(snap[f"{k}_drawdown"]) for k in ("daily", "weekly", "total")},
+            "orders_last_hour": snap["orders_last_hour"],
+            "consecutive_losses": snap["consecutive_losses"],
+            "limits": {"daily_dd": str(rc.daily_drawdown_limit), "weekly_dd": str(rc.weekly_drawdown_limit),
+                       "total_dd": str(rc.max_drawdown_limit), "max_leverage": str(rc.max_leverage),
+                       "max_orders_per_hour": rc.max_orders_per_hour,
+                       "max_consecutive_losses": rc.max_consecutive_losses},
+            "live_guard": {"ok": guard.ok, "reasons": guard.reasons},
+        }
+
     @app.get("/api/pending")
     async def pending():
         return gate.list_pending()
