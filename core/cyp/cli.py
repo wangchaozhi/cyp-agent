@@ -64,9 +64,9 @@ def _summary(res: RunResult) -> None:
 
 
 def _build(args, settings: Settings) -> Orchestrator:
-    venue = PaperVenue()
+    registry = build_registry(settings)
+    venue = PaperVenue() if args.venue == "paper" else registry.get(args.venue)
     if args.data == "cex":
-        registry = build_registry(settings)
         data = CexMarketData(registry.get(settings.cex_id))
     else:
         data = SyntheticMarketData()
@@ -92,6 +92,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--symbol", default=settings.watchlist_symbols()[0])
     parser.add_argument("--data", choices=["synthetic", "cex"], default="synthetic",
                         help="synthetic=离线合成（默认）；cex=只读真实行情")
+    parser.add_argument("--venue", choices=["paper", "binance", "okx"], default="paper",
+                        help="执行场所：paper=模拟盘（默认，离线）；okx=OKX Demo 模拟交易（需 demo 凭据+联网）")
     parser.add_argument("--approve", choices=["auto", "cli"], default="cli",
                         help="auto=自动批准（演示）；cli=人工审批（半自动）")
     parser.add_argument("--loop", type=int, default=0,

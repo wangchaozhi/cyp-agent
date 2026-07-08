@@ -50,7 +50,8 @@ cp .env.example .env
 # 3. 跑一个完整闭环（离线合成行情，零密钥）
 python -m cyp.examples.run --symbol BTC/USDT --approve auto   # 自动批准（演示）
 python -m cyp.examples.run --symbol BTC/USDT --approve cli    # 人工审批（半自动）
-#   --data cex 可切换为真实只读行情（无需密钥，需联网）
+#   --data cex   切换为真实只读行情（无需密钥，需联网）
+#   --venue okx  在 OKX Demo 模拟盘下单（需 OKX Demo 凭据 + 联网，零真实资金）
 
 # 4. 启动仪表盘（浏览器打开 http://localhost:8000）
 uvicorn apps.server.main:app --reload      # REST + SSE + 仪表盘同源直供

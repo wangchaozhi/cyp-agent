@@ -4,6 +4,14 @@
 
 ## [未发布]
 
+### M4（部分）· OKX 模拟交易 + 交易所适配层
+- **交易所适配层** `venue/adapters.py`：把各家 ccxt 抹不平的差异（保护单参数、
+  持仓/保证金模式）收敛到 adapter；CexVenue 通用流程不变，仅委托 configure_perp/
+  entry_params/place_protective。BinanceAdapter（STOP_MARKET/TAKE_PROFIT reduce-only）、
+  OkxAdapter（tdMode、set_leverage 带 mgnMode、stopLossPrice/takeProfitPrice）。
+- **OKX Demo 模拟交易**：`sandbox`(set_sandbox_mode) + API passphrase；注册表注册 OKX venue，
+  有 demo 凭据即可模拟下单否则只读；CLI `--venue okx`。假交易所离线验证参数差异。
+
 ### M2 · CEX 实盘接入（离线部分完成，真实网络实操待做）
 - **实盘下单**：`CexVenue` 现货+合约实盘（ccxt），幂等 `clientOrderId`、原生保护单
   （STOP/TP reduce-only）、perp 自动 `set_leverage`/`set_margin_mode`（逐仓）；
