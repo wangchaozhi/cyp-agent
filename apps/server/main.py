@@ -55,7 +55,9 @@ def create_app(settings: Settings | None = None, data_source=None, venue=None) -
     venue = venue or PaperVenue()
     data = data_source or SyntheticMarketData()
     registry = build_registry(settings)
-    orch = Orchestrator(settings=settings, data_source=data, venue=venue, events=events, approval=gate)
+    others = [v for v in registry.all() if getattr(v, "id", None) != getattr(venue, "id", None)]
+    orch = Orchestrator(settings=settings, data_source=data, venue=venue, events=events,
+                        approval=gate, risk_venues=[venue, *others])
 
     app = FastAPI(title="cyp-agent", version="0.1.0")
     app.state.settings = settings

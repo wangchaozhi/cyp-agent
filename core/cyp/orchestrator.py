@@ -33,7 +33,7 @@ from cyp.events import EventBus
 from cyp.llm import ResilientLLM, build_llm
 from cyp.memory import MemoryStore
 from cyp.observability import RunMetrics, Trace, get_logger
-from cyp.portfolio import PortfolioTracker
+from cyp.portfolio import CorrelationModel, PortfolioTracker, PortfolioView, aggregate_positions
 from cyp.risk import assess as risk_assess
 from cyp.risk.rules import RiskContext
 
@@ -66,10 +66,13 @@ class Orchestrator:
         metrics: RunMetrics | None = None,
         portfolio: PortfolioTracker | None = None,
         alerter: Alerter | None = None,
+        risk_venues: list | None = None,
     ) -> None:
         self.settings = settings
         self.data = data_source
         self.venue = venue
+        self.risk_venues = risk_venues or [venue]   # 组合级风控聚合的场所（默认仅执行场所）
+        self.corr = CorrelationModel()
         self.events = events or EventBus()
         self.memory = memory or MemoryStore()
         self.approval = approval or AutoApprove()
@@ -195,12 +198,18 @@ class Orchestrator:
             stop_loss=proposal.stop_loss, take_profit=proposal.take_profit,
         )
         pf = await self.venue.preflight(pf_intent)
-        positions = await self.venue.positions()
-        gross = sum((p.notional_at(ref) for p in positions), Decimal(0))
-        symbol_exp = sum((p.notional_at(ref) for p in positions if p.symbol == symbol), Decimal(0))
+
+        # 跨场所聚合持仓 → 组合级敞口（当前标的用 ref，其它标的用入场价近似）
+        positions = await aggregate_positions(self.risk_venues)
+        view = PortfolioView(positions, self.corr)
+        resolve = lambda s: ref if s == symbol else None
+        gross = view.gross_notional(resolve)
+        symbol_exp = view.symbol_notional(symbol, resolve)
+        correlated = view.cluster_net_directional(self.corr.cluster_of(symbol), proposal.side, resolve)
 
         # 合约维持保证金率 = 账户净值 / 现有永续名义（无永续仓则 None，规则跳过）
-        perp_notional = sum((p.notional_at(ref) for p in positions if p.instrument == "perp"), Decimal(0))
+        perp_notional = sum((p.notional_at(ref if p.symbol == symbol else p.entry_price)
+                             for p in positions if p.instrument == "perp"), Decimal(0))
         margin_ratio = (equity / perp_notional) if perp_notional > 0 else None
 
         psnap = self.portfolio.risk_snapshot(equity)
@@ -208,6 +217,7 @@ class Orchestrator:
             equity_quote=equity, ref_price=ref,
             gross_exposure_quote=gross, symbol_exposure_quote=symbol_exp,
             kill=self.settings.kill, reconciling=self.reconciling, margin_ratio=margin_ratio,
+            correlated_exposure_quote=correlated,
             orders_last_hour=psnap["orders_last_hour"],
             consecutive_losses=psnap["consecutive_losses"],
             daily_drawdown=psnap["daily_drawdown"],

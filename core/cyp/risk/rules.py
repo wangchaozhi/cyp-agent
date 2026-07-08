@@ -39,6 +39,7 @@ class RiskContext:
     ref_price: Decimal                          # 当前参考价（市价入场用它折算风险）
     gross_exposure_quote: Decimal = Decimal(0)  # 当前总名义敞口
     symbol_exposure_quote: Decimal = Decimal(0)  # 该标的当前名义敞口
+    correlated_exposure_quote: Decimal | None = None  # 相关性簇内已有同向净敞口（不含本提案）
     orders_last_hour: int = 0
     consecutive_losses: int = 0
     daily_drawdown: Decimal = Decimal(0)        # 0.03 = 回撤 3%
@@ -158,6 +159,21 @@ def rule_symbol_concentration(p: TradeProposal, ctx: RiskContext, cfg: RiskConfi
     return _ok("symbol_concentration")
 
 
+def rule_correlated_exposure(p: TradeProposal, ctx: RiskContext, cfg: RiskConfig) -> RuleResult:
+    """相关性簇内同向净敞口上限：避免在一篮子高相关资产上押过重同向（系统性风险）。"""
+    if not _is_open(p) or ctx.correlated_exposure_quote is None:
+        return _ok("correlated_exposure")
+    cap = ctx.equity_quote * cfg.max_correlated_exposure
+    room = cap - ctx.correlated_exposure_quote
+    if room <= 0:
+        return RuleResult("correlated_exposure", RuleAction.REJECT,
+                          f"相关性簇同向敞口已达上限 {cap}")
+    if p.size_quote > room:
+        return RuleResult("correlated_exposure", RuleAction.DOWNSIZE,
+                          f"超相关性簇同向敞口上限 {cap}，缩至剩余 {room}", max_size_quote=room)
+    return _ok("correlated_exposure")
+
+
 def rule_leverage(p: TradeProposal, ctx: RiskContext, cfg: RiskConfig) -> RuleResult:
     if not _is_open(p):
         return _ok("leverage")
@@ -242,4 +258,5 @@ ALL_RULES = [
     rule_position_cap,
     rule_gross_exposure,
     rule_symbol_concentration,
+    rule_correlated_exposure,
 ]

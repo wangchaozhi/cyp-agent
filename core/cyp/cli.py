@@ -74,8 +74,9 @@ def _build(args, settings: Settings) -> Orchestrator:
         timeout=settings.risk.approval_timeout_seconds)
     events = EventBus()
     events.subscribe(_on_event)
+    others = [v for v in registry.all() if getattr(v, "id", None) != getattr(venue, "id", None)]
     return Orchestrator(settings=settings, data_source=data, venue=venue,
-                        events=events, approval=approval)
+                        events=events, approval=approval, risk_venues=[venue, *others])
 
 
 def main(argv: list[str] | None = None) -> int:

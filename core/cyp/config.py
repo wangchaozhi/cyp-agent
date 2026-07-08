@@ -28,6 +28,7 @@ class RiskConfig(BaseSettings):
     max_position_pct: Decimal = Decimal("0.20")        # 单仓名义上限
     max_gross_exposure: Decimal = Decimal("1.00")      # 总敞口上限
     max_symbol_concentration: Decimal = Decimal("0.30")
+    max_correlated_exposure: Decimal = Decimal("0.50")   # 相关性簇内同向净敞口上限
     max_orders_per_hour: int = 10
     max_slippage_bps: Decimal = Decimal("30")
     # 合约
