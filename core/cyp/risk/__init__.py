@@ -6,6 +6,23 @@
 """
 
 from cyp.risk.engine import assess
+from cyp.risk.measures import (
+    TailRisk,
+    conditional_value_at_risk,
+    historical_var,
+    losses_from_returns,
+    tail_risk_quote,
+)
 from cyp.risk.rules import RiskContext, RuleAction, RuleResult
 
-__all__ = ["assess", "RiskContext", "RuleAction", "RuleResult"]
+__all__ = [
+    "assess",
+    "RiskContext",
+    "RuleAction",
+    "RuleResult",
+    "TailRisk",
+    "losses_from_returns",
+    "historical_var",
+    "conditional_value_at_risk",
+    "tail_risk_quote",
+]

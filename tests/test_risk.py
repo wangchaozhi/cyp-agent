@@ -178,6 +178,25 @@ def test_symbol_concentration_downsize():
     assert r.adjusted_size_quote == Decimal("200")
 
 
+def test_cvar_limit_rejected():
+    # 默认 max_cvar_pct=3%，账户 10000 → 上限 300；Projected CVaR 301 直接拒绝。
+    r = assess(prop(), ctx(portfolio_cvar_quote=Decimal("301")), CFG)
+    assert r.verdict == "rejected"
+    assert any("cvar_limit" in v for v in r.hard_violations)
+
+
+def test_cvar_limit_allows_close():
+    r = assess(prop(side="flat", size_quote=Decimal("0"), stop_loss=None),
+               ctx(portfolio_cvar_quote=Decimal("999999")), CFG)
+    assert r.verdict == "approved"
+
+
+def test_cvar_limit_contributes_to_risk_score():
+    r = assess(prop(), ctx(portfolio_cvar_quote=Decimal("150")), CFG)  # 50% of CVaR cap
+    assert r.verdict == "approved"
+    assert r.risk_score >= 0.5
+
+
 def test_downsize_picks_minimum_cap():
     # 止损 54000（距离 10%），size 5000：
     #   per_trade 缩到 100/0.10 = 1000；position_cap 缩到 2000 → 取最小 1000

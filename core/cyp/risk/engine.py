@@ -43,6 +43,11 @@ def _base_risk_score(p: TradeProposal, ctx: RiskContext, cfg: RiskConfig, size: 
         cap = ctx.equity_quote * cfg.max_gross_exposure
         if cap > 0:
             ratios.append((ctx.gross_exposure_quote + size) / cap)
+    # 尾部风险占用（若调用方提供 projected CVaR）
+    if ctx.portfolio_cvar_quote is not None and cfg.max_cvar_pct > 0:
+        cap = ctx.equity_quote * cfg.max_cvar_pct
+        if cap > 0:
+            ratios.append(ctx.portfolio_cvar_quote / cap)
     return _clip01(max(ratios)) if ratios else 0.0
 
 

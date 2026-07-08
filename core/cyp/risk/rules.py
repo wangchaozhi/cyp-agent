@@ -40,6 +40,8 @@ class RiskContext:
     gross_exposure_quote: Decimal = Decimal(0)  # 当前总名义敞口
     symbol_exposure_quote: Decimal = Decimal(0)  # 该标的当前名义敞口
     correlated_exposure_quote: Decimal | None = None  # 相关性簇内已有同向净敞口（不含本提案）
+    portfolio_var_quote: Decimal | None = None   # 组合 Historical VaR（通常为含本提案的 projected）
+    portfolio_cvar_quote: Decimal | None = None  # 组合 CVaR / Expected Shortfall（projected）
     orders_last_hour: int = 0
     consecutive_losses: int = 0
     daily_drawdown: Decimal = Decimal(0)        # 0.03 = 回撤 3%
@@ -174,6 +176,17 @@ def rule_correlated_exposure(p: TradeProposal, ctx: RiskContext, cfg: RiskConfig
     return _ok("correlated_exposure")
 
 
+def rule_cvar_limit(p: TradeProposal, ctx: RiskContext, cfg: RiskConfig) -> RuleResult:
+    """组合尾部风险护栏：Projected CVaR 不得超过账户净值 × max_cvar_pct。"""
+    if not _is_open(p) or ctx.portfolio_cvar_quote is None:
+        return _ok("cvar_limit")
+    cap = ctx.equity_quote * cfg.max_cvar_pct
+    if ctx.portfolio_cvar_quote > cap:
+        return RuleResult("cvar_limit", RuleAction.REJECT,
+                          f"组合 CVaR {ctx.portfolio_cvar_quote} > 上限 {cap}")
+    return _ok("cvar_limit")
+
+
 def rule_leverage(p: TradeProposal, ctx: RiskContext, cfg: RiskConfig) -> RuleResult:
     if not _is_open(p):
         return _ok("leverage")
@@ -259,4 +272,5 @@ ALL_RULES = [
     rule_gross_exposure,
     rule_symbol_concentration,
     rule_correlated_exposure,
+    rule_cvar_limit,
 ]
