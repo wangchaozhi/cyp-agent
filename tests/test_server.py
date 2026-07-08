@@ -75,6 +75,29 @@ def test_portfolio_endpoint():
     run(scenario())
 
 
+def test_backtest_endpoint():
+    async def scenario():
+        app = create_app(Settings(_env_file=None))
+        async with _client(app) as c:
+            r = (await c.post("/api/backtest", json={
+                "symbol": "BTC/USDT",
+                "bars": 120,
+                "window": 30,
+                "seed": 11,
+                "drift": 0.001,
+                "vol": 0.01,
+            })).json()
+            assert r["symbol"] == "BTC/USDT"
+            assert r["n_bars"] == 120
+            assert r["params"]["window"] == 30
+            assert len(r["equity_curve"]) > 0
+            assert {"total_return", "max_drawdown", "sharpe", "n_trades"} <= set(r["metrics"])
+
+            bad = await c.post("/api/backtest", json={"bars": 80, "window": 80})
+            assert bad.status_code == 422
+    run(scenario())
+
+
 def test_market_endpoint_offline_graceful():
     async def scenario():
         app = create_app(Settings(_env_file=None))

@@ -26,6 +26,8 @@
   完成 round-trip；`HistoricalData` 按游标回放窗口快照。
 - **绩效**：`compute_metrics` 纯函数——总收益/最大回撤/夏普/胜率/盈亏比。
 - **CLI**：`python -m cyp.backtest.run`（合成历史，零密钥离线）。
+- **仪表盘回测报告**：新增 `POST /api/backtest`，React 仪表盘可设置 symbol/bars/window/seed/
+  drift/vol，展示绩效、净值曲线与交易明细。
 
 ### M4（部分）· 组合级风控 + 跨所聚合 + OKX 模拟交易 + 交易所适配层
 - **组合级风控**：跨场所聚合持仓（`aggregate_positions` 失败隔离）→ `PortfolioView`

@@ -1,5 +1,7 @@
 import type {
   ApprovalRequest,
+  BacktestReport,
+  BacktestRequest,
   HealthStatus,
   PendingApproval,
   PortfolioSnapshot,
@@ -36,6 +38,11 @@ export const cypApi = {
   positions: () => request<Position[]>("/api/positions"),
   risk: () => request<RiskSnapshot>("/api/risk"),
   portfolio: () => request<PortfolioSnapshot>("/api/portfolio"),
+  backtest: (payload: BacktestRequest) =>
+    request<BacktestReport>("/api/backtest", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   runOnce: () =>
     request<{ run_id: string; symbol: string }>("/api/run", {
       method: "POST",

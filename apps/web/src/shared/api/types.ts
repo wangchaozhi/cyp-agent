@@ -104,6 +104,44 @@ export interface PortfolioSnapshot {
   correlated_limit: Numeric;
 }
 
+export interface BacktestRequest {
+  symbol?: string;
+  bars: number;
+  window: number;
+  seed: number;
+  drift: number;
+  vol: number;
+}
+
+export interface BacktestMetrics {
+  initial_equity: number;
+  final_equity: number;
+  total_return: number;
+  max_drawdown: number;
+  sharpe: number;
+  n_trades: number;
+  win_rate: number;
+  profit_factor: number | null;
+}
+
+export interface BacktestTrade {
+  side: Exclude<Side, "flat">;
+  entry: number;
+  exit: number;
+  pnl: number;
+  bar_in: number;
+  bar_out: number;
+}
+
+export interface BacktestReport {
+  symbol: string;
+  n_bars: number;
+  metrics: BacktestMetrics;
+  trades: BacktestTrade[];
+  equity_curve: number[];
+  params: Required<BacktestRequest>;
+}
+
 export interface Signal {
   name: string;
   value: string;

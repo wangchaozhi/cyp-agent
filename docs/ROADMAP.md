@@ -125,10 +125,11 @@
 - [x] 反过拟合统计基础件：PSR / Deflated Sharpe / MinTRL + walk-forward / purged K-fold / PBO
       （详见 [QUANT.md](QUANT.md) 与 [quant/stats.md](quant/stats.md)）
 - [ ] 复盘经验与回测结果打通，辅助策略择优
-- [ ] 仪表盘：回测报告页（现为 CLI `python -m cyp.backtest.run`）
+- [x] 仪表盘：`POST /api/backtest` + 回测报告页（参数、绩效、净值曲线、交易明细）
 
 **验收**：✅ `python -m cyp.backtest.run` 对合成历史跑出可复现回测报告；入场逻辑与实盘**同一份代码**
-（Orchestrator），「回测/模拟/实盘」无逻辑分叉。⏳ 剩真实历史数据接入 + 策略打包 + 报告页。
+（Orchestrator），「回测/模拟/实盘」无逻辑分叉；仪表盘可直接运行合成历史回测并查看报告。
+⏳ 剩真实历史数据接入 + 复盘经验与回测结果打通。
 
 ---
 

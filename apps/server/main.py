@@ -23,9 +23,10 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from cyp.approval import PendingApprovalGate
+from cyp.backtest import Backtester
 from cyp.config import Settings, get_settings
 from cyp.data import SyntheticMarketData
 from cyp.events import EventBus
@@ -48,6 +49,15 @@ class ApprovalRequest(BaseModel):
 
 class KillRequest(BaseModel):
     on: bool
+
+
+class BacktestRequest(BaseModel):
+    symbol: str | None = None
+    bars: int = Field(default=300, ge=80, le=5000)
+    window: int = Field(default=60, ge=20, le=1000)
+    seed: int = Field(default=7, ge=0, le=1_000_000)
+    drift: float = Field(default=0.001, ge=-0.05, le=0.05)
+    vol: float = Field(default=0.01, gt=0, le=0.2)
 
 
 def create_app(settings: Settings | None = None, data_source=None, venue=None) -> FastAPI:
@@ -149,6 +159,27 @@ def create_app(settings: Settings | None = None, data_source=None, venue=None) -
         return {"equity": str(equity), "n_positions": len(positions),
                 "gross": str(view.gross_notional()), "clusters": clusters,
                 "correlated_limit": str(equity * settings.risk.max_correlated_exposure)}
+
+    @app.post("/api/backtest")
+    async def backtest(req: BacktestRequest):
+        if req.window >= req.bars:
+            raise HTTPException(status_code=422, detail="window must be smaller than bars")
+
+        symbol = req.symbol or settings.watchlist_symbols()[0]
+        market = SyntheticMarketData(bars=req.bars, seed=req.seed, drift=req.drift, vol=req.vol)
+        candles = (await market.snapshot(symbol)).ohlcv
+        backtest_settings = settings.model_copy(update={"mode": "paper", "kill": False, "approval": "auto"})
+        report = await Backtester(backtest_settings, symbol, candles, window=req.window).run()
+        payload = report.model_dump(mode="json")
+        payload["params"] = {
+            "symbol": symbol,
+            "bars": req.bars,
+            "window": req.window,
+            "seed": req.seed,
+            "drift": req.drift,
+            "vol": req.vol,
+        }
+        return payload
 
     @app.post("/api/run")
     async def run(req: RunRequest):

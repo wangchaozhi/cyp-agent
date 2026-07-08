@@ -424,6 +424,10 @@ input:focus-visible {
   grid-row: span 2;
 }
 
+.panel--backtest {
+  grid-column: 1 / -1;
+}
+
 .panel__header {
   display: flex;
   align-items: center;
@@ -805,6 +809,105 @@ td small {
   padding-top: 2px;
 }
 
+.backtest-form {
+  display: grid;
+  grid-template-columns: minmax(140px, 1.2fr) repeat(5, minmax(92px, 1fr)) minmax(118px, auto);
+  gap: 10px;
+  align-items: end;
+  margin-bottom: 12px;
+}
+
+.backtest-form label {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.backtest-form label span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.backtest-form input {
+  width: 100%;
+  min-width: 0;
+  min-height: 34px;
+  padding: 6px 9px;
+  border: 1px solid color-mix(in srgb, var(--border) 90%, transparent);
+  border-radius: 8px;
+  color: var(--text);
+  background: var(--surface-inset);
+  font-variant-numeric: tabular-nums;
+}
+
+.backtest-run {
+  width: 100%;
+}
+
+.backtest-report {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.56fr) minmax(420px, 1.44fr);
+  gap: 14px;
+  align-items: stretch;
+}
+
+.backtest-metrics {
+  align-content: start;
+  padding: 2px 0;
+}
+
+.backtest-chart {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent),
+    var(--surface-inset);
+}
+
+.backtest-chart__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: baseline;
+  padding: 9px 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+.backtest-chart__meta strong {
+  font-size: 13px;
+}
+
+.backtest-chart__meta span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.backtest-chart svg {
+  display: block;
+  width: 100%;
+  height: 180px;
+}
+
+.backtest-chart line {
+  stroke: color-mix(in srgb, var(--border) 82%, transparent);
+  stroke-width: 1;
+}
+
+.backtest-chart polyline {
+  fill: none;
+  stroke: var(--accent-strong);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 3;
+  vector-effect: non-scaling-stroke;
+}
+
+.backtest-trades {
+  grid-column: 1 / -1;
+}
+
 .muted-line {
   margin: 0;
   color: var(--muted);
@@ -848,6 +951,18 @@ td small {
 
   .panel--events {
     grid-row: auto;
+  }
+
+  .backtest-form {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .backtest-run {
+    grid-column: 1 / -1;
+  }
+
+  .backtest-report {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -894,6 +1009,15 @@ td small {
   }
 
   .approval-actions input {
+    grid-column: 1 / -1;
+  }
+
+  .backtest-form {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .backtest-form label:first-child,
+  .backtest-run {
     grid-column: 1 / -1;
   }
 

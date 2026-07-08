@@ -1,6 +1,7 @@
 import { useCallback, useState } from "react";
 
 import { PendingApprovals } from "../features/approvals/PendingApprovals";
+import { BacktestPanel } from "../features/backtest/BacktestPanel";
 import { EventStream } from "../features/events/EventStream";
 import { SystemHeader } from "../features/health/SystemHeader";
 import { OverviewStrip } from "../features/overview/OverviewStrip";
@@ -138,6 +139,7 @@ export default function App() {
         <PositionsPanel positions={positions.data ?? []} />
         <RiskPanel risk={risk.data} />
         <PortfolioPanel portfolio={portfolio.data} />
+        <BacktestPanel />
       </main>
     </div>
   );
