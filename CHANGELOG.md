@@ -4,6 +4,13 @@
 
 ## [未发布]
 
+### M5（部分）· 回测引擎
+- **回测/模拟/实盘三档统一**：`Backtester` 入场复用 Orchestrator 全管线
+  （分析师→策略官→风控→PaperVenue），仅在回测层补按 bar 高低价触发的止损/止盈平仓，
+  完成 round-trip；`HistoricalData` 按游标回放窗口快照。
+- **绩效**：`compute_metrics` 纯函数——总收益/最大回撤/夏普/胜率/盈亏比。
+- **CLI**：`python -m cyp.backtest.run`（合成历史，零密钥离线）。
+
 ### M4（部分）· 组合级风控 + OKX 模拟交易 + 交易所适配层
 - **组合级风控**：跨场所聚合持仓（`aggregate_positions` 失败隔离）→ `PortfolioView`
   计算总敞口/单标的/相关性簇同向净敞口；新护栏 `correlated_exposure`——相关性簇
