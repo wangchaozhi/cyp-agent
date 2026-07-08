@@ -4,7 +4,7 @@ import asyncio
 from decimal import Decimal
 
 from cyp.agents import Strategist, StrategyConfig
-from cyp.backtest import default_objective, grid, sweep
+from cyp.backtest import default_objective, grid, robust_sweep, sweep
 from cyp.config import RiskConfig, Settings
 from cyp.contracts import AnalystReport
 from cyp.data import SyntheticMarketData
@@ -72,3 +72,13 @@ def test_sweep_ranks_by_score_desc():
     scores = [r.score for r in results]
     assert scores == sorted(scores, reverse=True)          # 已按分排序
     assert all("total_return" in r.metrics for r in results)
+
+
+def test_robust_sweep_reports_oos_and_overfit_verdict():
+    candles = run(SyntheticMarketData(bars=260, drift=0.002).snapshot("BTC/USDT")).ohlcv
+    configs = grid(enter_threshold=[0.08, 0.12, 0.18], k_stop=[Decimal("2"), Decimal("3")])
+    rr = run(robust_sweep(Settings(_env_file=None), "BTC/USDT", candles, configs, window=60))
+    assert 0.0 <= rr.pbo <= 1.0
+    assert 0.0 <= rr.deflated_sharpe <= 1.0
+    assert rr.verdict in ("PASS", "REJECT(疑似过拟合)")
+    assert "total_return" in rr.oos_metrics and "total_return" in rr.is_metrics

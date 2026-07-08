@@ -10,7 +10,7 @@ import asyncio
 import sys
 from decimal import Decimal
 
-from cyp.backtest import grid, sweep
+from cyp.backtest import grid, robust_sweep, sweep
 from cyp.config import Settings
 from cyp.data import SyntheticMarketData
 
@@ -44,16 +44,25 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"扫参 {args.symbol} · {args.bars} bars · {len(configs)} 组配置 · 目标=收益-回撤")
     print("-" * 74)
-    print(f"{'score':>8} {'收益%':>8} {'回撤%':>7} {'夏普':>7} {'交易':>4} {'胜率%':>6}  参数")
+    print(f"{'score':>8} {'收益%':>8} {'回撤%':>7} {'夏普':>7} {'交易':>4} {'胜率%':>6}  参数（样本内，仅参考）")
     for r in results[:args.top]:
         m, c = r.metrics, r.config
         print(f"{r.score:>8.4f} {m['total_return']*100:>7.2f} {m['max_drawdown']*100:>6.2f} "
               f"{m['sharpe']:>7.3f} {m['n_trades']:>4} {m['win_rate']*100:>5.1f}  "
               f"enter={c.enter_threshold} kSL={c.k_stop} kTP={c.k_tp}")
-    print("-" * 74)
-    best = results[0].config
-    print(f"最优：enter_threshold={best.enter_threshold} k_stop={best.k_stop} k_tp={best.k_tp}"
-          f" → 可注入 Orchestrator(strategy=...)")
+
+    # 诚实择优：样本内选 → 样本外验证 + 过拟合检验
+    rr = asyncio.run(robust_sweep(settings, args.symbol, candles, configs, window=args.window))
+    print("=" * 74)
+    print("诚实择优（样本内挑最优 → 样本外验证，防过拟合）")
+    print(f"  样本内 收益 {rr.is_metrics['total_return']*100:+.2f}%   "
+          f"样本外 收益 {rr.oos_metrics['total_return']*100:+.2f}%  回撤 {rr.oos_metrics['max_drawdown']*100:.2f}%")
+    print(f"  PBO(过拟合概率) {rr.pbo}   Deflated Sharpe {rr.deflated_sharpe}")
+    b = rr.best_config
+    print(f"  裁决：{rr.verdict}   参数 enter={b.enter_threshold} kSL={b.k_stop} kTP={b.k_tp}")
+    if "REJECT" in rr.verdict:
+        print("  → 样本内最优在样本外未通过：多半是噪声，勿上实盘。")
+    print("=" * 74)
     return 0
 
 
