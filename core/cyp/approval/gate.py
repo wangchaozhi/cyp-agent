@@ -8,7 +8,8 @@ from cyp.contracts import ApprovalDecision, RiskAssessment, TradeProposal
 
 
 class ApprovalGate(Protocol):
-    async def decide(self, proposal: TradeProposal, assessment: RiskAssessment) -> ApprovalDecision: ...
+    async def decide(self, proposal: TradeProposal, assessment: RiskAssessment,
+                     run_id: str = "") -> ApprovalDecision: ...
 
 
 class AutoApprove:
@@ -17,7 +18,8 @@ class AutoApprove:
     def __init__(self, operator: str = "auto") -> None:
         self._operator = operator
 
-    async def decide(self, proposal: TradeProposal, assessment: RiskAssessment) -> ApprovalDecision:
+    async def decide(self, proposal: TradeProposal, assessment: RiskAssessment,
+                     run_id: str = "") -> ApprovalDecision:
         return ApprovalDecision(decision="approve", operator=self._operator, note="auto-approve")
 
 
@@ -25,5 +27,6 @@ class AutoReject:
     def __init__(self, operator: str = "auto") -> None:
         self._operator = operator
 
-    async def decide(self, proposal: TradeProposal, assessment: RiskAssessment) -> ApprovalDecision:
+    async def decide(self, proposal: TradeProposal, assessment: RiskAssessment,
+                     run_id: str = "") -> ApprovalDecision:
         return ApprovalDecision(decision="reject", operator=self._operator, note="auto-reject")

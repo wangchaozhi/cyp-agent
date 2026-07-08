@@ -22,7 +22,8 @@ class CLIApprovalGate:
         self._input_fn = input_fn
         self._print = print_fn
 
-    async def decide(self, proposal: TradeProposal, assessment: RiskAssessment) -> ApprovalDecision:
+    async def decide(self, proposal: TradeProposal, assessment: RiskAssessment,
+                     run_id: str = "") -> ApprovalDecision:
         self._render(proposal, assessment)
         raw = await self._prompt()
         return self._parse(raw, proposal)

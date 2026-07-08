@@ -5,5 +5,6 @@ M0 提供 AutoApprove/AutoReject（测试与全自动占位）；CLI 版见 cyp.
 """
 
 from cyp.approval.gate import ApprovalGate, AutoApprove, AutoReject
+from cyp.approval.server import PendingApprovalGate
 
-__all__ = ["ApprovalGate", "AutoApprove", "AutoReject"]
+__all__ = ["ApprovalGate", "AutoApprove", "AutoReject", "PendingApprovalGate"]

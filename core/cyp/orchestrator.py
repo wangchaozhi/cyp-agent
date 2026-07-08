@@ -126,7 +126,7 @@ class Orchestrator:
                              reports=reports, proposal=proposal, assessment=assessment)
 
         # ⑥ 人工审批门
-        decision = await self.approval.decide(proposal, assessment)
+        decision = await self.approval.decide(proposal, assessment, run_id)
         await self.events.publish("approval_decided", run_id, symbol=symbol,
                                   decision=decision.model_dump(mode="json"))
         if decision.decision == "reject":
