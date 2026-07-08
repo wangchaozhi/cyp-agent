@@ -36,13 +36,20 @@ class VenueRegistry:
 
 
 def build_registry(settings: Settings) -> VenueRegistry:
-    """按配置组装默认注册表：PaperVenue + 只读 CexVenue（参考实现 Binance）。"""
+    """按配置组装默认注册表：PaperVenue + CexVenue（参考实现 Binance）。
+
+    CexVenue 仅在 mode=live 且通过 LiveGuard 时才可下单，否则保持只读（安全默认）。
+    """
+    from cyp.live import LiveGuard
+    guard = LiveGuard.check(settings)
+    cex_read_only = not (settings.mode == "live" and guard.ok)
+
     reg = VenueRegistry()
     reg.register(PaperVenue())
     reg.register(CexVenue(
         exchange_id=settings.cex_id,
         api_key=settings.binance_api_key,
         api_secret=settings.binance_api_secret,
-        read_only=(settings.mode == "paper"),
+        read_only=cex_read_only,
     ))
     return reg

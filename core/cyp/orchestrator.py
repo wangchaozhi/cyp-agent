@@ -16,6 +16,7 @@ from typing import Literal
 from pydantic import BaseModel
 
 from cyp.agents import ANALYSTS, AgentContext, Reviewer, RiskOfficer, Strategist, Trader
+from cyp.alerts import Alerter, build_alerter
 from cyp.approval import ApprovalGate, AutoApprove
 from cyp.config import Settings
 from cyp.contracts import (
@@ -64,6 +65,7 @@ class Orchestrator:
         llm: ResilientLLM | None = None,
         metrics: RunMetrics | None = None,
         portfolio: PortfolioTracker | None = None,
+        alerter: Alerter | None = None,
     ) -> None:
         self.settings = settings
         self.data = data_source
@@ -74,6 +76,7 @@ class Orchestrator:
         self.llm = llm or build_llm(settings)
         self.metrics = metrics or RunMetrics()
         self.portfolio = portfolio or PortfolioTracker()
+        self.alerter = alerter or build_alerter(settings)
         self.log = get_logger("orchestrator")
         self.reconciling = False   # 对账未完成时置 True → 风控引擎冻结新开仓
         self.strategist = Strategist()
@@ -91,6 +94,7 @@ class Orchestrator:
         except Exception as e:  # noqa: BLE001 —— 单轮失败隔离，不击穿调用方
             self.log.error("run_failed", run_id=run_id, symbol=symbol, error=str(e))
             await self.events.publish("run_failed", run_id, symbol=symbol, error=str(e))
+            await self.alerter.alert("error", "run_failed", run_id=run_id, symbol=symbol, error=str(e))
             res = RunResult(run_id=run_id, symbol=symbol, status="error", error=str(e))
         slip = res.execution.slippage_bps if res.execution else None
         self.metrics.record(res.status, slip)
@@ -144,6 +148,11 @@ class Orchestrator:
         await self.events.publish("risk_assessed", run_id, symbol=symbol,
                                   assessment=assessment.model_dump(mode="json"))
         if assessment.verdict == "rejected":
+            serious = [v for v in assessment.hard_violations if any(
+                k in v for k in ("kill_switch", "drawdown_circuit", "consecutive_losses", "maintenance_margin"))]
+            if serious:
+                await self.alerter.alert("warning", "risk_circuit", run_id=run_id,
+                                         symbol=symbol, violations=serious)
             return RunResult(run_id=run_id, symbol=symbol, status="rejected",
                              reports=reports, proposal=proposal, assessment=assessment)
 

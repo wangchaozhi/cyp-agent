@@ -14,7 +14,8 @@ from typing import Literal
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-_ENV = SettingsConfigDict(env_prefix="CYP_", env_file=".env", env_file_encoding="utf-8", extra="ignore")
+_ENV = SettingsConfigDict(env_prefix="CYP_", env_file=".env", env_file_encoding="utf-8",
+                          extra="ignore", populate_by_name=True)
 
 
 class RiskConfig(BaseSettings):
@@ -75,6 +76,10 @@ class Settings(BaseSettings):
     cex_id: str = "binance"
     binance_api_key: str | None = Field(default=None, validation_alias="BINANCE_API_KEY")
     binance_api_secret: str | None = Field(default=None, validation_alias="BINANCE_API_SECRET")
+    live_ack: bool = False          # 实盘确认（防误开实盘）；mode=live 时必须为 True
+
+    # 告警
+    alert_webhook: str | None = None
 
     # 链上（M3）
     evm_rpc_url: str | None = None
