@@ -22,6 +22,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from cyp.approval import PendingApprovalGate
@@ -32,6 +33,7 @@ from cyp.orchestrator import Orchestrator
 from cyp.venue import MarketAggregator, PaperVenue, build_registry
 
 _WEB_DIR = Path(__file__).resolve().parents[1] / "web"
+_WEB_DIST = _WEB_DIR / "dist"
 
 
 class RunRequest(BaseModel):
@@ -68,6 +70,10 @@ def create_app(settings: Settings | None = None, data_source=None, venue=None) -
     app.state.registry = registry
     app.state.subscribers = []   # list[asyncio.Queue]
     app.state.tasks = set()
+
+    assets_dir = _WEB_DIST / "assets"
+    if assets_dir.exists():
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="web-assets")
 
     # 事件 → 广播到所有 SSE 客户端队列
     def _broadcast(evt: dict) -> None:
@@ -192,10 +198,15 @@ def create_app(settings: Settings | None = None, data_source=None, venue=None) -
 
     @app.get("/", response_class=HTMLResponse)
     async def index():
-        html = _WEB_DIR / "index.html"
+        html = _WEB_DIST / "index.html"
         if html.exists():
             return HTMLResponse(html.read_text(encoding="utf-8"))
-        return HTMLResponse("<h1>cyp-agent</h1><p>仪表盘未构建，见 apps/web/index.html</p>")
+        return HTMLResponse(
+            "<h1>cyp-agent</h1>"
+            "<p>React 仪表盘尚未构建。</p>"
+            "<p>开发：cd apps/web && npm install && npm run dev</p>"
+            "<p>同源部署：cd apps/web && npm install && npm run build，然后启动 FastAPI。</p>"
+        )
 
     return app
 
