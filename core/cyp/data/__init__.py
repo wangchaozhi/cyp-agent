@@ -7,6 +7,12 @@ from cyp.data.market import (
     SyntheticMarketData,
     build_data_source,
 )
+from cyp.data.volatility import (
+    ewma_vol_from_candles,
+    ewma_volatility,
+    realized_volatility,
+    simple_returns,
+)
 
 __all__ = [
     "indicator_snapshot",
@@ -14,4 +20,8 @@ __all__ = [
     "CexMarketData",
     "SyntheticMarketData",
     "build_data_source",
+    "ewma_volatility",
+    "ewma_vol_from_candles",
+    "realized_volatility",
+    "simple_returns",
 ]
