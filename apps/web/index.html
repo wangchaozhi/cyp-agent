@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cyp-agent · 仪表盘</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2330; --border:#2a3038;
+    --fg:#e6edf3; --muted:#8b949e; --accent:#3b82f6;
+    --green:#3fb950; --red:#f85149; --yellow:#d29922; --pill:#21262d;
+  }
+  @media (prefers-color-scheme: light){
+    :root{ --bg:#f6f8fa; --panel:#fff; --panel2:#f0f3f6; --border:#d0d7de;
+      --fg:#1f2328; --muted:#636c76; --pill:#eaeef2; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Microsoft YaHei",sans-serif}
+  header{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;
+    padding:14px 20px;border-bottom:1px solid var(--border);background:var(--panel)}
+  h1{font-size:16px;margin:0;letter-spacing:.5px}
+  h1 small{color:var(--muted);font-weight:400;margin-left:8px}
+  .pills{display:flex;gap:8px;flex-wrap:wrap}
+  .pill{background:var(--pill);border:1px solid var(--border);border-radius:999px;
+    padding:3px 10px;font-size:12px;color:var(--muted)}
+  .pill b{color:var(--fg)}
+  .actions{display:flex;gap:8px}
+  button{font:inherit;cursor:pointer;border:1px solid var(--border);border-radius:8px;
+    padding:7px 14px;background:var(--panel2);color:var(--fg);transition:.15s}
+  button:hover{border-color:var(--accent)}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  button.danger{background:transparent;border-color:var(--red);color:var(--red)}
+  button.danger.on{background:var(--red);color:#fff}
+  button.ok{border-color:var(--green);color:var(--green)}
+  button.no{border-color:var(--red);color:var(--red)}
+  main{display:grid;grid-template-columns:1fr 1fr;gap:16px;padding:16px 20px;max-width:1200px;margin:0 auto}
+  @media (max-width:820px){ main{grid-template-columns:1fr} }
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:12px;overflow:hidden}
+  .panel h2{font-size:13px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);
+    margin:0;padding:12px 16px;border-bottom:1px solid var(--border)}
+  .body{padding:12px 16px;max-height:60vh;overflow:auto}
+  .empty{color:var(--muted);text-align:center;padding:24px 0}
+  /* 审批卡片 */
+  .card{border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:12px;background:var(--panel2)}
+  .card .row{display:flex;justify-content:space-between;gap:8px;margin:2px 0}
+  .side-long{color:var(--green);font-weight:700}
+  .side-short{color:var(--red);font-weight:700}
+  .verdict{font-size:12px;padding:1px 8px;border-radius:6px;border:1px solid var(--border)}
+  .verdict.approved{color:var(--green)} .verdict.downsized{color:var(--yellow)} .verdict.rejected{color:var(--red)}
+  .k{color:var(--muted)}
+  .thesis{color:var(--muted);font-size:13px;margin-top:6px;border-top:1px dashed var(--border);padding-top:6px}
+  .card .btns{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+  .card input{width:90px;background:var(--bg);border:1px solid var(--border);color:var(--fg);
+    border-radius:6px;padding:6px 8px}
+  /* 事件流 */
+  .evt{display:flex;gap:8px;padding:5px 0;border-bottom:1px solid var(--border);font-size:13px}
+  .evt .t{color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+  .evt .lb{font-weight:600;white-space:nowrap}
+  .evt .x{color:var(--muted);overflow:hidden;text-overflow:ellipsis}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--border)}
+  th{color:var(--muted);font-weight:500}
+  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}
+  .dot.on{background:var(--green)} .dot.off{background:var(--muted)}
+</style>
+</head>
+<body>
+<header>
+  <h1>cyp-agent <small>半自动加密货币多智能体 · 仪表盘</small></h1>
+  <div class="pills" id="pills"></div>
+  <div class="actions">
+    <button class="primary" id="runBtn">触发一轮</button>
+    <button class="danger" id="killBtn">Kill Switch</button>
+  </div>
+</header>
+
+<main>
+  <section class="panel">
+    <h2>待审批（人在环）</h2>
+    <div class="body" id="pending"><div class="empty">暂无待审批</div></div>
+  </section>
+
+  <section class="panel" style="grid-row:span 2">
+    <h2>事件流（SSE 实时）</h2>
+    <div class="body" id="events"><div class="empty">等待事件…（点「触发一轮」）</div></div>
+  </section>
+
+  <section class="panel">
+    <h2>持仓</h2>
+    <div class="body" id="positions"><div class="empty">无持仓</div></div>
+  </section>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const api = (p,opt) => fetch(p,opt).then(r=>r.json());
+let killOn = false;
+
+const LABEL = {run_started:"▶ 开始",snapshot_ready:"① 采集",reports_ready:"② 分析",
+  proposal_ready:"③ 决策",risk_assessed:"④ 风控",awaiting_approval:"⏳ 待审批",
+  approval_decided:"⑤ 审批",executed:"⑥ 执行",reviewed:"⑦ 复盘",
+  run_failed:"✖ 失败",killswitch:"⛔ KillSwitch"};
+
+function summarize(e){
+  if(e.type==="reports_ready") return e.reports.map(r=>`${r.agent}:${r.stance}(${(+r.confidence).toFixed(2)})${r.degraded?"*":""}`).join("  ");
+  if(e.type==="proposal_ready"){const p=e.proposal;return `${p.side} 规模=${p.size_quote} 止损=${p.stop_loss} 置信=${(+p.confidence).toFixed(2)}`;}
+  if(e.type==="risk_assessed"){const a=e.assessment;return `${a.verdict} risk=${(+a.risk_score).toFixed(2)}`+(a.hard_violations.length?`  ⚠ ${a.hard_violations.join("; ")}`:"");}
+  if(e.type==="executed"){const x=e.execution;return `${x.status} 均价=${x.avg_price??"-"} 保护单=${(x.protective_orders||[]).length}`;}
+  if(e.type==="reviewed") return (e.review.lessons||[]).join(" / ")||"已复盘";
+  if(e.type==="awaiting_approval") return `${e.proposal.side} ${e.symbol} 等待人工确认`;
+  return "";
+}
+
+function addEvent(e){
+  const box=$("#events");
+  if(box.querySelector(".empty")) box.innerHTML="";
+  const t=(e.ts||"").slice(11,19);
+  const el=document.createElement("div");
+  el.className="evt";
+  el.innerHTML=`<span class="t">${t}</span><span class="lb">${LABEL[e.type]||e.type}</span><span class="x"></span>`;
+  el.querySelector(".x").textContent=summarize(e);
+  box.prepend(el);
+}
+
+async function refreshHealth(){
+  const h=await api("/api/health"); killOn=h.kill;
+  $("#pills").innerHTML=
+    `<span class="pill">模式 <b>${h.mode}</b></span>`+
+    `<span class="pill">LLM <b>${h.llm?"on":"off(规则)"}</b></span>`+
+    `<span class="pill"><span class="dot ${h.kill?'off':'on'}"></span>${h.kill?"已停机":"运行中"}</span>`;
+  const kb=$("#killBtn"); kb.classList.toggle("on",killOn); kb.textContent=killOn?"解除停机":"Kill Switch";
+}
+
+async function refreshPending(){
+  const list=await api("/api/pending"); const box=$("#pending");
+  if(!list.length){box.innerHTML='<div class="empty">暂无待审批</div>';return;}
+  box.innerHTML="";
+  for(const item of list){
+    const p=item.proposal,a=item.assessment,size=a.adjusted_size_quote||p.size_quote;
+    const c=document.createElement("div"); c.className="card";
+    c.innerHTML=`
+      <div class="row"><span class="side-${p.side}">${p.side.toUpperCase()} ${p.symbol}</span>
+        <span class="verdict ${a.verdict}">${a.verdict} · risk ${(+a.risk_score).toFixed(2)}</span></div>
+      <div class="row"><span class="k">规模</span><span>${size} ${a.adjusted_size_quote?"(缩仓)":""}</span></div>
+      <div class="row"><span class="k">止损 / 止盈</span><span>${p.stop_loss} / ${(p.take_profit||[]).join(", ")}</span></div>
+      <div class="row"><span class="k">置信</span><span>${(+p.confidence).toFixed(2)}</span></div>
+      ${a.hard_violations.length?`<div class="row"><span class="k">护栏</span><span>${a.hard_violations.join("; ")}</span></div>`:""}
+      <div class="thesis">${p.thesis||""}</div>
+      <div class="btns">
+        <button class="ok">批准</button>
+        <button class="no">拒绝</button>
+        <input type="number" placeholder="改规模" step="0.01">
+        <button>改规模</button>
+      </div>`;
+    const [okb,nob,inp,modb]=[c.querySelector(".ok"),c.querySelector(".no"),c.querySelector("input"),c.querySelectorAll(".btns button")[2]];
+    okb.onclick=()=>decide(item.run_id,"approve");
+    nob.onclick=()=>decide(item.run_id,"reject");
+    modb.onclick=()=>decide(item.run_id,"modify",inp.value);
+    box.appendChild(c);
+  }
+}
+
+async function refreshPositions(){
+  const list=await api("/api/positions"); const box=$("#positions");
+  if(!list.length){box.innerHTML='<div class="empty">无持仓</div>';return;}
+  box.innerHTML=`<table><tr><th>标的</th><th>方向</th><th>数量</th><th>入场</th><th>杠杆</th></tr>`+
+    list.map(p=>`<tr><td>${p.symbol}</td><td class="side-${p.side}">${p.side}</td>
+      <td>${(+p.size_base).toFixed(6)}</td><td>${p.entry_price}</td><td>${p.leverage}x</td></tr>`).join("")+`</table>`;
+}
+
+async function decide(run_id,decision,size){
+  const body={decision}; if(size) body.size=parseFloat(size);
+  await fetch(`/api/approvals/${run_id}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  refreshPending();
+}
+
+$("#runBtn").onclick=async()=>{ await fetch("/api/run",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"}); };
+$("#killBtn").onclick=async()=>{ await fetch("/api/killswitch",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({on:!killOn})}); refreshHealth(); };
+
+// SSE
+const es=new EventSource("/api/events");
+es.onmessage=ev=>{ if(!ev.data.trim())return; let e; try{e=JSON.parse(ev.data)}catch{return;}
+  addEvent(e);
+  if(["awaiting_approval","approval_decided"].includes(e.type)) refreshPending();
+  if(["executed","reviewed","run_started"].includes(e.type)) refreshPositions();
+  if(e.type==="killswitch") refreshHealth();
+};
+
+refreshHealth(); refreshPending(); refreshPositions();
+</script>
+</body>
+</html>
