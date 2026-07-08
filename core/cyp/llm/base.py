@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import random
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Protocol, TypeVar
 
 from pydantic import BaseModel, ValidationError

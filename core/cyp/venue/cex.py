@@ -84,15 +84,16 @@ class CexVenue:
     async def fetch_ohlcv(self, symbol: str, timeframe: str = "1h", limit: int = 200) -> list[Candle]:
         rows = await self._ccxt().fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
         out: list[Candle] = []
-        for ts, o, h, l, c, v in rows:
+        for ts, o, hi, lo, c, v in rows:
             out.append(Candle(ts=datetime.fromtimestamp(ts / 1000, tz=timezone.utc),
-                              open=Decimal(str(o)), high=Decimal(str(h)), low=Decimal(str(l)),
+                              open=Decimal(str(o)), high=Decimal(str(hi)), low=Decimal(str(lo)),
                               close=Decimal(str(c)), volume=Decimal(str(v))))
         return out
 
     async def fetch_orderbook(self, symbol: str, depth: int = 20) -> OrderBook:
         ob = await self._ccxt().fetch_order_book(symbol, limit=depth)
-        pairs = lambda rows: [(Decimal(str(p)), Decimal(str(s))) for p, s in rows]
+        def pairs(rows):
+            return [(Decimal(str(p)), Decimal(str(s))) for p, s in rows]
         return OrderBook(bids=pairs(ob["bids"]), asks=pairs(ob["asks"]))
 
     # ---- 账户 --------------------------------------------------------------

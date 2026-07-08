@@ -13,8 +13,8 @@ def run(coro):
 
 
 def _open_intent(cid="c1", **over):
-    base = dict(client_id=cid, symbol="BTC/USDT", venue="paper", side="long",
-                instrument="spot", size_quote=Decimal("1000"), stop_loss=Decimal("90"))
+    base = {"client_id": cid, "symbol": "BTC/USDT", "venue": "paper", "side": "long",
+                "instrument": "spot", "size_quote": Decimal("1000"), "stop_loss": Decimal("90")}
     base.update(over)
     return OrderIntent(**base)
 

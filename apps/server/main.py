@@ -16,14 +16,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import uuid
 from pathlib import Path
-
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, StreamingResponse
-from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
 
 from cyp.approval import PendingApprovalGate
 from cyp.backtest import Backtester
@@ -32,6 +28,10 @@ from cyp.data import SyntheticMarketData
 from cyp.events import EventBus
 from cyp.orchestrator import Orchestrator
 from cyp.venue import MarketAggregator, PaperVenue, build_registry
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 
 _WEB_DIR = Path(__file__).resolve().parents[1] / "web"
 _WEB_DIST = _WEB_DIR / "dist"
@@ -88,10 +88,8 @@ def create_app(settings: Settings | None = None, data_source=None, venue=None) -
     # 事件 → 广播到所有 SSE 客户端队列
     def _broadcast(evt: dict) -> None:
         for q in list(app.state.subscribers):
-            try:
+            with contextlib.suppress(asyncio.QueueFull):
                 q.put_nowait(evt)
-            except asyncio.QueueFull:
-                pass
     events.subscribe(_broadcast)
 
     @app.get("/api/health")

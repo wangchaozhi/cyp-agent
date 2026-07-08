@@ -3,13 +3,12 @@
 import asyncio
 from decimal import Decimal
 
-from cyp.agents import Strategist, StrategyConfig
+from cyp.agents import AgentContext, Strategist, StrategyConfig
 from cyp.backtest import default_objective, grid, robust_sweep, sweep
 from cyp.config import RiskConfig, Settings
 from cyp.contracts import AnalystReport
 from cyp.data import SyntheticMarketData
 from cyp.llm import build_llm
-from cyp.agents import AgentContext
 
 run = asyncio.run
 CFG = RiskConfig(_env_file=None)

@@ -57,14 +57,14 @@ def test_aggregate_positions_across_venues():
 # ---- 相关性敞口护栏 --------------------------------------------------------
 
 def _prop(**over):
-    base = dict(symbol="ETH/USDT", venue="paper", side="long", size_quote=Decimal("1000"),
-                stop_loss=Decimal("58000"), confidence=0.7)
+    base = {"symbol": "ETH/USDT", "venue": "paper", "side": "long", "size_quote": Decimal("1000"),
+                "stop_loss": Decimal("58000"), "confidence": 0.7}
     base.update(over)
     return TradeProposal(**base)
 
 
 def _ctx(**over):
-    base = dict(equity_quote=Decimal("10000"), ref_price=Decimal("60000"))
+    base = {"equity_quote": Decimal("10000"), "ref_price": Decimal("60000")}
     base.update(over)
     return RiskContext(**base)
 

@@ -40,8 +40,8 @@ def _venue(fake, read_only=False):
 
 
 def _intent(**over):
-    base = dict(client_id="c1", symbol="BTC/USDT", venue="binance", side="long", instrument="spot",
-                size_quote=Decimal("1000"), stop_loss=Decimal("58000"), take_profit=[Decimal("64000")])
+    base = {"client_id": "c1", "symbol": "BTC/USDT", "venue": "binance", "side": "long", "instrument": "spot",
+                "size_quote": Decimal("1000"), "stop_loss": Decimal("58000"), "take_profit": [Decimal("64000")]}
     base.update(over)
     return OrderIntent(**base)
 

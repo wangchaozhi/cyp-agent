@@ -5,7 +5,6 @@ import random
 from cyp.backtest.pbo import pbo
 from cyp.backtest.validate import purged_kfold_splits, walk_forward_splits
 
-
 # ---- walk-forward ----------------------------------------------------------
 
 def test_walk_forward_train_precedes_test():
@@ -17,7 +16,7 @@ def test_walk_forward_train_precedes_test():
 
 def test_walk_forward_rolling_window():
     splits = walk_forward_splits(100, n_splits=3, anchored=False)
-    for tr_s, tr_e, te_s, te_e in splits:
+    for tr_s, tr_e, te_s, _te_e in splits:
         assert tr_e == te_s and tr_s >= 0
 
 
@@ -42,7 +41,8 @@ def test_embargo_purges_neighbors_from_train():
 # ---- PBO -------------------------------------------------------------------
 
 def test_pbo_zero_for_dominant_strategy():
-    mean = lambda r: sum(r) / len(r)
+    def mean(r):
+        return sum(r) / len(r)
     dominant = [0.02] * 60                                     # 恒最高
     weak1 = [0.001] * 60
     weak2 = [-0.01] * 60

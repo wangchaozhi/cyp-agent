@@ -15,7 +15,13 @@ from cyp.agents import (
     Trader,
 )
 from cyp.config import RiskConfig, Settings
-from cyp.contracts import AnalystReport, ExecutionResult, MarketSnapshot, RiskAssessment, TradeProposal
+from cyp.contracts import (
+    AnalystReport,
+    ExecutionResult,
+    MarketSnapshot,
+    RiskAssessment,
+    TradeProposal,
+)
 from cyp.data import SyntheticMarketData
 from cyp.llm import build_llm
 from cyp.venue import PaperVenue

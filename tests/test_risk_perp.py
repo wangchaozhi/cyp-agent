@@ -11,15 +11,15 @@ CFG = RiskConfig(_env_file=None)
 
 
 def perp(**over) -> TradeProposal:
-    base = dict(symbol="BTC/USDT", venue="paper", side="long", instrument="perp",
-                size_quote=Decimal("1000"), leverage=3.0, margin_mode="isolated",
-                stop_loss=Decimal("58000"), confidence=0.7)
+    base = {"symbol": "BTC/USDT", "venue": "paper", "side": "long", "instrument": "perp",
+                "size_quote": Decimal("1000"), "leverage": 3.0, "margin_mode": "isolated",
+                "stop_loss": Decimal("58000"), "confidence": 0.7}
     base.update(over)
     return TradeProposal(**base)
 
 
 def ctx(**over) -> RiskContext:
-    base = dict(equity_quote=Decimal("10000"), ref_price=Decimal("60000"))
+    base = {"equity_quote": Decimal("10000"), "ref_price": Decimal("60000")}
     base.update(over)
     return RiskContext(**base)
 

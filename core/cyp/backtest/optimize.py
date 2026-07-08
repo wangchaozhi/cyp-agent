@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import itertools
-from typing import Callable
+from collections.abc import Callable
 
 from pydantic import BaseModel
 
@@ -32,7 +32,7 @@ def default_objective(m: dict) -> float:
 def grid(**options) -> list[StrategyConfig]:
     """笛卡尔积生成候选配置：grid(enter_threshold=[...], k_stop=[...], ...)。"""
     keys = list(options)
-    return [StrategyConfig(**dict(zip(keys, combo)))
+    return [StrategyConfig(**dict(zip(keys, combo, strict=False)))
             for combo in itertools.product(*(options[k] for k in keys))]
 
 

@@ -6,8 +6,9 @@
 from __future__ import annotations
 
 import inspect
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 EventHandler = Callable[[dict], Any | Awaitable[Any]]
 

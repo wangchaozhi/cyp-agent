@@ -28,9 +28,9 @@ class MemoryStore:
         return self._checkpoints.get(run_id, {})
 
     def append_lessons(self, lessons: list[str]) -> None:
-        for l in lessons:
-            if l:
-                self._lessons.append(l)
+        for lesson in lessons:
+            if lesson:
+                self._lessons.append(lesson)
         self._lessons = self._lessons[-self._max_lessons:]
         self._persist()
 

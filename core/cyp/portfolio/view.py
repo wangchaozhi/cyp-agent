@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from decimal import Decimal
-from typing import Callable
 
 from cyp.contracts import Position
 from cyp.portfolio.correlation import CorrelationModel

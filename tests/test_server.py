@@ -8,11 +8,11 @@ import pytest
 
 pytest.importorskip("fastapi")
 import httpx
-
-from apps.server.main import create_app
 from cyp.config import Settings
 from cyp.contracts import Candle, DerivativesData, MarketSnapshot, SentimentData
 from cyp.venue import PaperVenue
+
+from apps.server.main import create_app
 
 run = asyncio.run
 

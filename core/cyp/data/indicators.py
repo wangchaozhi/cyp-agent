@@ -70,9 +70,9 @@ def atr(candles: list[Candle], n: int = 14) -> float | None:
         return None
     trs: list[float] = []
     for i in range(1, len(candles)):
-        h, l = float(candles[i].high), float(candles[i].low)
+        hi, lo = float(candles[i].high), float(candles[i].low)
         pc = float(candles[i - 1].close)
-        trs.append(max(h - l, abs(h - pc), abs(l - pc)))
+        trs.append(max(hi - lo, abs(hi - pc), abs(lo - pc)))
     return fmean(trs[-n:])
 
 

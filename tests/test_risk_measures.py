@@ -3,7 +3,6 @@
 from decimal import Decimal
 
 import pytest
-
 from cyp.risk import (
     conditional_value_at_risk,
     historical_var,

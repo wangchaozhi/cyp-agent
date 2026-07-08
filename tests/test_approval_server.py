@@ -6,7 +6,14 @@ from decimal import Decimal
 
 from cyp.approval import PendingApprovalGate
 from cyp.config import Settings
-from cyp.contracts import Candle, DerivativesData, MarketSnapshot, RiskAssessment, SentimentData, TradeProposal
+from cyp.contracts import (
+    Candle,
+    DerivativesData,
+    MarketSnapshot,
+    RiskAssessment,
+    SentimentData,
+    TradeProposal,
+)
 from cyp.events import EventBus
 from cyp.orchestrator import Orchestrator
 from cyp.venue import PaperVenue

@@ -7,7 +7,14 @@ from decimal import Decimal
 from cyp.agents import AgentContext, Strategist
 from cyp.approval import AutoApprove
 from cyp.config import RiskConfig, Settings
-from cyp.contracts import AnalystReport, Candle, DerivativesData, MarketSnapshot, OrderIntent, SentimentData
+from cyp.contracts import (
+    AnalystReport,
+    Candle,
+    DerivativesData,
+    MarketSnapshot,
+    OrderIntent,
+    SentimentData,
+)
 from cyp.data import SyntheticMarketData
 from cyp.llm import build_llm
 from cyp.orchestrator import Orchestrator

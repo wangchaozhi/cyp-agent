@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import sys
 
 from cyp.approval import AutoApprove
@@ -82,10 +83,8 @@ def _build(args, settings: Settings) -> Orchestrator:
 def main(argv: list[str] | None = None) -> int:
     # Windows 控制台常为 GBK，重配为 UTF-8 以正确输出步骤符号与中文
     for stream in (sys.stdout, sys.stderr):
-        try:
+        with contextlib.suppress(Exception):
             stream.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
-        except Exception:
-            pass
     settings = Settings()
     from cyp.observability import configure_logging
     configure_logging(settings.log_level)

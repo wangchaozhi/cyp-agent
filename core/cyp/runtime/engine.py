@@ -17,7 +17,7 @@ from cyp.config import Settings
 from cyp.events import EventBus
 from cyp.observability import get_logger
 from cyp.runtime.loops import OpportunityScanner, PositionMonitor
-from cyp.runtime.reconcile import ReconcileReport, Reconciler
+from cyp.runtime.reconcile import Reconciler, ReconcileReport
 
 
 class RuntimeEngine:

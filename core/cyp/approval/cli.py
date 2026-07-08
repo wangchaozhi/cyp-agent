@@ -7,8 +7,8 @@ input_fn/print_fn 可注入以便测试。
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from decimal import Decimal, InvalidOperation
-from typing import Callable
 
 from cyp.contracts import ApprovalDecision, RiskAssessment, TradeProposal
 

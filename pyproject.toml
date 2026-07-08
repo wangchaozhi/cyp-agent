@@ -13,8 +13,6 @@ license = { text = "MIT" }
 # 核心依赖：零密钥即可跑模拟盘。LLM / 链上按需选装 extras。
 dependencies = [
     "ccxt>=4.3",          # 统一 CEX 行情/下单（现货+合约）
-    "pandas>=2.2",        # 数据处理
-    "pandas-ta>=0.3",     # 技术指标
     "pydantic>=2.7",      # 契约单一来源 + 配置
     "pydantic-settings>=2.3",
     "fastapi>=0.111",     # REST + SSE
@@ -26,10 +24,12 @@ dependencies = [
 [project.optional-dependencies]
 anthropic = ["anthropic>=0.40"]                       # LLM；缺失则规则降级
 onchain = ["web3>=6.20", "eth-account>=0.11"]         # M3 链上执行
+data = ["pandas>=2.2", "pyarrow>=16"]                 # M5 真实历史归档 / 向量化回测（按需装）
 dev = [
     "pytest>=8.2",
     "pytest-asyncio>=0.23",
     "ruff>=0.5",
+    "mypy>=1.10",                                     # 静态类型检查（CI 中先设为非阻塞）
     "datamodel-code-generator>=0.25",                 # pydantic -> TS 类型辅助
 ]
 
@@ -41,7 +41,18 @@ packages = ["core/cyp"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py310"   # 与 requires-python 对齐；避免 UP 规则改出 3.11+ 专属语法
+
+[tool.ruff.lint]
+# 默认 E4/E7/E9/F 之外：import 排序(I)、语法现代化(UP)、bug 易发点(B)、
+# 可简化写法(SIM)、推导式(C4)。E501 行长交给 line-length，不作硬门禁。
+select = ["E4", "E7", "E9", "F", "W", "I", "UP", "B", "SIM", "C4"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true          # ccxt / pandas_ta 等无类型存根
+files = ["core/cyp"]
+plugins = ["pydantic.mypy"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

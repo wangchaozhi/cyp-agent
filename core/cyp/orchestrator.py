@@ -15,7 +15,15 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from cyp.agents import ANALYSTS, AgentContext, Reviewer, RiskOfficer, Strategist, StrategyConfig, Trader
+from cyp.agents import (
+    ANALYSTS,
+    AgentContext,
+    Reviewer,
+    RiskOfficer,
+    Strategist,
+    StrategyConfig,
+    Trader,
+)
 from cyp.alerts import Alerter, build_alerter
 from cyp.approval import ApprovalGate, AutoApprove
 from cyp.config import Settings
@@ -120,7 +128,7 @@ class Orchestrator:
         async with trace.span("analyze"):
             results = await asyncio.gather(*(a.run(snap, ctx) for a in ANALYSTS), return_exceptions=True)
         reports: list[AnalystReport] = []
-        for a, r in zip(ANALYSTS, results):
+        for a, r in zip(ANALYSTS, results, strict=False):
             if isinstance(r, Exception):
                 reports.append(AnalystReport(agent=a.id, stance="neutral", confidence=0.0,
                                              rationale=f"分析失败：{r}", degraded=True))
@@ -203,7 +211,8 @@ class Orchestrator:
         # 跨场所聚合持仓 → 组合级敞口（当前标的用 ref，其它标的用入场价近似）
         positions = await aggregate_positions(self.risk_venues)
         view = PortfolioView(positions, self.corr)
-        resolve = lambda s: ref if s == symbol else None
+        def resolve(s):
+            return ref if s == symbol else None
         gross = view.gross_notional(resolve)
         symbol_exp = view.symbol_notional(symbol, resolve)
         correlated = view.cluster_net_directional(self.corr.cluster_of(symbol), proposal.side, resolve)

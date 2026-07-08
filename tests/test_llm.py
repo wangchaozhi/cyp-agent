@@ -2,9 +2,8 @@
 
 import asyncio
 
-from pydantic import BaseModel
-
 from cyp.llm import MockProvider, ResilientLLM
+from pydantic import BaseModel
 
 
 def run(coro):

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import sys
 
 from cyp.backtest import Backtester
@@ -18,10 +19,8 @@ from cyp.data import SyntheticMarketData
 
 def main(argv: list[str] | None = None) -> int:
     for stream in (sys.stdout, sys.stderr):
-        try:
+        with contextlib.suppress(Exception):
             stream.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
-        except Exception:
-            pass
 
     parser = argparse.ArgumentParser(prog="cyp-backtest", description="cyp-agent 回测（合成历史）")
     parser.add_argument("--symbol", default="BTC/USDT")

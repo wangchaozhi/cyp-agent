@@ -9,8 +9,8 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from itertools import combinations
-from typing import Callable
 
 from cyp.backtest.stats import sharpe
 

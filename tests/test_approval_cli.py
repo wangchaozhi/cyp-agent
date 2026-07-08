@@ -8,7 +8,8 @@ from cyp.approval.cli import CLIApprovalGate
 from cyp.contracts import RiskAssessment, TradeProposal
 
 run = asyncio.run
-SILENT = lambda *_: None
+def SILENT(*_):
+    return None
 
 
 def _prop():
