@@ -32,6 +32,7 @@ from cyp.events import EventBus
 from cyp.llm import ResilientLLM, build_llm
 from cyp.memory import MemoryStore
 from cyp.observability import RunMetrics, Trace, get_logger
+from cyp.portfolio import PortfolioTracker
 from cyp.risk import assess as risk_assess
 from cyp.risk.rules import RiskContext
 
@@ -62,6 +63,7 @@ class Orchestrator:
         approval: ApprovalGate | None = None,
         llm: ResilientLLM | None = None,
         metrics: RunMetrics | None = None,
+        portfolio: PortfolioTracker | None = None,
     ) -> None:
         self.settings = settings
         self.data = data_source
@@ -71,6 +73,7 @@ class Orchestrator:
         self.approval = approval or AutoApprove()
         self.llm = llm or build_llm(settings)
         self.metrics = metrics or RunMetrics()
+        self.portfolio = portfolio or PortfolioTracker()
         self.log = get_logger("orchestrator")
         self.reconciling = False   # 对账未完成时置 True → 风控引擎冻结新开仓
         self.strategist = Strategist()
@@ -124,6 +127,7 @@ class Orchestrator:
             self.venue.set_mark_price(symbol, ref)
         bal = await self.venue.balances()
         equity = bal.total_quote if bal.total_quote > 0 else bal.free_quote
+        self.portfolio.update_equity(equity)   # 更新净值高水位（供回撤熔断）
 
         # ③ 决策
         async with trace.span("strategize"):
@@ -158,6 +162,8 @@ class Orchestrator:
         # ⑦ 执行（幂等 + 入场即挂保护单）
         async with trace.span("execute"):
             execution = await self.trader.execute(final_prop, self.venue, client_id=run_id, size_quote=final_size)
+        if execution.status == "filled":
+            self.portfolio.record_order()   # 计入下单频率（频率上限护栏）
         self.memory.checkpoint(run_id, "execution", execution.model_dump(mode="json"))
         await self.events.publish("executed", run_id, symbol=symbol, execution=execution.model_dump(mode="json"))
 
@@ -188,10 +194,16 @@ class Orchestrator:
         perp_notional = sum((p.notional_at(ref) for p in positions if p.instrument == "perp"), Decimal(0))
         margin_ratio = (equity / perp_notional) if perp_notional > 0 else None
 
+        psnap = self.portfolio.risk_snapshot(equity)
         rctx = RiskContext(
             equity_quote=equity, ref_price=ref,
             gross_exposure_quote=gross, symbol_exposure_quote=symbol_exp,
             kill=self.settings.kill, reconciling=self.reconciling, margin_ratio=margin_ratio,
+            orders_last_hour=psnap["orders_last_hour"],
+            consecutive_losses=psnap["consecutive_losses"],
+            daily_drawdown=psnap["daily_drawdown"],
+            weekly_drawdown=psnap["weekly_drawdown"],
+            total_drawdown=psnap["total_drawdown"],
             est_slippage_bps=pf.est_slippage_bps, est_liq_price=pf.est_liq_price,
         )
         assessment = risk_assess(proposal, rctx, cfg)
