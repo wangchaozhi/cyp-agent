@@ -19,7 +19,7 @@ venv/
 .mypy_cache/
 
 # ---- 数据/运行态 ----
-data/
+/data/
 *.db
 *.db-wal
 *.db-shm
