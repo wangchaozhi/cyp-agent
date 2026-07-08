@@ -30,6 +30,7 @@
 | 单仓名义上限 ≤ 账户 × `max_position_pct` | 20% | 缩仓(downsized) |
 | 总敞口上限 ≤ 账户 × `max_gross_exposure` | 100%（现货）/ 视保证金 | 否决 |
 | 单标的集中度 ≤ `max_symbol_concentration` | 30% | 缩仓 |
+| 相关性簇同向净敞口 ≤ `max_correlated_exposure`（跨场所聚合，majors/alt 聚类） | 50% | 缩仓/否决 |
 | 下单频率 ≤ `max_orders_per_window` | 10/小时 | 否决 |
 | 预估滑点 ≤ `max_slippage_bps` | 30 bps | 否决 |
 | Kill Switch 开启 | — | 全部否决 |

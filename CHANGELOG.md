@@ -4,7 +4,12 @@
 
 ## [未发布]
 
-### M4（部分）· OKX 模拟交易 + 交易所适配层
+### M4（部分）· 组合级风控 + OKX 模拟交易 + 交易所适配层
+- **组合级风控**：跨场所聚合持仓（`aggregate_positions` 失败隔离）→ `PortfolioView`
+  计算总敞口/单标的/相关性簇同向净敞口；新护栏 `correlated_exposure`——相关性簇
+  （majors/alt 聚类）内同向净敞口 ≤ 账户×`max_correlated_exposure`，避免押重相关篮子。
+  编排器按 `risk_venues` 聚合，server/CLI 传入执行场所 + 注册表其它场所。
+
 - **交易所适配层** `venue/adapters.py`：把各家 ccxt 抹不平的差异（保护单参数、
   持仓/保证金模式）收敛到 adapter；CexVenue 通用流程不变，仅委托 configure_perp/
   entry_params/place_protective。BinanceAdapter（STOP_MARKET/TAKE_PROFIT reduce-only）、
