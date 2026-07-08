@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cyp-agent"
-version = "0.1.1"
+version = "0.1.2"
 description = "半自动加密货币多智能体交易助手（CEX 现货/合约 + 链上 DeFi，人在环，风控优先）"
 readme = "README.md"
 requires-python = ">=3.10"
