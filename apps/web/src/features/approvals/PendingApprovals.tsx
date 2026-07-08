@@ -22,11 +22,18 @@ interface PendingApprovalsProps {
 export function PendingApprovals({ items, loading, onDecide }: PendingApprovalsProps) {
   const [sizes, setSizes] = useState<Record<string, string>>({});
   const [busyRun, setBusyRun] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   async function decide(runId: string, request: ApprovalRequest) {
     setBusyRun(runId);
+    setError(null);
     try {
       await onDecide(runId, request);
+      if (request.decision === "modify") {
+        setSizes((current) => ({ ...current, [runId]: "" }));
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "审批提交失败");
     } finally {
       setBusyRun(null);
     }
@@ -34,10 +41,13 @@ export function PendingApprovals({ items, loading, onDecide }: PendingApprovalsP
 
   return (
     <Panel title="待审批" icon={<ShieldAlert size={16} />}>
+      {error ? <div className="inline-alert">{error}</div> : null}
       {items.length ? (
         <div className="approval-list">
           {items.map(({ run_id, proposal, assessment }) => {
             const nextSize = sizes[run_id] ?? "";
+            const parsedSize = Number(nextSize);
+            const canModify = Number.isFinite(parsedSize) && parsedSize > 0;
             const effectiveSize = assessment.adjusted_size_quote || proposal.size_quote;
             const disabled = busyRun === run_id;
 
@@ -82,7 +92,7 @@ export function PendingApprovals({ items, loading, onDecide }: PendingApprovalsP
                     title="批准"
                   >
                     <Check size={16} />
-                    <span>批准</span>
+                    <span>{disabled ? "提交中" : "批准"}</span>
                   </button>
                   <button
                     className="icon-command icon-command--danger"
@@ -92,7 +102,7 @@ export function PendingApprovals({ items, loading, onDecide }: PendingApprovalsP
                     title="拒绝"
                   >
                     <X size={16} />
-                    <span>拒绝</span>
+                    <span>{disabled ? "提交中" : "拒绝"}</span>
                   </button>
                   <input
                     type="number"
@@ -106,8 +116,8 @@ export function PendingApprovals({ items, loading, onDecide }: PendingApprovalsP
                   <button
                     className="icon-command"
                     type="button"
-                    disabled={disabled || !nextSize}
-                    onClick={() => void decide(run_id, { decision: "modify", size: Number(nextSize) })}
+                    disabled={disabled || !canModify}
+                    onClick={() => void decide(run_id, { decision: "modify", size: parsedSize })}
                     title="修改规模"
                   >
                     <Pencil size={16} />

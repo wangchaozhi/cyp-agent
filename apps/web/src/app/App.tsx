@@ -3,6 +3,7 @@ import { useCallback, useState } from "react";
 import { PendingApprovals } from "../features/approvals/PendingApprovals";
 import { EventStream } from "../features/events/EventStream";
 import { SystemHeader } from "../features/health/SystemHeader";
+import { OverviewStrip } from "../features/overview/OverviewStrip";
 import { PortfolioPanel } from "../features/portfolio/PortfolioPanel";
 import { PositionsPanel } from "../features/positions/PositionsPanel";
 import { RiskPanel } from "../features/risk/RiskPanel";
@@ -13,8 +14,14 @@ import { usePollingResource } from "../shared/hooks/usePollingResource";
 
 const MAX_EVENTS = 160;
 
+type Notice = { tone: "ok" | "bad"; message: string } | null;
+
 function refreshAll(resources: Array<() => Promise<void>>) {
   void Promise.allSettled(resources.map((refresh) => refresh()));
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "操作失败";
 }
 
 export default function App() {
@@ -27,6 +34,7 @@ export default function App() {
   const [events, setEvents] = useState<DashboardEvent[]>([]);
   const [running, setRunning] = useState(false);
   const [switchingKill, setSwitchingKill] = useState(false);
+  const [notice, setNotice] = useState<Notice>(null);
   const apiError = [
     health.error,
     venues.error,
@@ -57,9 +65,13 @@ export default function App() {
 
   const runOnce = async () => {
     setRunning(true);
+    setNotice(null);
     try {
-      await cypApi.runOnce();
+      const result = await cypApi.runOnce();
       await pending.refresh();
+      setNotice({ tone: "ok", message: `已触发 ${result.symbol}，run=${result.run_id}` });
+    } catch (error) {
+      setNotice({ tone: "bad", message: `触发失败：${errorMessage(error)}` });
     } finally {
       setRunning(false);
     }
@@ -67,17 +79,29 @@ export default function App() {
 
   const toggleKill = async () => {
     setSwitchingKill(true);
+    setNotice(null);
     try {
-      await cypApi.setKillSwitch(!health.data?.kill);
+      const next = !health.data?.kill;
+      await cypApi.setKillSwitch(next);
       await Promise.all([health.refresh(), risk.refresh()]);
+      setNotice({ tone: "ok", message: next ? "Kill Switch 已启用" : "Kill Switch 已解除" });
+    } catch (error) {
+      setNotice({ tone: "bad", message: `切换失败：${errorMessage(error)}` });
     } finally {
       setSwitchingKill(false);
     }
   };
 
   const decideApproval = async (runId: string, request: ApprovalRequest) => {
-    await cypApi.decideApproval(runId, request);
-    await pending.refresh();
+    setNotice(null);
+    try {
+      await cypApi.decideApproval(runId, request);
+      await pending.refresh();
+      setNotice({ tone: "ok", message: `审批已提交：${request.decision}` });
+    } catch (error) {
+      setNotice({ tone: "bad", message: `审批失败：${errorMessage(error)}` });
+      throw error;
+    }
   };
 
   return (
@@ -93,6 +117,16 @@ export default function App() {
       />
 
       {apiError ? <div className="app-alert">后端连接异常：{apiError}</div> : null}
+      {notice ? <div className={`app-notice app-notice--${notice.tone}`}>{notice.message}</div> : null}
+
+      <OverviewStrip
+        health={health.data}
+        pending={pending.data ?? []}
+        positions={positions.data ?? []}
+        risk={risk.data}
+        portfolio={portfolio.data}
+        streamStatus={streamStatus}
+      />
 
       <main className="dashboard-grid">
         <PendingApprovals

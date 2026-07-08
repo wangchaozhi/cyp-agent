@@ -6,7 +6,6 @@ import {
   formatAmount,
   formatClock,
   formatConfidence,
-  formatPercent,
   sideLabel,
   verdictLabel,
 } from "../../shared/lib/format";
@@ -115,13 +114,23 @@ function eventTone(type: string): string {
   return "";
 }
 
+function streamLabel(status: StreamStatus): string {
+  const labels: Record<StreamStatus, string> = {
+    connecting: "连接中",
+    open: "实时",
+    reconnecting: "重连中",
+    closed: "已断开",
+  };
+  return labels[status];
+}
+
 export function EventStream({ events, status }: EventStreamProps) {
   return (
     <Panel
       className="panel--events"
       title="事件流"
       icon={<ListTree size={16} />}
-      actions={<span className={`stream-badge stream-badge--${status}`}>{status}</span>}
+      actions={<span className={`stream-badge stream-badge--${status}`}>{streamLabel(status)}</span>}
     >
       {events.length ? (
         <div className="event-list">
