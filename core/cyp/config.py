@@ -32,6 +32,8 @@ class RiskConfig(BaseSettings):
     # 合约
     max_leverage: Decimal = Decimal("3")
     min_liq_buffer: Decimal = Decimal("0.30")          # 入场到爆仓价最小缓冲
+    force_isolated: bool = True                         # 强制逐仓（风险隔离）
+    min_margin_ratio: Decimal = Decimal("0.05")        # 账户维持保证金率下限
     # 链上
     max_price_impact: Decimal = Decimal("0.01")
     max_gas_gwei: Decimal | None = None
@@ -62,6 +64,7 @@ class Settings(BaseSettings):
     mode: Literal["paper", "live"] = "paper"
     approval: Literal["cli", "dashboard", "auto"] = "cli"
     kill: bool = False
+    allow_perp: bool = False        # 允许策略官提出永续合约（默认仅现货，更保守）
 
     # LLM（缺失则降级为规则模板）
     llm_model: str = "claude-opus-4-8"

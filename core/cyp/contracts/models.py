@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 Stance = Literal["bullish", "bearish", "neutral"]
 Side = Literal["long", "short", "flat"]
 Instrument = Literal["spot", "perp"]
+MarginMode = Literal["isolated", "cross"]
 Verdict = Literal["approved", "downsized", "rejected"]
 EntryType = Literal["market", "limit", "range"]
 OrderStatus = Literal["new", "partially_filled", "filled", "canceled", "rejected", "failed"]
@@ -114,6 +115,7 @@ class TradeProposal(BaseModel):
     instrument: Instrument = "spot"
     size_quote: Decimal = Field(ge=0)      # 计价币规模（如 USDT）
     leverage: float = Field(default=1.0, ge=1.0)  # 现货=1
+    margin_mode: MarginMode = "isolated"   # 合约保证金模式（默认逐仓，风险隔离）
     entry: PricePlan = Field(default_factory=PricePlan)
     stop_loss: Decimal | None = None       # ★ 必填；缺失会被风控引擎直接否决
     take_profit: list[Decimal] = Field(default_factory=list)
@@ -155,6 +157,7 @@ class OrderIntent(BaseModel):
     size_quote: Decimal = Field(ge=0)
     price: Decimal | None = None
     leverage: float = Field(default=1.0, ge=1.0)
+    margin_mode: MarginMode = "isolated"
     reduce_only: bool = False
     stop_loss: Decimal | None = None
     take_profit: list[Decimal] = Field(default_factory=list)

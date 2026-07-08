@@ -46,6 +46,7 @@ class RiskContext:
     total_drawdown: Decimal = Decimal(0)
     reconciling: bool = False                   # 对账未完成 → 冻结开仓
     kill: bool = False                          # Kill Switch
+    margin_ratio: Decimal | None = None         # 账户维持保证金率（合约）
     # preflight 估算（可选，缺则跳过对应规则）
     est_slippage_bps: Decimal | None = None
     est_liq_price: Decimal | None = None        # 合约爆仓价估算
@@ -177,6 +178,23 @@ def rule_liq_buffer(p: TradeProposal, ctx: RiskContext, cfg: RiskConfig) -> Rule
     return _ok("liq_buffer")
 
 
+def rule_margin_mode(p: TradeProposal, ctx: RiskContext, cfg: RiskConfig) -> RuleResult:
+    """合约默认强制逐仓（风险隔离），避免单仓爆仓拖垮全账户。"""
+    if _is_open(p) and p.instrument == "perp" and cfg.force_isolated and p.margin_mode != "isolated":
+        return RuleResult("margin_mode", RuleAction.REJECT,
+                          f"合约须逐仓，当前 {p.margin_mode}")
+    return _ok("margin_mode")
+
+
+def rule_maintenance_margin(p: TradeProposal, ctx: RiskContext, cfg: RiskConfig) -> RuleResult:
+    """账户维持保证金率低于下限时，冻结新开合约仓。"""
+    if (_is_open(p) and p.instrument == "perp" and ctx.margin_ratio is not None
+            and ctx.margin_ratio < cfg.min_margin_ratio):
+        return RuleResult("maintenance_margin", RuleAction.REJECT,
+                          f"维持保证金率 {ctx.margin_ratio} < 下限 {cfg.min_margin_ratio}")
+    return _ok("maintenance_margin")
+
+
 def rule_order_rate(p: TradeProposal, ctx: RiskContext, cfg: RiskConfig) -> RuleResult:
     if _is_open(p) and ctx.orders_last_hour >= cfg.max_orders_per_hour:
         return RuleResult("order_rate", RuleAction.REJECT,
@@ -216,6 +234,8 @@ ALL_RULES = [
     rule_stop_loss_required,
     rule_leverage,
     rule_liq_buffer,
+    rule_margin_mode,
+    rule_maintenance_margin,
     rule_slippage,
     rule_price_impact,
     rule_per_trade_risk,
