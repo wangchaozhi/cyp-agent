@@ -130,6 +130,20 @@ def create_app(settings: Settings | None = None, data_source=None, venue=None) -
     async def pending():
         return gate.list_pending()
 
+    @app.get("/api/portfolio")
+    async def portfolio():
+        from cyp.portfolio import CorrelationModel, PortfolioView, aggregate_positions
+        positions = await aggregate_positions(orch.risk_venues)
+        view = PortfolioView(positions, CorrelationModel())
+        bal = await venue.balances()
+        equity = bal.total_quote if bal.total_quote > 0 else bal.free_quote
+        clusters = {cl: {"long": str(view.cluster_net_directional(cl, "long")),
+                         "short": str(view.cluster_net_directional(cl, "short"))}
+                    for cl in ("major", "alt")}
+        return {"equity": str(equity), "n_positions": len(positions),
+                "gross": str(view.gross_notional()), "clusters": clusters,
+                "correlated_limit": str(equity * settings.risk.max_correlated_exposure)}
+
     @app.post("/api/run")
     async def run(req: RunRequest):
         symbol = req.symbol or settings.watchlist_symbols()[0]

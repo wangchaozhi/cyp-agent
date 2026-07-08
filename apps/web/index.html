@@ -102,6 +102,11 @@
     <h2>风控看板</h2>
     <div class="body" id="risk"><div class="empty">加载中…</div></div>
   </section>
+
+  <section class="panel">
+    <h2>组合敞口（跨场所聚合）</h2>
+    <div class="body" id="portfolio"><div class="empty">加载中…</div></div>
+  </section>
 </main>
 
 <script>
@@ -195,6 +200,23 @@ async function refreshRisk(){
     (g.reasons.length?`<div style="color:var(--muted);font-size:12px">${g.reasons.join('；')}</div>`:"");
 }
 
+async function refreshPortfolio(){
+  const r=await api("/api/portfolio"); const box=$("#portfolio");
+  const cap=+r.correlated_limit;
+  const bar=(val)=>{const pct=cap>0?Math.min(100,val/cap*100):0;
+    const cls=pct>=100?"bad":pct>=60?"warn":""; return `<div class="meter ${cls}"><span style="width:${pct}%"></span></div>`;};
+  const row=(label,cl,side)=>{const v=+r.clusters[cl][side];
+    return v>0?`<div class="metric"><span class="lab">${label}</span><span>${v.toFixed(2)} / ${cap.toFixed(0)}</span></div>`+bar(v):"";};
+  let html=
+    `<div class="metric"><span class="lab">净值 / 持仓数</span><span>${(+r.equity).toFixed(2)} / ${r.n_positions}</span></div>`+
+    `<div class="metric"><span class="lab">总名义敞口</span><span>${(+r.gross).toFixed(2)}</span></div>`+
+    `<div class="metric"><span class="lab">相关性簇同向敞口上限</span><span>${cap.toFixed(2)}</span></div>`+
+    row("majors 多","major","long")+row("majors 空","major","short")+
+    row("alt 多","alt","long")+row("alt 空","alt","short");
+  if(!r.n_positions) html+='<div class="empty">无持仓</div>';
+  box.innerHTML=html;
+}
+
 async function decide(run_id,decision,size){
   const body={decision}; if(size) body.size=parseFloat(size);
   await fetch(`/api/approvals/${run_id}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
@@ -209,11 +231,11 @@ const es=new EventSource("/api/events");
 es.onmessage=ev=>{ if(!ev.data.trim())return; let e; try{e=JSON.parse(ev.data)}catch{return;}
   addEvent(e);
   if(["awaiting_approval","approval_decided"].includes(e.type)) refreshPending();
-  if(["executed","reviewed","run_started"].includes(e.type)){ refreshPositions(); refreshRisk(); }
+  if(["executed","reviewed","run_started"].includes(e.type)){ refreshPositions(); refreshRisk(); refreshPortfolio(); }
   if(e.type==="killswitch"){ refreshHealth(); refreshRisk(); }
 };
 
-refreshHealth(); refreshPending(); refreshPositions(); refreshRisk();
+refreshHealth(); refreshPending(); refreshPositions(); refreshRisk(); refreshPortfolio();
 </script>
 </body>
 </html>

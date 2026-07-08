@@ -65,6 +65,25 @@ def test_risk_board_endpoint():
     run(scenario())
 
 
+def test_portfolio_endpoint():
+    async def scenario():
+        app = create_app(Settings(_env_file=None))
+        async with _client(app) as c:
+            r = (await c.get("/api/portfolio")).json()
+            assert set(r["clusters"]) == {"major", "alt"}
+            assert "long" in r["clusters"]["major"] and "correlated_limit" in r
+    run(scenario())
+
+
+def test_market_endpoint_offline_graceful():
+    async def scenario():
+        app = create_app(Settings(_env_file=None))
+        async with _client(app) as c:
+            r = (await c.get("/api/market?symbol=BTC/USDT")).json()
+            assert r["symbol"] == "BTC/USDT" and "tickers" in r   # 离线无行情 → 空但不报错
+    run(scenario())
+
+
 def test_approval_404_when_no_pending():
     async def scenario():
         app = create_app(Settings(_env_file=None))
