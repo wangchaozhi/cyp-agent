@@ -72,6 +72,7 @@ class Orchestrator:
         self.llm = llm or build_llm(settings)
         self.metrics = metrics or RunMetrics()
         self.log = get_logger("orchestrator")
+        self.reconciling = False   # 对账未完成时置 True → 风控引擎冻结新开仓
         self.strategist = Strategist()
         self.risk_officer = RiskOfficer()
         self.trader = Trader()
@@ -186,7 +187,7 @@ class Orchestrator:
         rctx = RiskContext(
             equity_quote=equity, ref_price=ref,
             gross_exposure_quote=gross, symbol_exposure_quote=symbol_exp,
-            kill=self.settings.kill, reconciling=False,
+            kill=self.settings.kill, reconciling=self.reconciling,
             est_slippage_bps=pf.est_slippage_bps, est_liq_price=pf.est_liq_price,
         )
         assessment = risk_assess(proposal, rctx, cfg)

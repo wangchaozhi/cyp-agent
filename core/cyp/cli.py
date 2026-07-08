@@ -94,13 +94,21 @@ def main(argv: list[str] | None = None) -> int:
                         help="synthetic=离线合成（默认）；cex=只读真实行情")
     parser.add_argument("--approve", choices=["auto", "cli"], default="cli",
                         help="auto=自动批准（演示）；cli=人工审批（半自动）")
+    parser.add_argument("--loop", type=int, default=0,
+                        help="0=跑一轮；N>0=运行时引擎跑 N 轮扫描（含启动对账+持仓监控）")
     args = parser.parse_args(argv)
 
     print(f"cyp-agent · mode={settings.mode} · llm={'on' if settings.llm_enabled else 'off(规则降级)'} "
           f"· data={args.data} · approve={args.approve}")
     orch = _build(args, settings)
-    res = asyncio.run(orch.run_once(args.symbol))
-    _summary(res)
+    if args.loop > 0:
+        from cyp.runtime import build_engine
+        engine = build_engine(settings, orch, orch.venue, events=orch.events)
+        asyncio.run(engine.run_bounded(scan_cycles=args.loop, monitor_cycles=1))
+        print(f"\n运行时跑完 {args.loop} 轮扫描。指标：{orch.metrics.snapshot()}")
+    else:
+        res = asyncio.run(orch.run_once(args.symbol))
+        _summary(res)
     return 0
 
 
