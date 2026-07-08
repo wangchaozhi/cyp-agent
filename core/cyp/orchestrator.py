@@ -31,6 +31,7 @@ from cyp.data import MarketDataSource
 from cyp.events import EventBus
 from cyp.llm import ResilientLLM, build_llm
 from cyp.memory import MemoryStore
+from cyp.observability import RunMetrics, Trace, get_logger
 from cyp.risk import assess as risk_assess
 from cyp.risk.rules import RiskContext
 
@@ -60,6 +61,7 @@ class Orchestrator:
         memory: MemoryStore | None = None,
         approval: ApprovalGate | None = None,
         llm: ResilientLLM | None = None,
+        metrics: RunMetrics | None = None,
     ) -> None:
         self.settings = settings
         self.data = data_source
@@ -68,6 +70,8 @@ class Orchestrator:
         self.memory = memory or MemoryStore()
         self.approval = approval or AutoApprove()
         self.llm = llm or build_llm(settings)
+        self.metrics = metrics or RunMetrics()
+        self.log = get_logger("orchestrator")
         self.strategist = Strategist()
         self.risk_officer = RiskOfficer()
         self.trader = Trader()
@@ -75,24 +79,34 @@ class Orchestrator:
 
     async def run_once(self, symbol: str, run_id: str | None = None) -> RunResult:
         run_id = run_id or uuid.uuid4().hex[:12]
+        trace = Trace(run_id)
         ctx = AgentContext(llm=self.llm, settings=self.settings, lessons=self.memory.get_lessons())
+        self.log.info("run_start", run_id=run_id, symbol=symbol, mode=self.settings.mode)
         try:
-            return await self._run(symbol, run_id, ctx)
+            res = await self._run(symbol, run_id, ctx, trace)
         except Exception as e:  # noqa: BLE001 —— 单轮失败隔离，不击穿调用方
+            self.log.error("run_failed", run_id=run_id, symbol=symbol, error=str(e))
             await self.events.publish("run_failed", run_id, symbol=symbol, error=str(e))
-            return RunResult(run_id=run_id, symbol=symbol, status="error", error=str(e))
+            res = RunResult(run_id=run_id, symbol=symbol, status="error", error=str(e))
+        slip = res.execution.slippage_bps if res.execution else None
+        self.metrics.record(res.status, slip)
+        self.log.info("run_done", run_id=run_id, symbol=symbol, status=res.status, trace=trace.summary())
+        await self.events.publish("run_done", run_id, symbol=symbol, status=res.status, trace=trace.summary())
+        return res
 
-    async def _run(self, symbol: str, run_id: str, ctx: AgentContext) -> RunResult:
+    async def _run(self, symbol: str, run_id: str, ctx: AgentContext, trace: Trace) -> RunResult:
         cfg = self.settings.risk
         await self.events.publish("run_started", run_id, symbol=symbol)
 
         # ① 采集
-        snap = await self.data.snapshot(symbol)
+        async with trace.span("collect"):
+            snap = await self.data.snapshot(symbol)
         self.memory.checkpoint(run_id, "snapshot", {"symbol": symbol, "bars": len(snap.ohlcv)})
         await self.events.publish("snapshot_ready", run_id, symbol=symbol, bars=len(snap.ohlcv))
 
         # ② 分析（并行 + 失败隔离）
-        results = await asyncio.gather(*(a.run(snap, ctx) for a in ANALYSTS), return_exceptions=True)
+        async with trace.span("analyze"):
+            results = await asyncio.gather(*(a.run(snap, ctx) for a in ANALYSTS), return_exceptions=True)
         reports: list[AnalystReport] = []
         for a, r in zip(ANALYSTS, results):
             if isinstance(r, Exception):
@@ -111,14 +125,17 @@ class Orchestrator:
         equity = bal.total_quote if bal.total_quote > 0 else bal.free_quote
 
         # ③ 决策
-        proposal = await self.strategist.run(reports, snap, equity, cfg, ctx, venue_id=getattr(self.venue, "id", "paper"))
+        async with trace.span("strategize"):
+            proposal = await self.strategist.run(reports, snap, equity, cfg, ctx,
+                                                 venue_id=getattr(self.venue, "id", "paper"))
         self.memory.checkpoint(run_id, "proposal", proposal.model_dump(mode="json"))
         await self.events.publish("proposal_ready", run_id, symbol=symbol, proposal=proposal.model_dump(mode="json"))
         if proposal.side == "flat":
             return RunResult(run_id=run_id, symbol=symbol, status="no_trade", reports=reports, proposal=proposal)
 
         # ④ 风控引擎（硬护栏）+ ⑤ 风控官（软评审）
-        assessment = await self._assess(symbol, run_id, proposal, reports, ref, equity, cfg, ctx)
+        async with trace.span("risk"):
+            assessment = await self._assess(symbol, run_id, proposal, reports, ref, equity, cfg, ctx)
         await self.events.publish("risk_assessed", run_id, symbol=symbol,
                                   assessment=assessment.model_dump(mode="json"))
         if assessment.verdict == "rejected":
@@ -126,7 +143,8 @@ class Orchestrator:
                              reports=reports, proposal=proposal, assessment=assessment)
 
         # ⑥ 人工审批门
-        decision = await self.approval.decide(proposal, assessment, run_id)
+        async with trace.span("approval"):
+            decision = await self.approval.decide(proposal, assessment, run_id)
         await self.events.publish("approval_decided", run_id, symbol=symbol,
                                   decision=decision.model_dump(mode="json"))
         if decision.decision == "reject":
@@ -137,12 +155,14 @@ class Orchestrator:
         final_size = assessment.adjusted_size_quote or final_prop.size_quote
 
         # ⑦ 执行（幂等 + 入场即挂保护单）
-        execution = await self.trader.execute(final_prop, self.venue, client_id=run_id, size_quote=final_size)
+        async with trace.span("execute"):
+            execution = await self.trader.execute(final_prop, self.venue, client_id=run_id, size_quote=final_size)
         self.memory.checkpoint(run_id, "execution", execution.model_dump(mode="json"))
         await self.events.publish("executed", run_id, symbol=symbol, execution=execution.model_dump(mode="json"))
 
         # 复盘 + 经验回灌
-        review = await self.reviewer.run(final_prop, execution, ctx, run_id=run_id)
+        async with trace.span("review"):
+            review = await self.reviewer.run(final_prop, execution, ctx, run_id=run_id)
         self.memory.append_lessons(review.lessons)
         await self.events.publish("reviewed", run_id, symbol=symbol, review=review.model_dump(mode="json"))
 

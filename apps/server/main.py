@@ -87,6 +87,10 @@ def create_app(settings: Settings | None = None, data_source=None, venue=None) -
     async def positions():
         return [p.model_dump(mode="json") for p in await venue.positions()]
 
+    @app.get("/api/metrics")
+    async def metrics():
+        return {"runs": orch.metrics.snapshot(), "llm": orch.llm.metrics.snapshot()}
+
     @app.get("/api/pending")
     async def pending():
         return gate.list_pending()

@@ -21,7 +21,6 @@ dependencies = [
     "uvicorn[standard]>=0.30",
     "aiosqlite>=0.20",    # 检查点/状态（WAL，崩溃可恢复）
     "httpx>=0.27",        # 数据源/webhook
-    "structlog>=24.1",    # 结构化日志（脱敏）
 ]
 
 [project.optional-dependencies]

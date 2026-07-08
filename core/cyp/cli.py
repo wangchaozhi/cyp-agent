@@ -86,6 +86,8 @@ def main(argv: list[str] | None = None) -> int:
         except Exception:
             pass
     settings = Settings()
+    from cyp.observability import configure_logging
+    configure_logging(settings.log_level)
     parser = argparse.ArgumentParser(prog="cyp", description="cyp-agent 端到端闭环（M0）")
     parser.add_argument("--symbol", default=settings.watchlist_symbols()[0])
     parser.add_argument("--data", choices=["synthetic", "cex"], default="synthetic",
