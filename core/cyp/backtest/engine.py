@@ -43,7 +43,7 @@ class Backtester:
         self.initial = float(initial_quote)
         self.venue = PaperVenue(initial_quote=initial_quote)
         self.data = HistoricalData(symbol, candles, window)
-        self.memory = memory or MemoryStore()   # 可注入持久化存储，让经验跨回测积累
+        self.memory = memory or MemoryStore(settings.db_url)   # 经验默认落 PG，跨回测积累
         self.orch = Orchestrator(settings, self.data, self.venue,
                                  approval=AutoApprove(), strategy=strategy,
                                  memory=self.memory)

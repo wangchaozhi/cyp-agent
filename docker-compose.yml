@@ -1,0 +1,23 @@
+services:
+  db:
+    image: timescale/timescaledb:latest-pg16
+    container_name: cyp-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: cyp
+      POSTGRES_PASSWORD: cyp
+      POSTGRES_DB: cyp
+    ports:
+      - "5433:5432"   # 宿主机 5432 常被其它项目占用，cyp 统一走 5433
+    volumes:
+      - cyp-pgdata:/var/lib/postgresql/data
+      # 首次建卷时执行的初始化 SQL（timescaledb 扩展 + 建表 + hypertable）
+      - ./docker/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cyp -d cyp"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+volumes:
+  cyp-pgdata:

@@ -1,6 +1,4 @@
-"""MemoryStore（SQLite）：检查点、经验上限、symbol 相关性检索、JSON 迁移。离线确定性。"""
-
-import json
+"""MemoryStore（PostgreSQL）：检查点、经验上限、symbol 相关性检索、跨实例持久化。"""
 
 from cyp.memory import MemoryStore
 
@@ -12,6 +10,13 @@ def test_checkpoint_roundtrip():
     cp = m.get_checkpoint("r1")
     assert cp["snapshot"] == {"bars": 100} and cp["proposal"]["side"] == "long"
     assert m.get_checkpoint("nope") == {}
+
+
+def test_checkpoint_upsert_overwrites():
+    m = MemoryStore()
+    m.checkpoint("r1", "snapshot", {"bars": 100})
+    m.checkpoint("r1", "snapshot", {"bars": 200})
+    assert m.get_checkpoint("r1")["snapshot"] == {"bars": 200}
 
 
 def test_lessons_capped_at_max():
@@ -37,21 +42,9 @@ def test_lessons_without_symbol_returns_recent():
     assert m.get_lessons(1) == ["b"]
 
 
-def test_sqlite_persistence(tmp_path):
-    db = str(tmp_path / "mem.sqlite")
-    m1 = MemoryStore(db)
+def test_persistence_across_instances():
+    m1 = MemoryStore()
     m1.append_lessons(["persist-me"], symbol="BTC/USDT")
     m1.close()
-    m2 = MemoryStore(db)
+    m2 = MemoryStore()   # 新实例连同一库，数据仍在
     assert m2.get_lessons() == ["persist-me"]
-
-
-def test_legacy_json_migration(tmp_path):
-    legacy = tmp_path / "mem.json"
-    legacy.write_text(json.dumps({
-        "lessons": ["old-lesson"],
-        "checkpoints": {"r9": {"snapshot": {"bars": 42}}},
-    }, ensure_ascii=False), encoding="utf-8")
-    m = MemoryStore(str(legacy))
-    assert m.get_lessons() == ["old-lesson"]
-    assert m.get_checkpoint("r9")["snapshot"]["bars"] == 42

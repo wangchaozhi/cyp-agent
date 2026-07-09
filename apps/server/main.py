@@ -432,7 +432,8 @@ def create_app(settings: Settings | None = None, data_source=None, venue=None) -
             from cyp.backtest import OhlcvArchive
             hist_venue = venue if getattr(venue, "kind", None) == "cex" else registry.get(settings.cex_id)
             try:
-                candles = await OhlcvArchive().ensure(hist_venue, symbol, req.timeframe, req.bars)
+                candles = await OhlcvArchive(settings.db_url).ensure(hist_venue, symbol,
+                                                                     req.timeframe, req.bars)
             except Exception as e:  # noqa: BLE001
                 raise HTTPException(status_code=502, detail=f"真实历史拉取失败：{e}") from e
             if len(candles) <= req.window:

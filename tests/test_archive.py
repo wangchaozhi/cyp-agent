@@ -1,4 +1,4 @@
-"""OHLCV 归档：假 venue 离线验证分页拉取 + SQLite 增量缓存。"""
+"""OHLCV 归档：假 venue 验证分页拉取 + PG（TimescaleDB）增量缓存。"""
 
 import asyncio
 from datetime import datetime, timedelta, timezone
@@ -39,9 +39,9 @@ def test_timeframe_delta():
         pass
 
 
-def test_ensure_paginates_and_caches(tmp_path):
+def test_ensure_paginates_and_caches():
     venue = FakeHistoryVenue(bars=600)
-    archive = OhlcvArchive(str(tmp_path / "ohlcv.sqlite"))
+    archive = OhlcvArchive()
     candles = run(archive.ensure(venue, "BTC/USDT", "1h", bars=500))
     assert len(candles) == 500
     assert candles[0].ts < candles[-1].ts                      # 升序
@@ -54,21 +54,19 @@ def test_ensure_paginates_and_caches(tmp_path):
     assert venue.calls == calls_before
 
 
-def test_load_reads_persisted_cache(tmp_path):
-    db = str(tmp_path / "ohlcv.sqlite")
+def test_load_reads_persisted_cache():
     venue = FakeHistoryVenue(bars=300)
-    run(OhlcvArchive(db).ensure(venue, "ETH/USDT", "1h", bars=200))
+    run(OhlcvArchive().ensure(venue, "ETH/USDT", "1h", bars=200))
 
-    fresh = OhlcvArchive(db)                                    # 新实例读同一库
+    fresh = OhlcvArchive()                                      # 新实例读同一库
     cached = run(fresh.load("fake", "ETH/USDT", "1h", bars=200))
     assert len(cached) == 200
     assert cached[-1].close > cached[0].close                   # 单调序列被完整还原
 
 
-def test_ensure_incremental_topup(tmp_path):
-    db = str(tmp_path / "ohlcv.sqlite")
+def test_ensure_incremental_topup():
     venue = FakeHistoryVenue(bars=600)
-    first = run(OhlcvArchive(db).ensure(venue, "BTC/USDT", "1h", bars=100))
+    first = run(OhlcvArchive().ensure(venue, "BTC/USDT", "1h", bars=100))
     assert len(first) == 100
-    more = run(OhlcvArchive(db).ensure(venue, "BTC/USDT", "1h", bars=400))
+    more = run(OhlcvArchive().ensure(venue, "BTC/USDT", "1h", bars=400))
     assert len(more) == 400

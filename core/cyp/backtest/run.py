@@ -3,7 +3,8 @@
     python -m cyp.backtest.run --symbol BTC/USDT --bars 300 --drift 0.001
     python -m cyp.backtest.run --data cex --exchange okx --timeframe 1h --bars 500
 
---data cex 时从交易所拉取真实历史 K 线（公共行情无需 Key），增量缓存到 data/ohlcv.sqlite。
+--data cex 时从交易所拉取真实历史 K 线（公共行情无需 Key），增量缓存到 PostgreSQL
+（TimescaleDB hypertable，见 docker-compose.yml；DSN 取 CYP_DB_URL）。
 """
 
 from __future__ import annotations
@@ -19,13 +20,13 @@ from cyp.data import SyntheticMarketData
 
 
 async def load_real_candles(exchange_id: str, symbol: str, timeframe: str, bars: int,
-                            db_path: str = "./data/ohlcv.sqlite"):
+                            dsn: str | None = None):
     """从交易所归档拉真实历史（只读，无需 Key）。"""
     from cyp.backtest import OhlcvArchive
     from cyp.venue import CexVenue
     venue = CexVenue(exchange_id=exchange_id, read_only=True)
     try:
-        return await OhlcvArchive(db_path).ensure(venue, symbol, timeframe, bars)
+        return await OhlcvArchive(dsn).ensure(venue, symbol, timeframe, bars)
     finally:
         await venue.close()
 
@@ -49,7 +50,8 @@ def main(argv: list[str] | None = None) -> int:
     settings = Settings()
     if args.data == "cex":
         exchange = args.exchange or settings.cex_id
-        candles = asyncio.run(load_real_candles(exchange, args.symbol, args.timeframe, args.bars))
+        candles = asyncio.run(load_real_candles(exchange, args.symbol, args.timeframe, args.bars,
+                                                dsn=settings.db_url))
         if len(candles) <= args.window:
             print(f"真实历史不足：拉到 {len(candles)} 根（需要 > window={args.window}）")
             return 1

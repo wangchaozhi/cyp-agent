@@ -37,7 +37,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.data == "cex":
         from cyp.backtest.run import load_real_candles
         exchange = args.exchange or settings.cex_id
-        candles = asyncio.run(load_real_candles(exchange, args.symbol, args.timeframe, args.bars))
+        candles = asyncio.run(load_real_candles(exchange, args.symbol, args.timeframe, args.bars,
+                                                dsn=settings.db_url))
         if len(candles) <= args.window:
             print(f"真实历史不足：拉到 {len(candles)} 根（需要 > window={args.window}）")
             return 1

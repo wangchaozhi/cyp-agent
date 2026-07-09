@@ -130,7 +130,8 @@ OKX Demo smoke 已脚本化（`cyp.tools.okx_smoke`）并联网通过。**M4 don
 **目标**：把「策略」显式化、可参数化、可回测择优。
 
 - [x] 历史回放：`HistoricalData` 按游标返回窗口快照（合成历史 + `OhlcvArchive` 真实归档：
-      ccxt 分页拉取 OHLCV 落 SQLite 增量缓存，`--data cex` / `POST /api/backtest data=cex`）
+      ccxt 分页拉取 OHLCV 落 PostgreSQL/TimescaleDB hypertable 增量缓存，
+      `--data cex` / `POST /api/backtest data=cex`）
 - [x] 回测引擎：`Backtester` 入场**复用同一套** 分析师→策略官→风控（Orchestrator+PaperVenue），
       按 bar 高低价触发止损/止盈平仓，完成 round-trip
 - [x] 绩效评估：总收益/最大回撤/夏普/胜率/盈亏比（`compute_metrics` 纯函数，单测）
@@ -154,8 +155,8 @@ OKX Demo smoke 已脚本化（`cyp.tools.okx_smoke`）并联网通过。**M4 don
 
 - [x] `CYP_APPROVAL=auto`：`PolicyApprovalGate`——满足「symbol 白名单 + risk_score < 阈值 +
       金额 < 上限」自动批准，否则委托内层人工门；CLI 与 FastAPI 均已接线
-- [x] 长期记忆增强：`MemoryStore` 迁 SQLite，lessons 带 symbol 元数据，按符号 + 词元重合度
-      打分检索最相关 N 条注入上下文（轻量检索，不引向量库；旧 JSON 自动迁移）
+- [x] 长期记忆增强：`MemoryStore` 落 PostgreSQL，lessons 带 symbol 元数据，按符号 + 词元重合度
+      打分检索最相关 N 条注入上下文（轻量检索，不引向量库）
 - [x] 定时巡检：`PositionMonitor` 增强——止损逼近/爆仓逼近/异常波动（EWMA σ 突破）/
       保证金率告警走 Alerter；FastAPI 可选启动 RuntimeEngine（`CYP_RUNTIME=1`）
 - [~] 多操作员：审批 `operator` 透传 + 审计事件带操作者；多账户隔离与权限体系待后续

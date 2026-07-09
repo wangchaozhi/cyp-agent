@@ -36,7 +36,8 @@
 
 技术栈：
 
-- Python 核心：ccxt、pandas、pydantic、FastAPI、aiosqlite、可选 Anthropic SDK、DeepSeek OpenAI-compatible API
+- Python 核心：ccxt、pandas、pydantic、FastAPI、可选 Anthropic SDK、DeepSeek OpenAI-compatible API
+- 持久化：PostgreSQL / TimescaleDB（docker-compose 一键起库；psycopg 同步 + asyncpg 异步）
 - 前端仪表盘：React、Vite、TypeScript、REST + SSE
 - 契约单一来源：`core/cyp/contracts/` 下的 pydantic 模型
 
@@ -44,7 +45,12 @@
 
 要求：Python 3.10+，如需开发仪表盘还需要 Node.js 18+。
 
+要求：本地 Docker（持久化用 PostgreSQL/TimescaleDB，检查点/经验/OHLCV 归档都在里面）。
+
 ```bash
+# 起本地数据库（TimescaleDB，首次会自动建表 + hypertable）
+docker compose up -d
+
 # 安装 Python 包与开发依赖
 pip install -e ".[dev]"
 
@@ -155,7 +161,8 @@ python -m cyp.backtest.run --symbol BTC/USDT --bars 300 --drift 0.001
 python -m cyp.backtest.sweep --symbol BTC/USDT --bars 300 --top 5
 ```
 
-当前回测数据源以可复现的合成历史为主，真实历史归档接入仍在后续迭代中。
+真实历史回测：`--data cex` 从交易所拉取 K 线并增量归档到 PG（TimescaleDB hypertable），如
+`python -m cyp.backtest.run --data cex --exchange okx --timeframe 1h --bars 500`。
 
 ## 配置
 
@@ -183,14 +190,14 @@ python -m cyp.backtest.sweep --symbol BTC/USDT --bars 300 --top 5
 | `CYP_ALERT_WEBHOOK` | 空 | 可选告警 webhook |
 | `CYP_MAX_RISK_PER_TRADE` | `0.01` | 单笔风险上限 |
 | `CYP_MAX_CVAR_PCT` | `0.03` | 组合 CVaR 尾部损失上限 |
-| `CYP_DB_PATH` | `./data/cyp.db` | 运行时检查点与状态存储 |
+| `CYP_DB_URL` | `postgresql://cyp:cyp@localhost:5433/cyp` | PostgreSQL DSN（检查点/经验/OHLCV 归档；`docker compose up -d` 即可用） |
 
 完整配置见 [.env.example](.env.example)，风控阈值解释见 [docs/RISK.md](docs/RISK.md)。
 
 ## 开发命令
 
 ```bash
-# Python 测试
+# Python 测试（需要本地 PG：docker compose up -d；测试自动使用独立的 cyp_test 库）
 python -m pytest
 
 # Python lint

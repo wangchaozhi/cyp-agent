@@ -36,7 +36,7 @@
 │  data/       数据管线   行情/K线/订单簿 · 资金费/OI · 链上流向 · 情绪                │
 │  llm/        ResilientLLM   anthropic │ mock（缺 Key 降级）                          │
 │  execution/  订单生命周期 + 幂等 + 链上签名器（隔离，永不落盘）                       │
-│  portfolio/  持仓/账本/盈亏     memory/  检查点(aiosqlite WAL)                        │
+│  portfolio/  持仓/账本/盈亏     memory/  检查点(PostgreSQL)                           │
 │  observability/  trace · metrics · JSON 日志（脱敏）    events.py  事件总线→SSE       │
 │  contracts/  ★ pydantic 模型（前后端契约单一来源）                                   │
 └───────────────────────────────────────────────────────────────────────────────────────┘

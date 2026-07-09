@@ -84,7 +84,7 @@ class Orchestrator:
         self.risk_venues = risk_venues or [venue]   # 组合级风控聚合的场所（默认仅执行场所）
         self.corr = CorrelationModel()
         self.events = events or EventBus()
-        self.memory = memory or MemoryStore()
+        self.memory = memory or MemoryStore(settings.db_url)
         self.approval = approval or AutoApprove()
         self.llm = llm or build_llm(settings)
         self.metrics = metrics or RunMetrics()

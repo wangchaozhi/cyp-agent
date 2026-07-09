@@ -44,7 +44,7 @@
 
 ## 4. 目标技术栈与目录结构
 
-**核心**：Python 3.11+ · ccxt · web3.py/eth-account · pandas · pandas-ta · pydantic v2 · FastAPI · aiosqlite · anthropic SDK
+**核心**：Python 3.11+ · ccxt · web3.py/eth-account · pandas · pandas-ta · pydantic v2 · FastAPI · PostgreSQL/TimescaleDB（psycopg/asyncpg）· anthropic SDK
 **仪表盘**：React 18 · Vite · TypeScript（契约类型由 pydantic 生成）
 
 ```
@@ -94,7 +94,7 @@ cyp-agent/
 │     │  ├─ executor.py
 │     │  └─ signer.py         #   链上签名器（隔离，永不落盘）
 │     ├─ portfolio/           # 持仓/账本/盈亏
-│     ├─ memory/              # 检查点 + 状态（aiosqlite WAL，崩溃可恢复）
+│     ├─ memory/              # 检查点 + 状态（PostgreSQL，崩溃可恢复）
 │     ├─ observability/       # trace / metrics / 结构化日志（脱敏）
 │     └─ events.py            # 事件总线 → SSE
 ├─ apps/

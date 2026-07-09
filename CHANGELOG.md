@@ -4,6 +4,19 @@
 
 ## [未发布]
 
+### 基础设施 · 持久化迁移 PostgreSQL/TimescaleDB + Docker
+
+- **数据库从 SQLite 全面迁移 PostgreSQL**：`MemoryStore`（检查点/经验，psycopg 同步）与
+  `OhlcvArchive`（OHLCV 归档，asyncpg 异步）统一走 `CYP_DB_URL`
+  （默认 `postgresql://cyp:cyp@localhost:5433/cyp`），不再保留 sqlite 后端；
+  依赖 `aiosqlite` → `psycopg[binary]` + `asyncpg`。
+- **TimescaleDB 时序能力**：ohlcv 表建为 hypertable（按 ts 分区，`TIMESTAMPTZ` + NUMERIC），
+  为大规模历史行情存储/查询做准备；建表 SQL 含 `CREATE EXTENSION IF NOT EXISTS timescaledb`。
+- **Docker**：新增 `docker-compose.yml`（`timescale/timescaledb:latest-pg16`，数据卷 +
+  healthcheck）与 `docker/initdb/01-init.sql`（首次建卷自动初始化）；`docker compose up -d` 即可用。
+- **测试基建**：`tests/conftest.py` 自动创建独立 `cyp_test` 库并把 `CYP_DB_URL` 指向它，
+  逐测试清空持久化表；pytest 需本地 docker PG 在跑。
+
 ### ROADMAP 补齐 · M1/M3/M4/M5/M6 未完成项 + OKX Demo 联网实测
 
 - **M1 仪表盘合约信息**：`Position` 增 `liq_price/margin_mode`（Paper 由 preflight 估算填充、

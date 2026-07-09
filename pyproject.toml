@@ -17,7 +17,8 @@ dependencies = [
     "pydantic-settings>=2.3",
     "fastapi>=0.111",     # REST + SSE
     "uvicorn[standard]>=0.30",
-    "aiosqlite>=0.20",    # 检查点/状态（WAL，崩溃可恢复）
+    "psycopg[binary]>=3.2",   # PostgreSQL 同步（MemoryStore 检查点/经验）
+    "asyncpg>=0.29",          # PostgreSQL 异步（OHLCV 归档，TimescaleDB hypertable）
     "httpx>=0.27",        # 数据源/webhook
 ]
 

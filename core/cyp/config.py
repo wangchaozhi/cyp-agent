@@ -120,8 +120,8 @@ class Settings(BaseSettings):
     watchlist: str = "BTC/USDT"
     max_concurrency: int = 2
 
-    # 持久化 & 日志
-    db_path: str = "./data/cyp.db"
+    # 持久化 & 日志（PostgreSQL/TimescaleDB，见 docker-compose.yml）
+    db_url: str = "postgresql://cyp:cyp@localhost:5433/cyp"
     log_level: str = "INFO"
 
     # 嵌套子配置（各自读同一批 CYP_ 环境变量）
