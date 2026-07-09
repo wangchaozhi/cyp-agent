@@ -54,6 +54,14 @@ class RiskContext:
     est_slippage_bps: Decimal | None = None
     est_liq_price: Decimal | None = None        # 合约爆仓价估算
     est_price_impact: Decimal | None = None     # 链上价格冲击 0..1
+    # 链上专项（§2.3；仅链上场所填，None = 跳过对应规则）
+    onchain: bool = False                       # 本提案走链上场所
+    approval_amount: Decimal | None = None      # 拟授权额度（None+链上 = 无需授权）
+    approval_unlimited: bool = False            # 无限授权标记（一票否决）
+    contract_address: str | None = None         # 目标路由/合约地址
+    pool_tvl_usd: Decimal | None = None         # 目标池 TVL
+    est_gas_quote: Decimal | None = None        # gas 成本估算（计价币）
+    mev_protected: bool | None = None           # 是否走私有内存池/MEV 防护路由
 
 
 def _ok(rule: str) -> RuleResult:
@@ -253,6 +261,61 @@ def rule_drawdown_circuit(p: TradeProposal, ctx: RiskContext, cfg: RiskConfig) -
     return _ok("drawdown_circuit")
 
 
+# ---- 链上专项（§2.3）——非链上提案（ctx.onchain=False）全部跳过 ----------------
+
+def rule_infinite_approval(p: TradeProposal, ctx: RiskContext, cfg: RiskConfig) -> RuleResult:
+    """禁无限授权：授权额度必须是精确交易额度（+小缓冲），uint256-max 类授权一票否决。"""
+    if not ctx.onchain or not _is_open(p):
+        return _ok("infinite_approval")
+    if ctx.approval_unlimited:
+        return RuleResult("infinite_approval", RuleAction.REJECT, "检测到无限授权（unlimited approve），禁止")
+    if ctx.approval_amount is not None and ctx.approval_amount > p.size_quote * Decimal("1.05"):
+        return RuleResult("infinite_approval", RuleAction.REJECT,
+                          f"授权额度 {ctx.approval_amount} 远超交易额 {p.size_quote}（须精确额度）")
+    return _ok("infinite_approval")
+
+
+def rule_contract_whitelist(p: TradeProposal, ctx: RiskContext, cfg: RiskConfig) -> RuleResult:
+    """合约白名单：只与经过审查的路由/合约交互（蜜罐/假币防线）。"""
+    if not ctx.onchain or not _is_open(p):
+        return _ok("contract_whitelist")
+    allowed = cfg.contract_whitelist_set()
+    addr = (ctx.contract_address or "").lower()
+    if not addr or addr not in allowed:
+        return RuleResult("contract_whitelist", RuleAction.REJECT,
+                          f"合约 {ctx.contract_address or '未知'} 不在白名单")
+    return _ok("contract_whitelist")
+
+
+def rule_min_pool_tvl(p: TradeProposal, ctx: RiskContext, cfg: RiskConfig) -> RuleResult:
+    """最小流动性：池 TVL 过低意味着高冲击 + 高操纵风险。"""
+    if not ctx.onchain or not _is_open(p) or ctx.pool_tvl_usd is None:
+        return _ok("min_pool_tvl")
+    if ctx.pool_tvl_usd < cfg.min_pool_tvl:
+        return RuleResult("min_pool_tvl", RuleAction.REJECT,
+                          f"池 TVL {ctx.pool_tvl_usd} < 下限 {cfg.min_pool_tvl}")
+    return _ok("min_pool_tvl")
+
+
+def rule_gas_cap(p: TradeProposal, ctx: RiskContext, cfg: RiskConfig) -> RuleResult:
+    """gas 上限：gas 成本超过上限或超过交易额一定比例都不划算/异常。"""
+    if not ctx.onchain or ctx.est_gas_quote is None:
+        return _ok("gas_cap")
+    if ctx.est_gas_quote > cfg.max_gas_quote:
+        return RuleResult("gas_cap", RuleAction.REJECT,
+                          f"gas 成本 {ctx.est_gas_quote} > 上限 {cfg.max_gas_quote}")
+    return _ok("gas_cap")
+
+
+def rule_mev_route(p: TradeProposal, ctx: RiskContext, cfg: RiskConfig) -> RuleResult:
+    """MEV 防护：要求走私有内存池/保护路由，避免被三明治。"""
+    if not ctx.onchain or not _is_open(p) or not cfg.require_private_mempool:
+        return _ok("mev_route")
+    if ctx.mev_protected is False:
+        return RuleResult("mev_route", RuleAction.REJECT, "未走 MEV 防护路由（私有内存池），拒绝")
+    return _ok("mev_route")
+
+
 # 规则执行顺序（否决类优先靠前，便于阅读违规列表）
 ALL_RULES = [
     rule_kill_switch,
@@ -267,6 +330,11 @@ ALL_RULES = [
     rule_maintenance_margin,
     rule_slippage,
     rule_price_impact,
+    rule_infinite_approval,
+    rule_contract_whitelist,
+    rule_min_pool_tvl,
+    rule_gas_cap,
+    rule_mev_route,
     rule_per_trade_risk,
     rule_position_cap,
     rule_gross_exposure,

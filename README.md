@@ -36,7 +36,7 @@
 
 技术栈：
 
-- Python 核心：ccxt、pandas、pydantic、FastAPI、aiosqlite、可选 Anthropic SDK
+- Python 核心：ccxt、pandas、pydantic、FastAPI、aiosqlite、可选 Anthropic SDK、DeepSeek OpenAI-compatible API
 - 前端仪表盘：React、Vite、TypeScript、REST + SSE
 - 契约单一来源：`core/cyp/contracts/` 下的 pydantic 模型
 
@@ -88,6 +88,20 @@ OKX Demo smoke test 已实测覆盖：
 安全注意：OKX Demo API 也只应授予「读取 + 交易」，不要开启提现；`.env` 不入库。
 
 ## 服务与仪表盘
+
+一键开发启动（会先清理 `8000` / `5173` 端口占用，并使用 `cyp-agent` conda 环境）：
+
+```powershell
+.\start-dev.bat
+```
+
+可选参数：
+
+```powershell
+.\start-dev.bat -Reload
+.\start-dev.bat -BackendPort 8001 -FrontendPort 5174
+.\start-dev.bat -NoKill
+```
 
 后端服务：
 
@@ -155,7 +169,14 @@ python -m cyp.backtest.sweep --symbol BTC/USDT --bars 300 --top 5
 | `CYP_APPROVAL` | `cli` | `cli`、`dashboard` 或 `auto` |
 | `CYP_KILL` | `0` | `1` 时拒绝新提案与下单 |
 | `CYP_ALLOW_PERP` | `0` | 是否允许策略官提出永续合约 |
-| `ANTHROPIC_API_KEY` | 空 | 留空时 LLM 走 mock/rule 降级 |
+| `CYP_EXECUTION_VENUE` | `paper` | 执行场所：`paper`、`binance` 或 `okx` |
+| `CYP_DATA_SOURCE` | `synthetic` | 行情源：`synthetic` 或 `cex` |
+| `CYP_LLM_PROVIDER` | `anthropic` | `anthropic` 或 `deepseek` |
+| `ANTHROPIC_API_KEY` | 空 | Anthropic provider 的 API key，留空时 LLM 走 mock/rule 降级 |
+| `DEEPSEEK_API_KEY` | 空 | DeepSeek provider 的 API key |
+| `CYP_LLM_BASE_URL` | 空 | DeepSeek 默认 `https://api.deepseek.com`，一般无需设置 |
+| `CYP_LLM_MODEL` | `claude-opus-4-8` | 主模型；DeepSeek 可设 `deepseek-chat` 或 `deepseek-reasoner` |
+| `CYP_LLM_MODEL_FAST` | `claude-haiku-4-5-20251001` | 快速模型；DeepSeek 可设 `deepseek-chat` |
 | `CYP_CEX_ID` | `binance` | 默认 CEX |
 | `CYP_LIVE_ACK` | `0` | `mode=live` 时必须显式设为 `1` |
 | `OKX_*` | 空 | OKX Demo 凭据，`OKX_PASSWORD` 是 passphrase |

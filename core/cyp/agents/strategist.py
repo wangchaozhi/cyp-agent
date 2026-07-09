@@ -14,8 +14,9 @@ from pydantic import BaseModel, Field
 
 from cyp.agents.base import AgentContext, stance_sign
 from cyp.config import RiskConfig
-from cyp.contracts import AnalystReport, MarketSnapshot, PricePlan, TradeProposal
+from cyp.contracts import AnalystReport, MarketSnapshot, Position, PricePlan, TradeProposal
 from cyp.data import ewma_vol_from_candles, indicator_snapshot
+from cyp.portfolio import CorrelationModel, PortfolioView
 
 DEFAULT_WEIGHTS = {"technical": 1.0, "derivatives": 0.9, "sentiment": 0.6, "onchain": 0.8}
 
@@ -47,8 +48,10 @@ class Strategist:
         cfg: RiskConfig,
         ctx: AgentContext,
         venue_id: str = "paper",
+        positions: list[Position] | None = None,
     ) -> TradeProposal:
         sc = self.config
+        positions = positions or []
         # 1) 加权综合（跳过降级维度）
         contribs = [(stance_sign(r.stance) * r.confidence, sc.weights.get(r.agent, 0.5))
                     for r in reports if not r.degraded]
@@ -75,6 +78,15 @@ class Strategist:
         atr_dec = vol_unit
         side = "long" if net > 0 else "short"
 
+        # 组合感知①：同标的已有同向持仓 → 不加仓（主动规避，而非留给风控否决）
+        if any(p.symbol == snap.symbol and p.side == side for p in positions):
+            return TradeProposal(
+                symbol=snap.symbol, venue=venue_id, side="flat", size_quote=Decimal(0),
+                confidence=confidence,
+                thesis=f"已持有 {snap.symbol} 同向（{side}）仓位，本轮不加仓。",
+                supporting_reports=[r.agent for r in reports if not r.degraded],
+            )
+
         # 工具与杠杆：允许永续且置信足够时用合约，杠杆由置信度决定（封顶 max_leverage）
         max_lev = float(cfg.max_leverage)
         if getattr(ctx.settings, "allow_perp", False) and confidence >= 0.25 and max_lev > 1:
@@ -98,11 +110,32 @@ class Strategist:
             risk_budget = equity * (sc.risk_per_trade or cfg.max_risk_per_trade)
             size_quote = (risk_budget / stop_frac) if stop_frac > 0 else Decimal(0)
 
-        thesis = self._thesis(reports, net, side)
+        # 组合感知②：相关性簇同向敞口接近上限（≥80%）→ 按剩余额度缩仓，额度耗尽则不开
+        corr = CorrelationModel()
+        cluster = corr.cluster_of(snap.symbol)
+        cluster_exp = PortfolioView(positions, corr).cluster_net_directional(cluster, side)
+        cluster_limit = equity * cfg.max_correlated_exposure
+        portfolio_note = ""
+        if cluster_limit > 0 and cluster_exp >= cluster_limit * Decimal("0.8"):
+            headroom = cluster_limit - cluster_exp
+            if headroom <= 0:
+                return TradeProposal(
+                    symbol=snap.symbol, venue=venue_id, side="flat", size_quote=Decimal(0),
+                    confidence=confidence,
+                    thesis=f"{cluster} 簇同向敞口已达上限（{cluster_exp}/{cluster_limit}），本轮规避。",
+                    supporting_reports=[r.agent for r in reports if not r.degraded],
+                )
+            size_quote = min(size_quote, headroom)
+            portfolio_note = f"（{cluster} 簇敞口接近上限，已按剩余额度缩仓）"
+
+        thesis = self._thesis(reports, net, side) + portfolio_note
         if ctx.llm.enabled:  # LLM 只润色文本，不改数字
+            held = ", ".join(f"{p.symbol}:{p.side}" for p in positions) or "无"
+            lessons = "；".join(ctx.lessons[-5:]) or "无"
             refined = await ctx.llm.text(
                 system="你是加密交易策略官，用两句话中文说明该交易的核心逻辑，不要给出与输入不同的价格或仓位。",
-                user=f"方向={side} 综合分={net:.2f} 依据={thesis}", fast=True)
+                user=f"方向={side} 综合分={net:.2f} 当前组合持仓={held} "
+                     f"历史复盘经验={lessons} 依据={thesis}", fast=True)
             if refined:
                 thesis = refined.strip()
 

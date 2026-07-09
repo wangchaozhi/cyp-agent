@@ -54,7 +54,7 @@
 | 合约白名单/蜜罐检查：目标合约须在白名单或通过安全检查 | 白名单 | 否决 |
 | 最小流动性/池深：目标池 TVL ≥ `min_pool_tvl` | 可配 | 否决 |
 | 价格冲击上限 ≤ `max_price_impact` | 1% | 否决 |
-| gas 上限 ≤ `max_gas_gwei` | 可配 | 否决/等待 |
+| gas 上限：gas price ≤ `max_gas_gwei` 且单笔 gas 成本 ≤ `max_gas_quote` | 20 USDT | 否决/等待 |
 | MEV 防护：大额 swap 走私有内存池/防夹路由 | 强制 | 否决明文广播 |
 | 跨桥禁止自动化 | — | 否决 |
 

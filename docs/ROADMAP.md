@@ -46,15 +46,16 @@
 **目标**：把 U/币本位永续纳入分析与风控，仍在模拟盘。（进度：`x`=完成 `~`=部分）
 
 - [x] `PaperVenue` 合约模拟：保证金记账（名义/杠杆）+ 爆仓价估算 + 平仓浮盈结算
-- [~] `CexVenue` 合约行情 + 资金费/OI 只读读取（best-effort 骨架，实盘校验待 M2）
+- [x] `CexVenue` 合约行情 + 资金费/OI 只读读取（`fetch_funding_rate` 失败隔离，聚合器/API 消费）
 - [x] 数据管线：合成源提供资金费/OI/多空比；衍生品分析师消费
 - [x] 衍生品分析师：资金费拥挤度、多空失衡信号
 - [x] 策略官支持 `instrument=perp` + 由置信度决定杠杆（封顶 max_leverage）
 - [x] 风控引擎 §2.2 合约专项：杠杆上限、爆仓缓冲、**维持保证金、逐仓强制**
-- [ ] 仪表盘补：爆仓价/资金费展示、保证金健康度（持仓表已含杠杆）
+- [x] 仪表盘补：持仓表爆仓价/保证金/资金费列 + 逐仓/全仓标注；风险面板保证金健康度
+      （`/api/positions` 补 `liq_price/margin_used/funding_rate`，`/api/risk` 补 `margin_ratio`）
 
 **验收**：✅ 模拟盘跑通一笔永续（`allow_perp` + `test_orchestrator_perp_end_to_end`）；
-杠杆/爆仓缓冲/逐仓/维持保证金护栏在 CI 被验证否决（`test_risk_perp.py`）。
+杠杆/爆仓缓冲/逐仓/维持保证金护栏在 CI 被验证否决（`test_risk_perp.py`）。**M1 done。**
 
 ---
 
@@ -64,7 +65,8 @@
 
 - [x] `CexVenue` 实盘下单（现货 + 合约），幂等 `clientOrderId`（假 ccxt 离线测全覆盖）
 - [x] **Binance 适配层**：原生保护单（STOP/TP reduce-only）、`set_leverage`/`set_margin_mode`（逐仓）
-- [ ] **先过 Binance Testnet**：真实网络下单/撤改/对账（需 Key+联网，离线不可测，实操阶段做）
+- [x] **真实网络验收（以 OKX Demo 替代 Binance Testnet，后者不采用）**：`python -m cyp.tools.okx_smoke`
+      联网跑通 配置校验→余额→现货下单（带止损/止盈保护单）→幂等重放→撤保护单→平仓清理→增量对账，全绿
 - [x] 前置校验：`LiveGuard`——有 Key + `CYP_LIVE_ACK=1` + Kill 未开，否则退回只读（提现权限/IP 白名单交易所侧）
 - [x] **交易所侧原生保护单** + **下保护失败即市价平裸仓**（fail-safe，已测）；对账门冻结开仓（M0 已具）
 - [x] Kill Switch 全链路 + 熔断规则真实生效（组合账本驱动回撤/连亏/频率，已测触发）
@@ -75,7 +77,8 @@
 
 **验收**：✅ 离线部分达成——实盘下单/保护单/保护失败平裸仓、LiveGuard 只读门、熔断真实触发、
 风控看板、告警均已实现并测试（`test_cex_trading` / `test_live_alerts` / `test_portfolio`）。
-⏳ 剩真实网络部分：Binance Testnet 跑通含保护单闭环 → 小额主网一笔 → 影子对照（需 Key+联网，实操阶段）。
+✅ 真实网络部分以 OKX Demo smoke（`cyp.tools.okx_smoke`）验收通过。
+⏳ 剩小额主网一笔 + `paper` 影子对照（涉及真金，留实操阶段）。
 
 ---
 
@@ -83,16 +86,21 @@
 
 **目标**：EVM 系钱包 + DEX swap，先模拟/测试网，再主网小额。风险最高，护栏最重。
 
-- [ ] `OnchainVenue`：web3 连接、DEX 路由（1inch/Jupiter）、`preflight`（gas + 价格冲击 + 授权检查）
-- [ ] **隔离签名器**：本地加密 keystore / KMS / 硬件；私钥永不落盘/入日志/进 LLM
-- [ ] 链上数据管线：聪明钱/巨鲸流向、DEX 流动性/池深、持有分布、交易所净流、代币解锁
-- [ ] 链上分析师上线
-- [ ] 风控补 §2.3 链上专项：禁无限授权、合约白名单/蜜罐、最小流动性、价格冲击、gas 上限、MEV 防护（私有内存池）、禁跨桥自动化
-- [ ] nonce 管理 + tx 确认跟踪 + revert 处理 + 重放去重；崩溃恢复的 nonce 对齐 / pending tx 归位（[RUNTIME.md §3.3](RUNTIME.md)）
-- [ ] 链上持仓保护：监控循环止损 + 更严护栏（更小仓位/更大缓冲），仪表盘标注「保护依赖监控存活」
-- [ ] 仪表盘补：链上持仓/授权额度/gas/待确认 tx
+- [x] `OnchainVenue`（`venue/onchain.py`）：web3 惰性导入 + 可注入 mock client；
+      `preflight`（gas 报价 + 价格冲击 + 授权检查）；「精确额度 approve → swap」两步执行
+- [x] **隔离签名器**（`onchain/signer.py`）：本地加密 keystore（eth-account）；私钥不落日志/不进 LLM；
+      KMS/硬件签名器留接口
+- [~] 链上数据管线：`OnchainDataSource` stub（无 RPC 降级 None）；聪明钱/巨鲸/池深等真实数据源待接
+- [~] 链上分析师：降级骨架在位（缺数据自动降级），真实数据接入后激活
+- [x] 风控补 §2.3 链上专项：禁无限授权、合约白名单、最小池 TVL、价格冲击（已接 preflight）、
+      gas 上限、MEV 防护（要求私有内存池路由）
+- [x] nonce 管理 + tx 确认跟踪 + revert 处理 + 幂等去重；`reconcile_onchain` nonce 对齐 /
+      pending tx 归位（[RUNTIME.md §3.3](RUNTIME.md)）
+- [x] 链上持仓保护：仪表盘持仓表标注「链上·保护依赖监控存活」；监控循环止损（PositionMonitor 覆盖）
+- [~] 仪表盘补：链上持仓/tx hash 已展示；授权额度/gas/待确认 tx 明细面板待真实 RPC 接入后补
 
-**验收**：测试网跑通 swap；主网小额验证授权护栏（拒无限授权）与 MEV 防护路由；私钥安全审查通过。
+**验收**：✅ mock client 离线部分——swap 两步执行/幂等/revert 处理/nonce 对账/链上五条护栏
+全部单测通过（`test_onchain.py`）。⏳ 真实测试网 swap + 主网小额验证需 RPC 与测试网资金，留实操阶段。
 
 ---
 
@@ -105,12 +113,15 @@
       `BTC/USDT` 现货小额下单、条件保护单创建/取消与测试仓清理
 - [x] Venue 注册表多 CEX 并存（paper/binance/okx）；**跨所行情聚合**（最优买卖场所 + 跨所价差）`/api/market`
 - [x] 组合级风控：跨场所聚合持仓 → 总敞口 + 单标的集中度 + **相关性簇同向净敞口护栏**
-- [~] 策略官感知现有组合：硬护栏已按组合聚合校验；策略官侧主动规避待硬化
-- [x] 组合仪表盘：`/api/portfolio` + 面板（净值/总敞口/相关性簇同向敞口对上限）；敞口热力图待补
-- [ ] （可选）跨所价差/资金费套利线索（仅提示，不自动执行）
+- [x] 策略官感知现有组合：`Strategist.run` 接收聚合持仓——同标的同向已有仓 → flat；
+      相关簇同向敞口超 80% 上限 → 按剩余额度缩量或 flat（规则路径，硬护栏之外的主动规避）
+- [x] 组合仪表盘：`/api/portfolio` + 面板（净值/总敞口/相关性簇同向敞口对上限）+
+      `by_symbol` 敞口热力图（纯 CSS 色阶）
+- [x] 跨所价差/资金费套利线索（仅提示，不自动执行）：聚合器 `funding_rates()` + `arb_hints()`
+      （价差 bps 超阈 / 跨所资金费差），`/api/market` 暴露 + 前端 MarketPanel
 
-**验收**：多所同时运行；组合相关性敞口超限被否决；组合看板可用。OKX Demo 已完成
-小额 smoke test（配置/余额/下单/保护单/取消/清理）；Binance Testnet 与主网小额灰度仍按 M2 实操阶段推进。
+**验收**：✅ 多所同时运行；组合相关性敞口超限被否决；组合看板/热力图/套利线索可用。
+OKX Demo smoke 已脚本化（`cyp.tools.okx_smoke`）并联网通过。**M4 done。**
 
 ---
 
@@ -118,7 +129,8 @@
 
 **目标**：把「策略」显式化、可参数化、可回测择优。
 
-- [x] 历史回放：`HistoricalData` 按游标返回窗口快照（合成历史；接真实归档待补）
+- [x] 历史回放：`HistoricalData` 按游标返回窗口快照（合成历史 + `OhlcvArchive` 真实归档：
+      ccxt 分页拉取 OHLCV 落 SQLite 增量缓存，`--data cex` / `POST /api/backtest data=cex`）
 - [x] 回测引擎：`Backtester` 入场**复用同一套** 分析师→策略官→风控（Orchestrator+PaperVenue），
       按 bar 高低价触发止损/止盈平仓，完成 round-trip
 - [x] 绩效评估：总收益/最大回撤/夏普/胜率/盈亏比（`compute_metrics` 纯函数，单测）
@@ -126,12 +138,13 @@
       `grid()` 扫参 + `sweep()` 按目标函数排序择优（`python -m cyp.backtest.sweep`）
 - [x] 反过拟合统计基础件：PSR / Deflated Sharpe / MinTRL + walk-forward / purged K-fold / PBO
       （详见 [QUANT.md](QUANT.md) 与 [quant/stats.md](quant/stats.md)）
-- [ ] 复盘经验与回测结果打通，辅助策略择优
-- [x] 仪表盘：`POST /api/backtest` + 回测报告页（参数、绩效、净值曲线、交易明细）
+- [x] 复盘经验与回测结果打通：`Backtester` 挂接 `MemoryStore`，`BacktestReport.lessons`
+      汇总复盘经验；strategist/risk_officer LLM 提示词消费 `ctx.lessons`（规则路径不变）
+- [x] 仪表盘：`POST /api/backtest` + 回测报告页（参数、绩效、净值曲线、交易明细、lessons、
+      数据源 synthetic/cex 可选）
 
-**验收**：✅ `python -m cyp.backtest.run` 对合成历史跑出可复现回测报告；入场逻辑与实盘**同一份代码**
-（Orchestrator），「回测/模拟/实盘」无逻辑分叉；仪表盘可直接运行合成历史回测并查看报告。
-⏳ 剩真实历史数据接入 + 复盘经验与回测结果打通。
+**验收**：✅ `python -m cyp.backtest.run` 对合成/真实历史跑出可复现回测报告；入场逻辑与实盘
+**同一份代码**（Orchestrator），「回测/模拟/实盘」无逻辑分叉；仪表盘可直接运行回测并查看报告。**M5 done。**
 
 ---
 
@@ -139,13 +152,18 @@
 
 **目标**：在护栏内引入策略化自动审批，向「更少人工」演进——但永不移除硬护栏与 Kill Switch。
 
-- [ ] `CYP_APPROVAL=auto`：满足「策略白名单 + 风控 risk_score < 阈值 + 金额 < 上限」自动批准，否则转人工
-- [ ] 长期记忆增强：复盘经验向量化检索，注入分析/决策上下文
-- [ ] 定时巡检 Agent：持仓健康度/止损跟踪/异常行情主动预警（对标 /loop 巡检）
-- [ ] 多操作员/多账户隔离与权限
-- [ ] 更细的告警与 SLO（下单成功率、滑点分布、审批时延）
+- [x] `CYP_APPROVAL=auto`：`PolicyApprovalGate`——满足「symbol 白名单 + risk_score < 阈值 +
+      金额 < 上限」自动批准，否则委托内层人工门；CLI 与 FastAPI 均已接线
+- [x] 长期记忆增强：`MemoryStore` 迁 SQLite，lessons 带 symbol 元数据，按符号 + 词元重合度
+      打分检索最相关 N 条注入上下文（轻量检索，不引向量库；旧 JSON 自动迁移）
+- [x] 定时巡检：`PositionMonitor` 增强——止损逼近/爆仓逼近/异常波动（EWMA σ 突破）/
+      保证金率告警走 Alerter；FastAPI 可选启动 RuntimeEngine（`CYP_RUNTIME=1`）
+- [~] 多操作员：审批 `operator` 透传 + 审计事件带操作者；多账户隔离与权限体系待后续
+- [x] 更细的告警与 SLO：`RunMetrics` 增加审批时延/滑点分布（分桶）/下单成功率，
+      `GET /api/metrics` 暴露 + OverviewStrip 展示
 
-**验收**：auto 模式仅对白名单小额自动放行，超阈仍转人工；关闭 auto 与 Kill Switch 随时可用；记忆检索可观测。
+**验收**：✅ auto 模式仅对白名单小额自动放行，超阈仍转人工（`test_policy_gate.py`）；
+关闭 auto 与 Kill Switch 随时可用；记忆检索持久化且可观测（`test_memory.py`）。
 
 ---
 

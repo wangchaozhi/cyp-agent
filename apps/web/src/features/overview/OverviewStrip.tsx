@@ -1,7 +1,8 @@
-import { AlertTriangle, CircleDollarSign, Shield, TimerReset, WalletCards } from "lucide-react";
+import { AlertTriangle, CircleDollarSign, Gauge, Shield, TimerReset, WalletCards } from "lucide-react";
 
 import type {
   HealthStatus,
+  MetricsSnapshot,
   PendingApproval,
   PortfolioSnapshot,
   Position,
@@ -16,6 +17,7 @@ interface OverviewStripProps {
   positions: Position[];
   risk: RiskSnapshot | null;
   portfolio: PortfolioSnapshot | null;
+  metrics?: MetricsSnapshot | null;
   streamStatus: StreamStatus;
 }
 
@@ -49,8 +51,10 @@ export function OverviewStrip({
   positions,
   risk,
   portfolio,
+  metrics,
   streamStatus,
 }: OverviewStripProps) {
+  const slo = metrics?.runs;
   const tone = riskTone(risk);
   const gross = portfolio ? formatAmount(portfolio.gross) : "--";
   const equity = risk ? formatAmount(risk.equity) : "--";
@@ -97,6 +101,21 @@ export function OverviewStrip({
         <div>
           <span>SSE / 最大回撤</span>
           <strong>{streamLabel(streamStatus)} / {formatPercent(maxDrawdown)}</strong>
+        </div>
+      </article>
+
+      <article
+        className="overview-card"
+        title={slo ? `滑点分布(bps)：${Object.entries(slo.slippage_hist_bps).map(([k, v]) => `${k}:${v}`).join(" ")}` : undefined}
+      >
+        <Gauge size={18} />
+        <div>
+          <span>SLO 成功率 / 审批时延</span>
+          <strong>
+            {slo && slo.executed + slo.errors > 0 ? formatPercent(slo.order_success_rate, 0) : "--"}
+            {" / "}
+            {slo && slo.approval_latency.n > 0 ? `${slo.approval_latency.avg_s.toFixed(1)}s` : "--"}
+          </strong>
         </div>
       </article>
     </section>

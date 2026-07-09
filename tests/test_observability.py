@@ -56,6 +56,22 @@ def test_run_metrics_counts_and_rates():
     assert snap["approval_rate"] == round(2 / 3, 3)   # executed/(executed+not_approved)
 
 
+def test_run_metrics_slo_fields():
+    m = RunMetrics()
+    m.record("executed", Decimal("3"))      # 桶 0-5
+    m.record("executed", Decimal("12"))     # 桶 5-15
+    m.record("executed", Decimal("40"))     # 桶 30+
+    m.record("execution_failed")
+    m.record_approval_latency(2.0)
+    m.record_approval_latency(4.0)
+    snap = m.snapshot()
+    assert snap["slippage_hist_bps"] == {"0-5": 1, "5-15": 1, "15-30": 0, "30+": 1}
+    assert snap["order_success_rate"] == 0.75           # 3 成 / 1 败
+    assert snap["approval_latency"]["avg_s"] == 3.0
+    assert snap["approval_latency"]["max_s"] == 4.0
+    assert snap["approval_latency"]["n"] == 2
+
+
 def test_orchestrator_emits_trace_in_run_done():
     from cyp.config import Settings
     from cyp.data import SyntheticMarketData

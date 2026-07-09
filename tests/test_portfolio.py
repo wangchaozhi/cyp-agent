@@ -70,6 +70,7 @@ def test_order_rate_breaker_fires_after_wiring():
     r1 = run(orch.run_once("BTC/USDT"))
     assert r1.status == "executed"
     assert orch.portfolio.orders_last_hour() == 1
-    r2 = run(orch.run_once("BTC/USDT"))
+    # 换标的触发第二轮（同标的会被策略官"同向不加仓"主动规避，走不到风控）
+    r2 = run(orch.run_once("ETH/USDT"))
     assert r2.status == "rejected"
     assert any("order_rate" in v for v in r2.assessment.hard_violations)

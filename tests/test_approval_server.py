@@ -64,6 +64,20 @@ def test_resolve_modify_size():
     assert d.decision == "modify" and d.modified.size_quote == Decimal("500")
 
 
+def test_resolve_records_operator():
+    async def scenario():
+        gate = PendingApprovalGate(timeout=5)
+        task = asyncio.create_task(gate.decide(_prop(), RiskAssessment(verdict="approved"), run_id="r4"))
+        for _ in range(2000):
+            if any(p["run_id"] == "r4" for p in gate.list_pending()):
+                assert gate.resolve("r4", "approve", operator="alice")
+                break
+            await asyncio.sleep(0.001)
+        return await task
+    d = run(scenario())
+    assert d.decision == "approve" and d.operator == "alice"
+
+
 def test_timeout_rejects():
     gate = PendingApprovalGate(timeout=0.01)
     d = run(gate.decide(_prop(), RiskAssessment(verdict="approved"), run_id="r3"))

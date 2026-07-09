@@ -43,6 +43,18 @@ class PortfolioView:
         return sum((p.notional_at(self._price(p.symbol, price_of))
                     for p in self.positions if p.symbol == symbol), Decimal(0))
 
+    def symbol_breakdown(self, price_of: Callable[[str], Decimal] | None = None) -> list[dict]:
+        """按标的聚合多/空名义敞口（供仪表盘热力图）。"""
+        out: dict[str, dict] = {}
+        for p in self.positions:
+            notional = p.notional_at(self._price(p.symbol, price_of))
+            entry = out.setdefault(p.symbol, {
+                "symbol": p.symbol, "cluster": self.corr.cluster_of(p.symbol),
+                "long": Decimal(0), "short": Decimal(0),
+            })
+            entry[p.side] += notional
+        return sorted(out.values(), key=lambda e: e["long"] + e["short"], reverse=True)
+
     def cluster_net_directional(self, cluster: str, side: str,
                                 price_of: Callable[[str], Decimal] | None = None) -> Decimal:
         """相关性簇内、与 side 同向的净名义敞口（同向 +、反向 -，下限 0）。

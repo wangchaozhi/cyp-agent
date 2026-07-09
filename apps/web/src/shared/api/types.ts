@@ -9,6 +9,8 @@ export type Stance = "bullish" | "bearish" | "neutral";
 export interface HealthStatus {
   ok: boolean;
   mode: string;
+  display_mode?: string;
+  execution_venue?: string;
   llm: boolean;
   kill: boolean;
 }
@@ -69,6 +71,16 @@ export interface Position {
   size_base: Numeric;
   entry_price: Numeric;
   leverage: number;
+  liq_price?: Numeric | null;
+  margin_mode?: MarginMode | null;
+  chain?: string | null;
+  tx_hash?: string | null;
+  mark_price?: Numeric;
+  notional?: Numeric;
+  unrealized_pnl?: Numeric;
+  unrealized_pnl_pct?: Numeric;
+  margin_used?: Numeric | null;
+  funding_rate?: Numeric | null;
 }
 
 export interface RiskSnapshot {
@@ -82,6 +94,8 @@ export interface RiskSnapshot {
   };
   orders_last_hour: number;
   consecutive_losses: number;
+  margin_ratio?: Numeric | null;
+  perp_notional?: Numeric;
   limits: {
     daily_dd: Numeric;
     weekly_dd: Numeric;
@@ -89,6 +103,7 @@ export interface RiskSnapshot {
     max_leverage: Numeric;
     max_orders_per_hour: number;
     max_consecutive_losses: number;
+    min_margin_ratio?: Numeric;
   };
   live_guard: {
     ok: boolean;
@@ -96,12 +111,97 @@ export interface RiskSnapshot {
   };
 }
 
+export interface RuntimeSettings {
+  mode: string;
+  approval: string;
+  kill: boolean;
+  allow_perp: boolean;
+  execution_venue: string;
+  data_source: string;
+  llm_enabled: boolean;
+  llm_provider: string;
+  llm_model: string;
+  llm_model_fast: string;
+  llm_base_url: string | null;
+  cex_id: string;
+  cex_trading_configured: boolean;
+  okx: {
+    configured: boolean;
+    demo: boolean;
+  };
+  watchlist: string[];
+  intervals: {
+    scan: number;
+    monitor: number;
+  };
+  runtime: {
+    max_concurrency: number;
+    log_level: string;
+  };
+  risk: {
+    max_risk_per_trade: Numeric;
+    max_position_pct: Numeric;
+    max_gross_exposure: Numeric;
+    max_symbol_concentration: Numeric;
+    max_correlated_exposure: Numeric;
+    max_cvar_pct: Numeric;
+    max_orders_per_hour: number;
+    max_slippage_bps: Numeric;
+    max_leverage: Numeric;
+    min_liq_buffer: Numeric;
+    force_isolated: boolean;
+    min_margin_ratio: Numeric;
+    daily_drawdown_limit: Numeric;
+    weekly_drawdown_limit: Numeric;
+    max_drawdown_limit: Numeric;
+    max_consecutive_losses: number;
+    approval_timeout_seconds: number;
+  };
+  budget: {
+    max_iterations: number;
+    max_tokens: number;
+    max_cost_usd: number;
+    max_wall_seconds: number;
+  };
+  live_guard: {
+    ok: boolean;
+    reasons: string[];
+  };
+}
+
+export interface RuntimeSettingsUpdate {
+  llm_provider?: string;
+  llm_model?: string;
+  llm_model_fast?: string;
+  llm_base_url?: string;
+  anthropic_api_key?: string;
+  deepseek_api_key?: string;
+}
+
+export interface SymbolExposure {
+  symbol: string;
+  cluster: string;
+  long: Numeric;
+  short: Numeric;
+}
+
 export interface PortfolioSnapshot {
   equity: Numeric;
   n_positions: number;
   gross: Numeric;
   clusters: Record<"major" | "alt", Record<Exclude<Side, "flat">, Numeric>>;
+  by_symbol: SymbolExposure[];
   correlated_limit: Numeric;
+}
+
+export interface MarketSnapshotInfo {
+  symbol: string;
+  tickers: Record<string, Numeric>;
+  best_buy: { venue: string | null; price: Numeric | null };
+  best_sell: { venue: string | null; price: Numeric | null };
+  spread_bps: Numeric | null;
+  funding_rates: Record<string, Numeric>;
+  arb_hints: string[];
 }
 
 export interface BacktestRequest {
@@ -111,6 +211,8 @@ export interface BacktestRequest {
   seed: number;
   drift: number;
   vol: number;
+  data?: "synthetic" | "cex";
+  timeframe?: string;
 }
 
 export interface BacktestMetrics {
@@ -139,6 +241,7 @@ export interface BacktestReport {
   metrics: BacktestMetrics;
   trades: BacktestTrade[];
   equity_curve: number[];
+  lessons: string[];
   params: Required<BacktestRequest>;
 }
 
@@ -208,6 +311,25 @@ export interface DashboardEvent {
 }
 
 export type ApprovalRequest =
-  | { decision: "approve"; note?: string }
-  | { decision: "reject"; note?: string }
-  | { decision: "modify"; size: number; note?: string };
+  | { decision: "approve"; note?: string; operator?: string }
+  | { decision: "reject"; note?: string; operator?: string }
+  | { decision: "modify"; size: number; note?: string; operator?: string };
+
+export interface RunMetricsSnapshot {
+  runs: number;
+  executed: number;
+  rejected: number;
+  not_approved: number;
+  no_trade: number;
+  errors: number;
+  avg_slippage_bps: number;
+  approval_rate: number;
+  order_success_rate: number;
+  slippage_hist_bps: Record<string, number>;
+  approval_latency: { avg_s: number; max_s: number; n: number };
+}
+
+export interface MetricsSnapshot {
+  runs: RunMetricsSnapshot;
+  llm: Record<string, unknown>;
+}

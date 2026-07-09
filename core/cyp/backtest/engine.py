@@ -17,6 +17,7 @@ from cyp.backtest.data import HistoricalData
 from cyp.backtest.metrics import compute_metrics
 from cyp.config import Settings
 from cyp.contracts import Candle, OrderIntent
+from cyp.memory import MemoryStore
 from cyp.orchestrator import Orchestrator
 from cyp.venue import PaperVenue
 
@@ -27,12 +28,14 @@ class BacktestReport(BaseModel):
     metrics: dict
     trades: list[dict]
     equity_curve: list[float]
+    lessons: list[str] = []          # 回测全程复盘官沉淀的经验（供策略择优参考）
 
 
 class Backtester:
     def __init__(self, settings: Settings, symbol: str, candles: list[Candle],
                  window: int = 60, initial_quote: Decimal = Decimal("10000"),
-                 strategy: StrategyConfig | None = None) -> None:
+                 strategy: StrategyConfig | None = None,
+                 memory: MemoryStore | None = None) -> None:
         self.settings = settings
         self.symbol = symbol
         self.candles = candles
@@ -40,8 +43,10 @@ class Backtester:
         self.initial = float(initial_quote)
         self.venue = PaperVenue(initial_quote=initial_quote)
         self.data = HistoricalData(symbol, candles, window)
+        self.memory = memory or MemoryStore()   # 可注入持久化存储，让经验跨回测积累
         self.orch = Orchestrator(settings, self.data, self.venue,
-                                 approval=AutoApprove(), strategy=strategy)
+                                 approval=AutoApprove(), strategy=strategy,
+                                 memory=self.memory)
         self.equity_curve: list[float] = []
         self.trades: list[dict] = []
         self.active: dict | None = None
@@ -78,6 +83,7 @@ class Backtester:
             symbol=self.symbol, n_bars=len(self.candles), trades=self.trades,
             equity_curve=self.equity_curve,
             metrics=compute_metrics(self.initial, self.equity_curve, self.trades),
+            lessons=self.memory.get_lessons(20),
         )
 
     def _exit_price(self, bar: Candle) -> Decimal | None:

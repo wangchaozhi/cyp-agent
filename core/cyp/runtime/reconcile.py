@@ -34,9 +34,22 @@ class Reconciler:
         if not getattr(self.venue, "caps", None) or not self.venue.caps.native_protective_orders:
             gaps = [f"{p.symbol} 保护依赖监控存活" for p in positions]
 
+        # 链上场所：nonce 对齐 + pending tx 归位（M3）
+        discrepancies: list[str] = []
+        reconcile_onchain = getattr(self.venue, "reconcile_onchain", None)
+        if reconcile_onchain is not None:
+            try:
+                onchain = await reconcile_onchain()
+                discrepancies += onchain.get("discrepancies", [])
+                discrepancies += [f"tx 归位：{s}" for s in onchain.get("settled", [])]
+                if onchain.get("pending"):
+                    discrepancies.append(f"仍有未确认 tx：{onchain['pending']}")
+            except Exception as e:  # noqa: BLE001
+                discrepancies.append(f"链上对账失败：{e}")
+
         report = ReconcileReport(
             positions=[p.model_dump(mode="json") for p in positions],
-            protective_gaps=gaps, ok=True,
+            discrepancies=discrepancies, protective_gaps=gaps, ok=True,
         )
         self.log.info("reconciled", positions=len(positions), gaps=len(gaps))
         if self.events:

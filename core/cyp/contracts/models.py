@@ -161,6 +161,9 @@ class OrderIntent(BaseModel):
     reduce_only: bool = False
     stop_loss: Decimal | None = None
     take_profit: list[Decimal] = Field(default_factory=list)
+    # 链上（M3；CEX/paper 场所忽略）
+    chain: str | None = None                 # 例如 "ethereum" / "base"
+    approval_amount: Decimal | None = None   # 授权额度（护栏：必须精确额度，禁无限授权）
 
 
 class ProtectiveOrder(BaseModel):
@@ -182,6 +185,10 @@ class ExecutionResult(BaseModel):
     slippage_bps: Decimal | None = None
     protective_orders: list[ProtectiveOrder] = Field(default_factory=list)
     error: str | None = None
+    # 链上（M3）
+    chain: str | None = None
+    tx_hash: str | None = None
+    gas_used: Decimal | None = None          # gas 成本（计价币）
 
 
 # ---- 账户/持仓（venue ↔ portfolio ↔ risk 复用）-----------------------------
@@ -194,9 +201,20 @@ class Position(BaseModel):
     size_base: Decimal = Field(ge=0)     # 基础币数量
     entry_price: Decimal
     leverage: float = Field(default=1.0, ge=1.0)
+    liq_price: Decimal | None = None     # 爆仓价（合约；交易所返回或估算）
+    margin_mode: MarginMode | None = None
+    # 链上（M3）
+    chain: str | None = None
+    tx_hash: str | None = None           # 建仓交易哈希
 
     def notional_at(self, price: Decimal) -> Decimal:
         return self.size_base * price
+
+    def margin_used(self) -> Decimal | None:
+        """合约占用保证金 = 入场名义 / 杠杆；现货返回 None。"""
+        if self.instrument != "perp":
+            return None
+        return (self.size_base * self.entry_price) / Decimal(str(self.leverage))
 
 
 class Balances(BaseModel):

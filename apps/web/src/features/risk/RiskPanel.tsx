@@ -1,7 +1,7 @@
 import { ShieldCheck } from "lucide-react";
 
 import type { RiskSnapshot } from "../../shared/api/types";
-import { formatAmount, formatPercent } from "../../shared/lib/format";
+import { formatAmount, formatPercent, toNumber } from "../../shared/lib/format";
 import { EmptyState } from "../../shared/ui/EmptyState";
 import { Meter } from "../../shared/ui/Meter";
 import { MetricRow } from "../../shared/ui/MetricRow";
@@ -37,6 +37,24 @@ export function RiskPanel({ risk }: { risk: RiskSnapshot | null }) {
         <Meter value={risk.drawdown.total} max={risk.limits.total_dd} />
         <MetricRow label="下单 / 小时" value={`${risk.orders_last_hour} / ${risk.limits.max_orders_per_hour}`} />
         <MetricRow label="连续亏损" value={`${risk.consecutive_losses} / ${risk.limits.max_consecutive_losses}`} />
+        <MetricRow
+          label="保证金健康度"
+          value={
+            risk.margin_ratio != null ? (
+              <span
+                className={
+                  toNumber(risk.margin_ratio) < toNumber(risk.limits.min_margin_ratio ?? 0) * 2
+                    ? "tone-short"
+                    : "tone-long"
+                }
+              >
+                {formatPercent(risk.margin_ratio)} / 下限 {formatPercent(risk.limits.min_margin_ratio ?? 0, 0)}
+              </span>
+            ) : (
+              <span className="tone-muted">无永续仓</span>
+            )
+          }
+        />
         <MetricRow
           label={`实盘校验 (${risk.mode})`}
           value={<span className={risk.live_guard.ok ? "tone-long" : "tone-short"}>{risk.live_guard.ok ? "通过" : "未通过"}</span>}

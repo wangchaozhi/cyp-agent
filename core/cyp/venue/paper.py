@@ -40,6 +40,7 @@ class PaperVenue:
         self._fee_rate = fee_rate
         self._marks: dict[str, Decimal] = {}
         self._positions: dict[tuple[str, str], Position] = {}   # (symbol, instrument) -> Position
+        self._protective: dict[tuple[str, str], list[ProtectiveOrder]] = {}
         self._fills: dict[str, ExecutionResult] = {}            # client_id -> result（幂等）
         self._seq = 0
 
@@ -50,6 +51,7 @@ class PaperVenue:
 
     def set_mark_price(self, symbol: str, price: Decimal) -> None:
         self._marks[symbol] = Decimal(price)
+        self._trigger_protective(symbol)
 
     async def fetch_ticker(self, symbol: str) -> Decimal:
         if symbol not in self._marks:
@@ -67,6 +69,14 @@ class PaperVenue:
 
     async def positions(self) -> list[Position]:
         return list(self._positions.values())
+
+    def protective_for(self, symbol: str) -> list[ProtectiveOrder]:
+        """某标的当前挂着的保护单（供监控循环做止损逼近预警）。"""
+        out: list[ProtectiveOrder] = []
+        for (sym, _), orders in self._protective.items():
+            if sym == symbol:
+                out.extend(orders)
+        return out
 
     async def balances(self) -> Balances:
         equity = self._free_quote
@@ -93,7 +103,9 @@ class PaperVenue:
             return PreflightReport(ok=False, est_price=Decimal(0), reasons=["无 mark price"])
         slip = self._slippage_bps / Decimal(10000)
         # 不利滑点：买/多向上，卖/空向下
-        adverse_up = intent.side == "long" and not intent.reduce_only
+        adverse_up = (intent.side == "long" and not intent.reduce_only) or (
+            intent.side == "short" and intent.reduce_only
+        )
         est_price = mark * (Decimal(1) + slip) if adverse_up else mark * (Decimal(1) - slip)
         liq: Decimal | None = None
         if intent.instrument == "perp" and intent.leverage > 0:
@@ -126,8 +138,11 @@ class PaperVenue:
             self._positions[key] = Position(
                 symbol=intent.symbol, venue=self.id, side=intent.side, instrument=intent.instrument,
                 size_base=size_base, entry_price=price, leverage=intent.leverage,
+                liq_price=pf.est_liq_price,
+                margin_mode=intent.margin_mode if intent.instrument == "perp" else None,
             )
             protective = self._make_protective(intent)
+            self._protective[key] = protective
             res = ExecutionResult(
                 client_id=intent.client_id, order_id=self._next_id("ord"), status="filled",
                 filled_base=size_base, avg_price=price, fee_quote=fee,
@@ -136,6 +151,26 @@ class PaperVenue:
 
         self._fills[intent.client_id] = res
         return res
+
+    def _trigger_protective(self, symbol: str) -> None:
+        mark = self._marks.get(symbol)
+        if mark is None:
+            return
+
+        for key, pos in list(self._positions.items()):
+            if pos.symbol != symbol:
+                continue
+            for order in self._protective.get(key, []):
+                if self._protective_hit(pos, order, mark):
+                    client_id = f"{order.order_id}-trigger"
+                    if client_id not in self._fills:
+                        self._fills[client_id] = self._close_at_price(key, mark, client_id, order.order_id)
+                    break
+
+    def _protective_hit(self, pos: Position, order: ProtectiveOrder, mark: Decimal) -> bool:
+        if pos.side == "long":
+            return mark <= order.trigger_price if order.kind == "stop_loss" else mark >= order.trigger_price
+        return mark >= order.trigger_price if order.kind == "stop_loss" else mark <= order.trigger_price
 
     def _make_protective(self, intent: OrderIntent) -> list[ProtectiveOrder]:
         out: list[ProtectiveOrder] = []
@@ -147,9 +182,22 @@ class PaperVenue:
         return out
 
     def _close(self, intent: OrderIntent, key, price: Decimal, fee: Decimal) -> ExecutionResult:
+        return self._close_at_price(key, price, intent.client_id, self._next_id("close"), fee)
+
+    def _close_at_price(
+        self,
+        key,
+        price: Decimal,
+        client_id: str,
+        order_id: str | None = None,
+        fee: Decimal | None = None,
+    ) -> ExecutionResult:
         pos = self._positions.pop(key, None)
         if pos is None:
-            return ExecutionResult(client_id=intent.client_id, status="rejected", error="无持仓可平")
+            return ExecutionResult(client_id=client_id, status="rejected", error="无持仓可平")
+        self._protective.pop(key, None)
+        close_notional = pos.size_base * price
+        fee = fee if fee is not None else close_notional * self._fee_rate
         upnl = pos.size_base * (price - pos.entry_price) if pos.side == "long" \
             else pos.size_base * (pos.entry_price - price)
         if pos.instrument == "perp":
@@ -159,7 +207,7 @@ class PaperVenue:
             proceeds = pos.size_base * pos.entry_price + upnl
         self._free_quote += proceeds - fee
         return ExecutionResult(
-            client_id=intent.client_id, order_id=self._next_id("close"), status="filled",
+            client_id=client_id, order_id=order_id or self._next_id("close"), status="filled",
             filled_base=pos.size_base, avg_price=price, fee_quote=fee, slippage_bps=self._slippage_bps,
         )
 

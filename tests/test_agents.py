@@ -94,6 +94,38 @@ def test_strategist_flat_on_weak_signal():
     assert prop.side == "flat" and prop.size_quote == 0
 
 
+def test_strategist_avoids_adding_to_same_direction_position():
+    from cyp.contracts import Position
+    s = snap()
+    held = [Position(symbol=s.symbol, venue="paper", side="long",
+                     size_base=Decimal("0.1"), entry_price=Decimal("60000"))]
+    prop = run(Strategist().run(_bullish_reports(), s, Decimal("10000"), CFG, ctx(), positions=held))
+    assert prop.side == "flat"
+    assert "同向" in prop.thesis
+
+
+def test_strategist_downsizes_near_cluster_limit():
+    from cyp.contracts import Position
+    s = snap()
+    equity = Decimal("10000")
+    # major 簇同向敞口 = 4500，上限 = 10000×0.5 = 5000 → 已达 90%，剩余额度 500
+    held = [Position(symbol="ETH/USDT", venue="paper", side="long",
+                     size_base=Decimal("1"), entry_price=Decimal("4500"))]
+    prop = run(Strategist().run(_bullish_reports(), s, equity, CFG, ctx(), positions=held))
+    assert prop.side == "long"
+    assert prop.size_quote <= Decimal("500")
+
+
+def test_strategist_flat_when_cluster_limit_exhausted():
+    from cyp.contracts import Position
+    s = snap()
+    held = [Position(symbol="ETH/USDT", venue="paper", side="long",
+                     size_base=Decimal("1"), entry_price=Decimal("6000"))]
+    prop = run(Strategist().run(_bullish_reports(), s, Decimal("10000"), CFG, ctx(), positions=held))
+    assert prop.side == "flat"
+    assert "上限" in prop.thesis
+
+
 # ---- 风控官 ----------------------------------------------------------------
 
 def test_risk_officer_passthrough_without_llm():

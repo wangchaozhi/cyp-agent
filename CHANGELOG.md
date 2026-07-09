@@ -4,6 +4,35 @@
 
 ## [未发布]
 
+### ROADMAP 补齐 · M1/M3/M4/M5/M6 未完成项 + OKX Demo 联网实测
+
+- **M1 仪表盘合约信息**：`Position` 增 `liq_price/margin_mode`（Paper 由 preflight 估算填充、
+  Cex 取 ccxt `liquidationPrice/marginMode`）；`/api/positions` 补爆仓价/保证金占用/资金费率，
+  `/api/risk` 补 `margin_ratio/perp_notional`；前端持仓表新增爆仓价/保证金/资金费列 +
+  逐仓/全仓标注，风险面板新增保证金健康度。
+- **M4 收尾**：策略官组合感知——同标的同向已有仓 → flat，相关簇同向敞口超 80% 上限 →
+  缩量/flat（`Strategist.run` 接收聚合持仓）；`/api/portfolio` 增 `by_symbol`，前端敞口
+  热力图（纯 CSS）；聚合器 `funding_rates()`/`arb_hints()`（跨所价差 bps/资金费差，仅提示），
+  `/api/market` 扩展 + 新增 MarketPanel。
+- **M5 收尾**：`OhlcvArchive`——ccxt 分页拉取真实 OHLCV 落 SQLite 增量缓存，
+  `cyp.backtest.run/sweep --data cex` 与 `POST /api/backtest data=cex` 均可用；
+  `Backtester` 挂接 `MemoryStore`、`BacktestReport.lessons` 汇总复盘经验；
+  strategist/risk_officer LLM 提示词注入 `ctx.lessons`（规则路径不变）。
+- **M6 进阶自动化**：`PolicyApprovalGate` 策略化自动审批（白名单 + risk_score + 金额上限，
+  否则转人工），`settings.approval=auto` 在 CLI/FastAPI 接线；`MemoryStore` 迁 SQLite +
+  按 symbol/词元相关性检索（旧 JSON 自动迁移）；`PositionMonitor` 增强（止损/爆仓逼近、
+  EWMA 异常波动、保证金率告警走 Alerter），`CYP_RUNTIME=1` 时 FastAPI 启动 RuntimeEngine；
+  审批 `operator` 透传入审计；`RunMetrics` 增审批时延/滑点分布/下单成功率 SLO，
+  `/api/metrics` 暴露 + OverviewStrip 展示。
+- **M3 链上骨架（mock client 离线测）**：`OnchainVenue`——「精确额度 approve → swap」两步
+  执行、nonce 管理、确认跟踪、revert 处理、幂等去重、`reconcile_onchain` 对账；隔离签名器
+  `onchain/signer.py`（keystore，私钥不落日志；KMS/硬件留接口）；风控 §2.3 五条护栏
+  （禁无限授权/合约白名单/最小池 TVL/gas 上限/MEV 私有内存池）+ `est_price_impact` 接入
+  RiskContext；`OnchainDataSource` stub；前端持仓表标注链上仓位。
+- **OKX Demo 联网实测**：新增可重复 smoke 脚本 `python -m cyp.tools.okx_smoke`——
+  配置校验→余额→现货小额下单（带止损/止盈保护单）→幂等重放→撤保护单→平仓清理→增量对账；
+  已联网全绿，作为 M2 真实网络项的 OKX 版验收（Binance Testnet 不采用，以 OKX Demo 替代）。
+
 ### 文档 · 数学模型规格完善
 - 新增 `docs/quant/` 规格分册：validation / stats / risk / sizing / portfolio /
   signals_execution，补齐公式、默认阈值、数据要求、降级路径和测试清单。
@@ -37,6 +66,8 @@
 - **跨所行情聚合**：`MarketAggregator`——多场所报价、最优买卖场所、跨所价差(bps)
   （套利/异常线索，仅提示）；`GET /api/market`。
 - **组合仪表盘**：`GET /api/portfolio` + 面板（净值/总敞口/相关性簇同向敞口对上限）。
+- **仪表盘设置面板**：新增脱敏 `GET /api/settings`，React 仪表盘展示运行模式、审批模式、
+  OKX Demo 配置状态、watchlist、LLM/场所凭据布尔状态、风控限制与 LiveGuard 校验结果。
 
 - **交易所适配层** `venue/adapters.py`：把各家 ccxt 抹不平的差异（保护单参数、
   持仓/保证金模式）收敛到 adapter；CexVenue 通用流程不变，仅委托 configure_perp/

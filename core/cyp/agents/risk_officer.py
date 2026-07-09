@@ -34,11 +34,13 @@ class RiskOfficer:
             return assessment  # 无 LLM：透传，llm_reviewed 保持 False
 
         drivers = "; ".join(f"{r.agent}:{r.stance}({r.confidence:.2f})" for r in reports)
+        lessons = "；".join(ctx.lessons[-5:]) or "无"
         review = await ctx.llm.json(
             system=("你是加密交易风控官。只能收紧不能放宽：若发现 thesis 不自洽、极端行情/事件窗口、"
                     "或与已有敞口叠加同向风险，可 escalate_reject=true。给出 0-1 风险分与简短中文说明。"),
             user=f"提案：{proposal.side} {proposal.symbol} 仓位={proposal.size_quote} "
-                 f"止损={proposal.stop_loss} 置信={proposal.confidence:.2f}\n分析：{drivers}",
+                 f"止损={proposal.stop_loss} 置信={proposal.confidence:.2f}\n分析：{drivers}\n"
+                 f"历史复盘经验：{lessons}",
             schema=_RiskReview,
         )
         if review is None:

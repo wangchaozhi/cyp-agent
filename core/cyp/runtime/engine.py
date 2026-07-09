@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import asyncio
+from decimal import Decimal
 
 from cyp.config import Settings
 from cyp.events import EventBus
@@ -28,7 +29,12 @@ class RuntimeEngine:
         self.events = events
         self.reconciler = Reconciler(venue, memory, events)
         self.scanner = OpportunityScanner(orchestrator, symbols, scan_interval, events)
-        self.monitor = PositionMonitor(venue, monitor_interval, events)
+        min_margin = getattr(getattr(orchestrator, "settings", None), "risk", None)
+        self.monitor = PositionMonitor(
+            venue, monitor_interval, events,
+            alerter=getattr(orchestrator, "alerter", None),
+            min_margin_ratio=min_margin.min_margin_ratio if min_margin else Decimal("0.05"),
+        )
         self.log = get_logger("runtime")
         self._stop = asyncio.Event()
         self._tasks: list[asyncio.Task] = []

@@ -2,11 +2,16 @@ import type {
   ApprovalRequest,
   BacktestReport,
   BacktestRequest,
+  ExecutionResult,
   HealthStatus,
+  MarketSnapshotInfo,
+  MetricsSnapshot,
   PendingApproval,
   PortfolioSnapshot,
   Position,
   RiskSnapshot,
+  RuntimeSettings,
+  RuntimeSettingsUpdate,
   VenueInfo,
 } from "./types";
 
@@ -34,9 +39,23 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const cypApi = {
   health: () => request<HealthStatus>("/api/health"),
   venues: () => request<VenueInfo[]>("/api/venues"),
+  settings: () => request<RuntimeSettings>("/api/settings"),
+  updateSettings: (payload: RuntimeSettingsUpdate) =>
+    request<RuntimeSettings>("/api/settings", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   pending: () => request<PendingApproval[]>("/api/pending"),
   positions: () => request<Position[]>("/api/positions"),
+  closePosition: (payload: { symbol: string; instrument: string }) =>
+    request<ExecutionResult>("/api/positions/close", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   risk: () => request<RiskSnapshot>("/api/risk"),
+  market: (symbol?: string) =>
+    request<MarketSnapshotInfo>(`/api/market${symbol ? `?symbol=${encodeURIComponent(symbol)}` : ""}`),
+  metrics: () => request<MetricsSnapshot>("/api/metrics"),
   portfolio: () => request<PortfolioSnapshot>("/api/portfolio"),
   backtest: (payload: BacktestRequest) =>
     request<BacktestReport>("/api/backtest", {

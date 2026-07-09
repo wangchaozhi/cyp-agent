@@ -47,22 +47,23 @@ class PendingApprovalGate:
             self._pending.pop(run_id, None)
 
     def resolve(self, run_id: str, decision: str, size: str | float | None = None,
-                note: str = "") -> bool:
-        """由 HTTP 端点调用。返回是否成功解决一个待审批项。"""
+                note: str = "", operator: str | None = None) -> bool:
+        """由 HTTP 端点调用。返回是否成功解决一个待审批项。operator 记入审计（多操作员）。"""
         item = self._pending.get(run_id)
         if item is None or item.future.done():
             return False
+        who = (operator or "").strip() or self._operator
         if decision == "modify" and size is not None:
             try:
                 modified = item.proposal.model_copy(update={"size_quote": Decimal(str(size))})
                 dec = ApprovalDecision(decision="modify", modified=modified,
-                                       operator=self._operator, note=note or f"改规模至 {size}")
+                                       operator=who, note=note or f"改规模至 {size}")
             except (InvalidOperation, ValueError):
                 return False
         elif decision == "approve":
-            dec = ApprovalDecision(decision="approve", operator=self._operator, note=note or "仪表盘批准")
+            dec = ApprovalDecision(decision="approve", operator=who, note=note or "仪表盘批准")
         else:
-            dec = ApprovalDecision(decision="reject", operator=self._operator, note=note or "仪表盘拒绝")
+            dec = ApprovalDecision(decision="reject", operator=who, note=note or "仪表盘拒绝")
         item.future.set_result(dec)
         return True
 

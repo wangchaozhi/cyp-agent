@@ -89,8 +89,10 @@ class CexVenue:
         t = await self._ccxt().fetch_ticker(symbol)
         return Decimal(str(t["last"]))
 
-    async def fetch_ohlcv(self, symbol: str, timeframe: str = "1h", limit: int = 200) -> list[Candle]:
-        rows = await self._ccxt().fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+    async def fetch_ohlcv(self, symbol: str, timeframe: str = "1h", limit: int = 200,
+                          since: datetime | None = None) -> list[Candle]:
+        since_ms = int(since.timestamp() * 1000) if since else None
+        rows = await self._ccxt().fetch_ohlcv(symbol, timeframe=timeframe, limit=limit, since=since_ms)
         out: list[Candle] = []
         for ts, o, hi, lo, c, v in rows:
             out.append(Candle(ts=datetime.fromtimestamp(ts / 1000, tz=timezone.utc),
@@ -103,6 +105,15 @@ class CexVenue:
         def pairs(rows):
             return [(Decimal(str(p)), Decimal(str(s))) for p, s in rows]
         return OrderBook(bids=pairs(ob["bids"]), asks=pairs(ob["asks"]))
+
+    async def fetch_funding_rate(self, symbol: str) -> Decimal | None:
+        """永续资金费率（现货标的或交易所不支持时返回 None）。"""
+        try:
+            fr = await self._ccxt().fetch_funding_rate(symbol)
+        except Exception:  # noqa: BLE001
+            return None
+        rate = fr.get("fundingRate")
+        return Decimal(str(rate)) if rate is not None else None
 
     # ---- 账户 --------------------------------------------------------------
 
@@ -118,10 +129,14 @@ class CexVenue:
             contracts = p.get("contracts") or 0
             if not contracts:
                 continue
+            liq = p.get("liquidationPrice")
+            margin_mode = p.get("marginMode")
             out.append(Position(symbol=p["symbol"], venue=self.id, side=p.get("side", "long"),
                                 instrument="perp", size_base=Decimal(str(contracts)),
                                 entry_price=Decimal(str(p.get("entryPrice") or 0)),
-                                leverage=float(p.get("leverage") or 1)))
+                                leverage=float(p.get("leverage") or 1),
+                                liq_price=Decimal(str(liq)) if liq else None,
+                                margin_mode=margin_mode if margin_mode in ("isolated", "cross") else None))
         return out
 
     async def balances(self) -> Balances:

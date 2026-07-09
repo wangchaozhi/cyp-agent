@@ -80,3 +80,16 @@ def test_backtest_runs_over_synthetic_history():
     assert len(report.equity_curve) >= 150 - 60
     assert set(report.metrics) >= {"total_return", "max_drawdown", "sharpe", "n_trades", "win_rate"}
     assert report.metrics["n_trades"] == len(report.trades)
+    assert isinstance(report.lessons, list)                     # 复盘经验随报告输出
+
+
+def test_backtest_accumulates_lessons_into_injected_memory():
+    from cyp.memory import MemoryStore
+    candles = run(SyntheticMarketData(bars=150, drift=0.003).snapshot("BTC/USDT")).ohlcv
+    memory = MemoryStore()
+    report = run(Backtester(Settings(_env_file=None), "BTC/USDT", candles,
+                            window=60, memory=memory).run())
+    # 注入的 memory 与报告 lessons 打通：有成交必有复盘经验
+    if report.metrics["n_trades"] > 0:
+        assert memory.get_lessons()
+        assert report.lessons == memory.get_lessons(20)

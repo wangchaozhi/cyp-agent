@@ -22,6 +22,7 @@ class SweepResult(BaseModel):
     config: StrategyConfig
     metrics: dict
     score: float
+    lessons: list[str] = []          # 该配置回测沉淀的经验摘要
 
 
 def default_objective(m: dict) -> float:
@@ -42,7 +43,8 @@ async def sweep(settings: Settings, symbol: str, candles: list[Candle],
     results: list[SweepResult] = []
     for cfg in configs:
         report = await Backtester(settings, symbol, candles, window, strategy=cfg).run()
-        results.append(SweepResult(config=cfg, metrics=report.metrics, score=objective(report.metrics)))
+        results.append(SweepResult(config=cfg, metrics=report.metrics,
+                                   score=objective(report.metrics), lessons=report.lessons[-5:]))
     results.sort(key=lambda r: r.score, reverse=True)
     return results
 

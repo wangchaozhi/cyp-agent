@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import uuid
 from decimal import Decimal
 from typing import Literal
@@ -99,7 +100,8 @@ class Orchestrator:
     async def run_once(self, symbol: str, run_id: str | None = None) -> RunResult:
         run_id = run_id or uuid.uuid4().hex[:12]
         trace = Trace(run_id)
-        ctx = AgentContext(llm=self.llm, settings=self.settings, lessons=self.memory.get_lessons())
+        ctx = AgentContext(llm=self.llm, settings=self.settings,
+                           lessons=self.memory.get_lessons(symbol=symbol))
         self.log.info("run_start", run_id=run_id, symbol=symbol, mode=self.settings.mode)
         try:
             res = await self._run(symbol, run_id, ctx, trace)
@@ -145,10 +147,14 @@ class Orchestrator:
         equity = bal.total_quote if bal.total_quote > 0 else bal.free_quote
         self.portfolio.update_equity(equity)   # 更新净值高水位（供回撤熔断）
 
+        # 跨场所聚合持仓：策略官主动规避 + 风控引擎组合护栏共用
+        positions = await aggregate_positions(self.risk_venues)
+
         # ③ 决策
         async with trace.span("strategize"):
             proposal = await self.strategist.run(reports, snap, equity, cfg, ctx,
-                                                 venue_id=getattr(self.venue, "id", "paper"))
+                                                 venue_id=getattr(self.venue, "id", "paper"),
+                                                 positions=positions)
         self.memory.checkpoint(run_id, "proposal", proposal.model_dump(mode="json"))
         await self.events.publish("proposal_ready", run_id, symbol=symbol, proposal=proposal.model_dump(mode="json"))
         if proposal.side == "flat":
@@ -156,7 +162,8 @@ class Orchestrator:
 
         # ④ 风控引擎（硬护栏）+ ⑤ 风控官（软评审）
         async with trace.span("risk"):
-            assessment = await self._assess(symbol, run_id, proposal, reports, ref, equity, cfg, ctx)
+            assessment = await self._assess(symbol, run_id, proposal, reports, ref, equity, cfg, ctx,
+                                            positions=positions)
         await self.events.publish("risk_assessed", run_id, symbol=symbol,
                                   assessment=assessment.model_dump(mode="json"))
         if assessment.verdict == "rejected":
@@ -168,9 +175,11 @@ class Orchestrator:
             return RunResult(run_id=run_id, symbol=symbol, status="rejected",
                              reports=reports, proposal=proposal, assessment=assessment)
 
-        # ⑥ 人工审批门
+        # ⑥ 人工审批门（计时 → SLO 审批时延）
         async with trace.span("approval"):
+            _t0 = time.monotonic()
             decision = await self.approval.decide(proposal, assessment, run_id)
+            self.metrics.record_approval_latency(time.monotonic() - _t0)
         await self.events.publish("approval_decided", run_id, symbol=symbol,
                                   decision=decision.model_dump(mode="json"))
         if decision.decision == "reject":
@@ -193,7 +202,7 @@ class Orchestrator:
         # 复盘 + 经验回灌
         async with trace.span("review"):
             review = await self.reviewer.run(final_prop, execution, ctx, run_id=run_id)
-        self.memory.append_lessons(review.lessons)
+        self.memory.append_lessons(review.lessons, symbol=symbol)
         await self.events.publish("reviewed", run_id, symbol=symbol, review=review.model_dump(mode="json"))
 
         status: RunStatus = "executed" if execution.status == "filled" else "execution_failed"
@@ -205,7 +214,8 @@ class Orchestrator:
                          proposal=final_prop, assessment=assessment, decision=decision,
                          execution=execution, review=review)
 
-    async def _assess(self, symbol, run_id, proposal, reports, ref, equity, cfg, ctx) -> RiskAssessment:
+    async def _assess(self, symbol, run_id, proposal, reports, ref, equity, cfg, ctx,
+                      positions: list | None = None) -> RiskAssessment:
         # preflight 估算滑点/爆仓价 → 喂给风控引擎
         pf_intent = OrderIntent(
             client_id=f"{run_id}-pf", symbol=symbol, venue=getattr(self.venue, "id", "paper"),
@@ -215,8 +225,19 @@ class Orchestrator:
         )
         pf = await self.venue.preflight(pf_intent)
 
+        # 链上场所：拉授权/白名单/TVL/gas/MEV 上下文喂给 §2.3 规则
+        onchain_ctx: dict = {}
+        if getattr(self.venue, "kind", "") == "onchain":
+            try:
+                onchain_ctx = await self.venue.quote_context(pf_intent)
+            except Exception as e:  # noqa: BLE001 —— 拉不到上下文按最保守处理
+                onchain_ctx = {"onchain": True, "contract_address": None,
+                               "mev_protected": False}
+                self.log.warning("onchain_context_failed", error=str(e))
+
         # 跨场所聚合持仓 → 组合级敞口（当前标的用 ref，其它标的用入场价近似）
-        positions = await aggregate_positions(self.risk_venues)
+        if positions is None:
+            positions = await aggregate_positions(self.risk_venues)
         view = PortfolioView(positions, self.corr)
         def resolve(s):
             return ref if s == symbol else None
@@ -241,6 +262,8 @@ class Orchestrator:
             weekly_drawdown=psnap["weekly_drawdown"],
             total_drawdown=psnap["total_drawdown"],
             est_slippage_bps=pf.est_slippage_bps, est_liq_price=pf.est_liq_price,
+            est_price_impact=pf.est_price_impact,
+            **onchain_ctx,
         )
         assessment = risk_assess(proposal, rctx, cfg)
         return await self.risk_officer.run(proposal, assessment, reports, ctx)

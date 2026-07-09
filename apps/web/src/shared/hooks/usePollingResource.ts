@@ -22,6 +22,7 @@ export function usePollingResource<T>(
   }, [loader]);
 
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
       mountedRef.current = false;
     };

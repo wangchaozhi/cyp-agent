@@ -21,18 +21,29 @@ def main(argv: list[str] | None = None) -> int:
         with contextlib.suppress(Exception):
             stream.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
 
-    parser = argparse.ArgumentParser(prog="cyp-sweep", description="cyp-agent 策略扫参择优（合成历史）")
+    parser = argparse.ArgumentParser(prog="cyp-sweep", description="cyp-agent 策略扫参择优（合成/真实历史）")
     parser.add_argument("--symbol", default="BTC/USDT")
     parser.add_argument("--bars", type=int, default=300)
     parser.add_argument("--window", type=int, default=60)
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--drift", type=float, default=0.001)
     parser.add_argument("--top", type=int, default=5)
+    parser.add_argument("--data", choices=["synthetic", "cex"], default="synthetic")
+    parser.add_argument("--exchange", default=None)
+    parser.add_argument("--timeframe", default="1h")
     args = parser.parse_args(argv)
 
     settings = Settings()
-    candles = asyncio.run(
-        SyntheticMarketData(bars=args.bars, seed=args.seed, drift=args.drift).snapshot(args.symbol)).ohlcv
+    if args.data == "cex":
+        from cyp.backtest.run import load_real_candles
+        exchange = args.exchange or settings.cex_id
+        candles = asyncio.run(load_real_candles(exchange, args.symbol, args.timeframe, args.bars))
+        if len(candles) <= args.window:
+            print(f"真实历史不足：拉到 {len(candles)} 根（需要 > window={args.window}）")
+            return 1
+    else:
+        candles = asyncio.run(
+            SyntheticMarketData(bars=args.bars, seed=args.seed, drift=args.drift).snapshot(args.symbol)).ohlcv
 
     configs = grid(
         enter_threshold=[0.08, 0.12, 0.18],

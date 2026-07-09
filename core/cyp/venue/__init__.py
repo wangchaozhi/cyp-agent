@@ -3,6 +3,7 @@
 from cyp.venue.aggregator import MarketAggregator
 from cyp.venue.base import PreflightReport, Venue, VenueCaps, VenueKind
 from cyp.venue.cex import CexVenue
+from cyp.venue.onchain import OnchainVenue
 from cyp.venue.paper import PaperVenue
 from cyp.venue.registry import VenueRegistry, build_registry
 
@@ -13,6 +14,7 @@ __all__ = [
     "PreflightReport",
     "PaperVenue",
     "CexVenue",
+    "OnchainVenue",
     "VenueRegistry",
     "build_registry",
     "MarketAggregator",

@@ -22,9 +22,13 @@ const DEFAULT_REQUEST: BacktestRequest = {
   seed: 7,
   drift: 0.001,
   vol: 0.01,
+  data: "synthetic",
+  timeframe: "1h",
 };
 
-type NumberField = Exclude<keyof BacktestRequest, "symbol">;
+const TIMEFRAMES = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"];
+
+type NumberField = Exclude<keyof BacktestRequest, "symbol" | "data" | "timeframe">;
 
 const NUMBER_FIELDS: Array<{
   name: NumberField;
@@ -104,7 +108,6 @@ export function BacktestPanel() {
     <Panel
       title="回测报告"
       icon={<LineChart size={16} />}
-      className="panel--backtest"
       actions={
         <button className="icon-command" type="button" onClick={reset} disabled={loading} title="重置参数">
           <RotateCcw size={15} />
@@ -120,6 +123,33 @@ export function BacktestPanel() {
             placeholder="BTC/USDT"
           />
         </label>
+
+        <label>
+          <span>数据源</span>
+          <select
+            value={request.data ?? "synthetic"}
+            onChange={(event) =>
+              setRequest((current) => ({ ...current, data: event.target.value as "synthetic" | "cex" }))
+            }
+          >
+            <option value="synthetic">合成历史</option>
+            <option value="cex">真实历史（CEX）</option>
+          </select>
+        </label>
+
+        {request.data === "cex" ? (
+          <label>
+            <span>周期</span>
+            <select
+              value={request.timeframe ?? "1h"}
+              onChange={(event) => setRequest((current) => ({ ...current, timeframe: event.target.value }))}
+            >
+              {TIMEFRAMES.map((tf) => (
+                <option key={tf} value={tf}>{tf}</option>
+              ))}
+            </select>
+          </label>
+        ) : null}
 
         {NUMBER_FIELDS.map((field) => (
           <label key={field.name}>
@@ -199,6 +229,14 @@ export function BacktestPanel() {
           ) : (
             <EmptyState>无已平仓交易</EmptyState>
           )}
+
+          {report.lessons?.length ? (
+            <ul className="arb-hints backtest-lessons">
+              {report.lessons.slice(-5).map((lesson, index) => (
+                <li key={`${index}-${lesson}`}>{lesson}</li>
+              ))}
+            </ul>
+          ) : null}
         </div>
       ) : (
         <EmptyState>暂无回测报告</EmptyState>

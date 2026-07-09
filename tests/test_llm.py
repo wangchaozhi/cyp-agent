@@ -1,8 +1,12 @@
 """ResilientLLM：禁用降级 / 结构化校验 / 重试 / 熔断。全部离线。"""
 
 import asyncio
+import json
 
+import httpx
+from cyp.config import Settings
 from cyp.llm import MockProvider, ResilientLLM
+from cyp.llm.openai_compatible import OpenAICompatibleProvider
 from pydantic import BaseModel
 
 
@@ -57,3 +61,34 @@ def test_circuit_breaker_short_circuits():
     run(llm.json(system="s", user="u", schema=Demo))   # 失败2 → 打开熔断
     run(llm.json(system="s", user="u", schema=Demo))   # 短路
     assert llm.metrics.short_circuits >= 1
+
+
+def test_deepseek_settings_enable_llm():
+    settings = Settings(_env_file=None, llm_provider="deepseek", deepseek_api_key="sk-test")
+    assert settings.llm_enabled is True
+
+
+def test_openai_compatible_json_provider():
+    async def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        assert payload["model"] == "deepseek-chat"
+        assert payload["response_format"] == {"type": "json_object"}
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {"message": {"content": json.dumps({"stance": "neutral", "confidence": 0.7})}}
+                ]
+            },
+        )
+
+    provider = OpenAICompatibleProvider(
+        api_key="sk-test",
+        base_url="https://api.deepseek.com",
+        default_model="deepseek-chat",
+        transport=httpx.MockTransport(handler),
+    )
+    llm = ResilientLLM(provider, enabled=True, model="deepseek-chat")
+    out = run(llm.json(system="s", user="u", schema=Demo))
+    assert isinstance(out, Demo)
+    assert out.stance == "neutral"

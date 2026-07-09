@@ -67,6 +67,42 @@ def test_monitor_reports_positions():
     assert "position_monitor" in seen
 
 
+class _CaptureAlerter:
+    def __init__(self):
+        self.alerts = []
+    async def alert(self, level, msg, **fields):
+        self.alerts.append({"level": level, "msg": msg, **fields})
+
+
+def test_monitor_alerts_on_stop_proximity_via_alerter():
+    venue = PaperVenue()
+    orch = _orch(venue=venue)
+    run(orch.run_once("BTC/USDT"))                       # 建仓（带止损保护单）
+    stops = [o for o in venue.protective_for("BTC/USDT") if o.kind == "stop_loss"]
+    assert stops
+    pos = run(venue.positions())[0]
+    # 把价格推到走完 80% 止损距离处（未触发保护单成交的前提下逼近）
+    near_stop = stops[0].trigger_price + (pos.entry_price - stops[0].trigger_price) * Decimal("0.2")
+    venue._marks["BTC/USDT"] = near_stop                 # 直连改 mark，绕过保护单触发
+    alerter = _CaptureAlerter()
+    monitor = PositionMonitor(venue, alerter=alerter)
+    report = run(monitor.check_once())
+    assert any("止损距离" in a for a in report["alerts"])
+    assert alerter.alerts and alerter.alerts[0]["msg"] == "position_monitor"
+
+
+def test_monitor_alerts_on_abnormal_move():
+    venue = PaperVenue()
+    orch = _orch(venue=venue)
+    run(orch.run_once("BTC/USDT"))
+    pos = run(venue.positions())[0]
+    monitor = PositionMonitor(venue)
+    run(monitor.check_once())                            # 第一轮记录 mark
+    venue._marks["BTC/USDT"] = pos.entry_price * Decimal("1.08")   # +8% 突变
+    report = run(monitor.check_once())
+    assert any("异常波动" in a for a in report["alerts"])
+
+
 def test_engine_run_bounded_end_to_end():
     venue = PaperVenue()
     orch = _orch(venue=venue)

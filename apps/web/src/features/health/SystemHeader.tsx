@@ -1,4 +1,4 @@
-import { Activity, Play, Power, RadioTower } from "lucide-react";
+import { Activity, Play, Power, RadioTower, Settings } from "lucide-react";
 
 import type { HealthStatus, VenueInfo } from "../../shared/api/types";
 import type { StreamStatus } from "../../shared/hooks/useEventStream";
@@ -9,8 +9,11 @@ interface SystemHeaderProps {
   streamStatus: StreamStatus;
   running: boolean;
   switchingKill: boolean;
+  settingsOpen: boolean;
+  runDisabledReason: string | null;
   onRun: () => void;
   onToggleKill: () => void;
+  onOpenSettings: () => void;
 }
 
 function streamLabel(status: StreamStatus): string {
@@ -29,8 +32,11 @@ export function SystemHeader({
   streamStatus,
   running,
   switchingKill,
+  settingsOpen,
+  runDisabledReason,
   onRun,
   onToggleKill,
+  onOpenSettings,
 }: SystemHeaderProps) {
   const configuredVenues = venues?.filter((venue) => venue.configured).length ?? 0;
   const totalVenues = venues?.length ?? 0;
@@ -51,7 +57,7 @@ export function SystemHeader({
       <div className="status-strip" aria-label="系统状态">
         <span className="status-pill">
           <Activity size={15} />
-          模式 <b>{health?.mode ?? "--"}</b>
+          模式 <b>{health?.display_mode ?? health?.mode ?? "--"}</b>
         </span>
         <span className="status-pill">
           <RadioTower size={15} />
@@ -71,14 +77,25 @@ export function SystemHeader({
 
       <div className="header-actions">
         <button
+          className={`command-button command-button--settings ${settingsOpen ? "is-on" : ""}`}
+          type="button"
+          onClick={onOpenSettings}
+          aria-expanded={settingsOpen}
+          aria-controls="settings-drawer"
+          title="打开设置"
+        >
+          <Settings size={17} />
+          <span>设置</span>
+        </button>
+        <button
           className="command-button command-button--primary"
           type="button"
           onClick={onRun}
-          disabled={running}
-          title="触发一轮闭环"
+          disabled={running || Boolean(runDisabledReason)}
+          title={runDisabledReason ?? "触发一轮闭环"}
         >
           <Play size={17} />
-          <span>{running ? "触发中" : "触发一轮"}</span>
+          <span>{running ? "触发中" : runDisabledReason ? "未接模型" : "触发一轮"}</span>
         </button>
         <button
           className={`command-button command-button--danger ${killOn ? "is-on" : ""}`}

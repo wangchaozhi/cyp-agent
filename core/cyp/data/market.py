@@ -44,15 +44,19 @@ class CexMarketData:
 
 
 class SyntheticMarketData:
-    """确定性合成行情（随机游走）。同 seed 同输出，零网络零密钥。"""
+    """合成行情（随机游走）。默认同 seed 同输出；live_ticks=True 时最新价随请求推进。"""
 
     def __init__(self, base: Decimal = Decimal("60000"), bars: int = 200,
-                 seed: int = 7, vol: float = 0.01, drift: float = 0.0005) -> None:
+                 seed: int = 7, vol: float = 0.01, drift: float = 0.0005,
+                 live_ticks: bool = False) -> None:
         self.base = base
         self.bars = bars
         self.seed = seed
         self.vol = vol
         self.drift = drift
+        self.live_ticks = live_ticks
+        self._ticks: dict[str, int] = {}
+        self._marks: dict[str, float] = {}
 
     async def snapshot(self, symbol: str) -> MarketSnapshot:
         rng = random.Random(f"{self.seed}:{symbol}")
@@ -73,6 +77,22 @@ class SyntheticMarketData:
                 volume=Decimal(str(round(vol, 4))),
             ))
             price = close_p
+
+        if self.live_ticks and candles:
+            tick = self._ticks.get(symbol, 0) + 1
+            self._ticks[symbol] = tick
+            tick_rng = random.Random(f"{self.seed}:{symbol}:tick:{tick}")
+            mark = self._marks.get(symbol, float(candles[-1].close))
+            mark = max(0.01, mark * (1 + self.drift / 24 + tick_rng.gauss(0, self.vol / 16)))
+            self._marks[symbol] = mark
+            prev = candles[-2].close if len(candles) > 1 else candles[-1].open
+            mark_dec = Decimal(str(round(mark, 2)))
+            candles[-1] = candles[-1].model_copy(update={
+                "open": prev,
+                "high": max(mark_dec, prev),
+                "low": min(mark_dec, prev),
+                "close": mark_dec,
+            })
 
         derivatives = DerivativesData(
             funding_rate=Decimal(str(round(rng.uniform(-0.0005, 0.0005), 6))),

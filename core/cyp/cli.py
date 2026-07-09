@@ -13,7 +13,7 @@ import asyncio
 import contextlib
 import sys
 
-from cyp.approval import AutoApprove
+from cyp.approval import AutoApprove, wrap_with_policy
 from cyp.approval.cli import CLIApprovalGate
 from cyp.config import Settings
 from cyp.data import CexMarketData, SyntheticMarketData
@@ -87,8 +87,11 @@ def _build(args, settings: Settings) -> Orchestrator:
         data = CexMarketData(registry.get(settings.cex_id))
     else:
         data = SyntheticMarketData()
-    approval = AutoApprove() if args.approve == "auto" else CLIApprovalGate(
-        timeout=settings.risk.approval_timeout_seconds)
+    if args.approve == "auto":
+        approval = AutoApprove()                     # 显式 --approve auto：无条件放行（演示）
+    else:
+        human = CLIApprovalGate(timeout=settings.risk.approval_timeout_seconds)
+        approval = wrap_with_policy(settings, human)  # CYP_APPROVAL=auto → 策略化自动审批
     events = EventBus()
     events.subscribe(_on_event)
     others = [v for v in registry.all() if getattr(v, "id", None) != getattr(venue, "id", None)]

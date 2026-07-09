@@ -11,6 +11,7 @@ from cyp.llm.base import (
     TransientLLMError,
 )
 from cyp.llm.mock import MockProvider
+from cyp.llm.openai_compatible import OpenAICompatibleProvider
 
 __all__ = [
     "ResilientLLM",
@@ -19,15 +20,23 @@ __all__ = [
     "LLMError",
     "TransientLLMError",
     "MockProvider",
+    "OpenAICompatibleProvider",
     "build_llm",
 ]
 
 
 def build_llm(settings: Settings, metrics: LLMMetrics | None = None) -> ResilientLLM:
-    """有 ANTHROPIC_API_KEY → 真实 provider；否则 enabled=False（Agent 走规则降级）。"""
+    """按配置构建真实 provider；缺 key 时 enabled=False（Agent 走规则降级）。"""
     if settings.llm_enabled:
-        from cyp.llm.anthropic import AnthropicProvider
-        provider: LLMProvider = AnthropicProvider(settings.anthropic_api_key, settings.llm_model)
+        if settings.llm_provider == "deepseek":
+            provider: LLMProvider = OpenAICompatibleProvider(
+                api_key=settings.deepseek_api_key or "",
+                base_url=settings.llm_base_url or "https://api.deepseek.com",
+                default_model=settings.llm_model,
+            )
+        else:
+            from cyp.llm.anthropic import AnthropicProvider
+            provider = AnthropicProvider(settings.anthropic_api_key or "", settings.llm_model)
         enabled = True
     else:
         provider = MockProvider()
