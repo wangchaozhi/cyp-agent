@@ -1,11 +1,13 @@
-"""指标计算 + 合成行情源。全部离线确定性。"""
+"""指标计算 + 合成/真实行情源。全部离线确定性。"""
 
 import asyncio
+from datetime import datetime, timezone
 from decimal import Decimal
 
-from cyp.contracts import Candle
+from cyp.contracts import Candle, OrderBook
 from cyp.data import SyntheticMarketData, indicator_snapshot
 from cyp.data.indicators import atr, bollinger, ema, macd, rsi, sma
+from cyp.data.market import CexMarketData
 
 
 def _flat(n, price=100.0):
@@ -65,3 +67,64 @@ def test_indicator_snapshot_over_synthetic():
     assert ind["last_close"] is not None
     assert ind["rsi"] is not None and 0.0 <= ind["rsi"] <= 100.0
     assert ind["macd"] is not None and ind["atr"] is not None
+
+
+class _FakeCexVenue:
+    """假 CEX venue：K线/盘口 + 衍生品维度（可制造单项失败）。"""
+
+    id = "fakecex"
+
+    def __init__(self, funding="0.0004", oi="1000000", lsr="1.2", funding_fails=False):
+        self._funding = funding
+        self._oi = oi
+        self._lsr = lsr
+        self._funding_fails = funding_fails
+
+    async def fetch_ohlcv(self, symbol, timeframe="1h", limit=200):
+        now = datetime.now(timezone.utc)
+        return [Candle(ts=now, open=Decimal("100"), high=Decimal("101"),
+                       low=Decimal("99"), close=Decimal("100"), volume=Decimal("1"))
+                for _ in range(limit)]
+
+    async def fetch_orderbook(self, symbol, depth=20):
+        return OrderBook(bids=[(Decimal("99"), Decimal("1"))], asks=[(Decimal("101"), Decimal("1"))])
+
+    async def fetch_funding_rate(self, symbol):
+        if self._funding_fails:
+            raise RuntimeError("boom")
+        return Decimal(self._funding) if self._funding else None
+
+    async def fetch_open_interest(self, symbol):
+        return Decimal(self._oi) if self._oi else None
+
+    async def fetch_long_short_ratio(self, symbol):
+        return Decimal(self._lsr) if self._lsr else None
+
+
+def test_cex_snapshot_fills_derivatives_for_perp():
+    snap = asyncio.run(CexMarketData(_FakeCexVenue()).snapshot("BTC/USDT:USDT"))
+    d = snap.derivatives
+    assert d is not None
+    assert d.funding_rate == Decimal("0.0004")
+    assert d.open_interest == Decimal("1000000")
+    assert d.long_short_ratio == Decimal("1.2")
+
+
+def test_cex_snapshot_spot_has_no_derivatives():
+    snap = asyncio.run(CexMarketData(_FakeCexVenue()).snapshot("BTC/USDT"))
+    assert snap.derivatives is None
+
+
+def test_cex_snapshot_degrades_when_funding_unavailable():
+    # 资金费拉取失败 → 整段衍生品留 None（分析师按降级处理），但快照不报错
+    snap = asyncio.run(CexMarketData(_FakeCexVenue(funding_fails=True)).snapshot("ETH/USDT:USDT"))
+    assert snap.derivatives is None
+    assert len(snap.ohlcv) == 200
+
+
+def test_cex_snapshot_partial_derivatives_ok():
+    # OI/多空比缺失不影响资金费主信号
+    snap = asyncio.run(CexMarketData(_FakeCexVenue(oi=None, lsr=None)).snapshot("BTC/USDT:USDT"))
+    d = snap.derivatives
+    assert d is not None and d.funding_rate == Decimal("0.0004")
+    assert d.open_interest is None and d.long_short_ratio is None

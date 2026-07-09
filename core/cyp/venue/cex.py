@@ -115,6 +115,29 @@ class CexVenue:
         rate = fr.get("fundingRate")
         return Decimal(str(rate)) if rate is not None else None
 
+    async def fetch_open_interest(self, symbol: str) -> Decimal | None:
+        """永续持仓量（名义计价优先，回退张数；不支持时返回 None）。"""
+        try:
+            oi = await self._ccxt().fetch_open_interest(symbol)
+        except Exception:  # noqa: BLE001
+            return None
+        value = oi.get("openInterestValue") or oi.get("openInterestAmount")
+        return Decimal(str(value)) if value is not None else None
+
+    async def fetch_long_short_ratio(self, symbol: str) -> Decimal | None:
+        """多空持仓人数比（best-effort，交易所不支持时返回 None）。"""
+        ex = self._ccxt()
+        if not getattr(ex, "has", {}).get("fetchLongShortRatioHistory"):
+            return None
+        try:
+            rows = await ex.fetch_long_short_ratio_history(symbol, limit=1)
+        except Exception:  # noqa: BLE001
+            return None
+        if not rows:
+            return None
+        ratio = rows[-1].get("longShortRatio")
+        return Decimal(str(ratio)) if ratio is not None else None
+
     # ---- 账户 --------------------------------------------------------------
 
     async def positions(self) -> list[Position]:

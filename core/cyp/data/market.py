@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import random
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -29,7 +30,13 @@ class MarketDataSource(Protocol):
 
 
 class CexMarketData:
-    """真实只读行情（Binance 等）。衍生品/情绪在 M1/后续补，M0 先留 None。"""
+    """真实只读行情（Binance/OKX 等）。
+
+    - K 线 + 盘口：所有标的。
+    - 衍生品维度（资金费/OI/多空比）：仅 perp 标的（symbol 含 ':'），并发拉取、失败隔离；
+      资金费拉不到则整段留 None，衍生品分析师按降级处理。
+    - 情绪/链上：需外部 API（CYP_SENTIMENT_API 等），此处不组装。
+    """
 
     def __init__(self, venue) -> None:
         self.venue = venue
@@ -40,7 +47,28 @@ class CexMarketData:
             ob: OrderBook | None = await self.venue.fetch_orderbook(symbol)
         except Exception:
             ob = None
-        return MarketSnapshot(symbol=symbol, venue=self.venue.id, ohlcv=candles, orderbook=ob)
+        derivatives = await self._derivatives(symbol) if ":" in symbol else None
+        return MarketSnapshot(symbol=symbol, venue=self.venue.id, ohlcv=candles,
+                              orderbook=ob, derivatives=derivatives)
+
+    async def _derivatives(self, symbol: str) -> DerivativesData | None:
+        if not hasattr(self.venue, "fetch_funding_rate"):
+            return None
+
+        async def _get(name: str):
+            fn = getattr(self.venue, name, None)
+            return await fn(symbol) if fn else None
+
+        funding, oi, lsr = await asyncio.gather(
+            _get("fetch_funding_rate"), _get("fetch_open_interest"),
+            _get("fetch_long_short_ratio"), return_exceptions=True)
+        funding = None if isinstance(funding, BaseException) else funding
+        if funding is None:      # 分析师以资金费为主信号，缺失即视为无衍生品数据
+            return None
+        return DerivativesData(
+            funding_rate=funding,
+            open_interest=None if isinstance(oi, BaseException) else oi,
+            long_short_ratio=None if isinstance(lsr, BaseException) else lsr)
 
 
 class SyntheticMarketData:
