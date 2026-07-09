@@ -10,6 +10,7 @@ CexVenue 的通用流程（幂等/preflight/入场/失败平裸仓）不变，�
 from __future__ import annotations
 
 import contextlib
+import re
 from decimal import Decimal
 
 from cyp.contracts import OrderIntent, ProtectiveOrder
@@ -17,6 +18,13 @@ from cyp.contracts import OrderIntent, ProtectiveOrder
 
 def _close_side(intent: OrderIntent) -> str:
     return "sell" if intent.side == "long" else "buy"
+
+
+def _client_id(raw: str, suffix: str = "") -> str:
+    """OKX clOrdId accepts a compact alphanumeric client id; keep it deterministic."""
+
+    compact = re.sub(r"[^A-Za-z0-9]", "", f"{raw}{suffix}")
+    return (compact or "c")[:32]
 
 
 class BinanceAdapter:
@@ -65,7 +73,7 @@ class OkxAdapter:
             await ex.set_leverage(int(intent.leverage), intent.symbol, {"mgnMode": intent.margin_mode})
 
     def entry_params(self, intent: OrderIntent, is_close: bool) -> dict:
-        params: dict = {"clientOrderId": intent.client_id, "tdMode": self._td_mode(intent)}
+        params: dict = {"clientOrderId": _client_id(intent.client_id), "tdMode": self._td_mode(intent)}
         if intent.instrument == "perp" and is_close:
             params["reduceOnly"] = True
         return params
@@ -74,17 +82,25 @@ class OkxAdapter:
         cs = _close_side(intent)
         td = self._td_mode(intent)
         out: list[ProtectiveOrder] = []
+        reduce_only = intent.instrument == "perp"
         if intent.stop_loss is not None:
+            params = {"stopLossPrice": float(intent.stop_loss), "tdMode": td,
+                      "clientOrderId": _client_id(intent.client_id, "sl")}
+            if reduce_only:
+                params["reduceOnly"] = True
             o = await ex.create_order(intent.symbol, "market", cs, float(amount), None,
-                                      {"stopLossPrice": float(intent.stop_loss), "reduceOnly": True,
-                                       "tdMode": td, "clientOrderId": f"{intent.client_id}-sl"})
+                                      params)
             out.append(ProtectiveOrder(kind="stop_loss", order_id=str(o.get("id")),
-                                       trigger_price=intent.stop_loss))
+                                       trigger_price=intent.stop_loss, reduce_only=reduce_only))
         for i, tp in enumerate(intent.take_profit):
+            params = {"takeProfitPrice": float(tp), "tdMode": td,
+                      "clientOrderId": _client_id(intent.client_id, f"tp{i}")}
+            if reduce_only:
+                params["reduceOnly"] = True
             o = await ex.create_order(intent.symbol, "market", cs, float(amount), None,
-                                      {"takeProfitPrice": float(tp), "reduceOnly": True,
-                                       "tdMode": td, "clientOrderId": f"{intent.client_id}-tp{i}"})
-            out.append(ProtectiveOrder(kind="take_profit", order_id=str(o.get("id")), trigger_price=tp))
+                                      params)
+            out.append(ProtectiveOrder(kind="take_profit", order_id=str(o.get("id")),
+                                       trigger_price=tp, reduce_only=reduce_only))
         return out
 
 

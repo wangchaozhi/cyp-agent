@@ -18,7 +18,10 @@ class ConsoleSink:
         self.log = get_logger("alert")
 
     async def emit(self, alert: dict) -> None:
-        self.log.warning(alert.get("msg", "alert"), **{k: v for k, v in alert.items() if k != "msg"})
+        fields = {k: v for k, v in alert.items() if k != "msg"}
+        if "level" in fields:
+            fields["alert_level"] = fields.pop("level")
+        self.log.warning(alert.get("msg", "alert"), **fields)
 
 
 class WebhookSink:

@@ -44,6 +44,11 @@
   OkxAdapter（tdMode、set_leverage 带 mgnMode、stopLossPrice/takeProfitPrice）。
 - **OKX Demo 模拟交易**：`sandbox`(set_sandbox_mode) + API passphrase；注册表注册 OKX venue，
   有 demo 凭据即可模拟下单否则只读；CLI `--venue okx`。假交易所离线验证参数差异。
+  已完成 OKX Demo smoke test：私有余额接口、`BTC/USDT` 现货小额下单、条件保护单
+  （止损/止盈）创建、查询、取消，以及测试仓位卖回清理。
+- **OKX 接入硬化**：OKX `clientOrderId` 规范化；市价单返回 `filled=None` 时兜底解析；
+  现货保护单不带 `reduceOnly`、永续保护单保留 reduce-only；保护单可按 OKX algo 单取消；
+  CLI / FastAPI 生命周期关闭 ccxt client，减少资源泄漏噪音。
 
 ### M2 · CEX 实盘接入（离线部分完成，真实网络实操待做）
 - **实盘下单**：`CexVenue` 现货+合约实盘（ccxt），幂等 `clientOrderId`、原生保护单
@@ -79,7 +84,7 @@
 - **可观测**：结构化 JSON 日志（自动脱敏）+ trace/span + RunMetrics。
 
 ### 工程
-- 无密钥、离线、确定性可端到端跑通；当前测试 174 passed。
+- 无密钥、离线、确定性可端到端跑通；当前测试 180 passed。
 - 参考交易所锁定 Binance；OKX 等推到 M4「多所」。
 
 [未发布]: https://example.com/cyp-agent

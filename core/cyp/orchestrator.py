@@ -45,7 +45,7 @@ from cyp.portfolio import CorrelationModel, PortfolioTracker, PortfolioView, agg
 from cyp.risk import assess as risk_assess
 from cyp.risk.rules import RiskContext
 
-RunStatus = Literal["no_trade", "rejected", "not_approved", "executed", "error"]
+RunStatus = Literal["no_trade", "rejected", "not_approved", "executed", "execution_failed", "error"]
 
 
 class RunResult(BaseModel):
@@ -178,7 +178,9 @@ class Orchestrator:
                              reports=reports, proposal=proposal, assessment=assessment, decision=decision)
 
         final_prop = decision.modified or proposal
-        final_size = assessment.adjusted_size_quote or final_prop.size_quote
+        final_size = final_prop.size_quote
+        if assessment.adjusted_size_quote is not None:
+            final_size = min(final_size, assessment.adjusted_size_quote)
 
         # ⑦ 执行（幂等 + 入场即挂保护单）
         async with trace.span("execute"):
@@ -194,7 +196,12 @@ class Orchestrator:
         self.memory.append_lessons(review.lessons)
         await self.events.publish("reviewed", run_id, symbol=symbol, review=review.model_dump(mode="json"))
 
-        return RunResult(run_id=run_id, symbol=symbol, status="executed", reports=reports,
+        status: RunStatus = "executed" if execution.status == "filled" else "execution_failed"
+        if status == "execution_failed":
+            await self.alerter.alert("error", "execution_failed", run_id=run_id,
+                                     symbol=symbol, error=execution.error)
+
+        return RunResult(run_id=run_id, symbol=symbol, status=status, reports=reports,
                          proposal=final_prop, assessment=assessment, decision=decision,
                          execution=execution, review=review)
 

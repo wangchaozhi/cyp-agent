@@ -1,6 +1,7 @@
 """FastAPI 服务：REST 端点 + 完整 HTTP 审批闭环。用 httpx ASGI 传输离线跑。"""
 
 import asyncio
+import contextlib
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -28,8 +29,13 @@ class UptrendData:
                               sentiment=SentimentData(fear_greed=20))
 
 
-def _client(app):
-    return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t")
+@contextlib.asynccontextmanager
+async def _client(app):
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c,
+    ):
+        yield c
 
 
 def test_health_and_venues():

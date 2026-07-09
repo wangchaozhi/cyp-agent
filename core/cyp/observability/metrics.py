@@ -18,7 +18,8 @@ class RunMetrics:
     _slippage_n: int = 0
 
     _STATUS_ATTR = {"executed": "executed", "rejected": "rejected",
-                    "not_approved": "not_approved", "no_trade": "no_trade", "error": "errors"}
+                    "not_approved": "not_approved", "no_trade": "no_trade",
+                    "execution_failed": "errors", "error": "errors"}
 
     def record(self, status: str, slippage_bps: Decimal | None = None) -> None:
         self.runs += 1

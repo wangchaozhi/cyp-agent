@@ -12,10 +12,11 @@ run = asyncio.run
 
 
 class FakeOkx:
-    def __init__(self):
+    def __init__(self, none_filled: bool = False):
         self.calls: list[dict] = []
         self.sandbox = False
         self._n = 0
+        self.none_filled = none_filled
 
     def set_sandbox_mode(self, on):        # ccxt 同步方法
         self.sandbox = on
@@ -27,11 +28,22 @@ class FakeOkx:
         params = params or {}
         self.calls.append({"type": type, "side": side, "params": params})
         self._n += 1
+        if self.none_filled and self._n == 1:
+            return {"id": f"okx{self._n}", "average": None, "filled": None,
+                    "status": None, "fee": {"cost": 0}}
         return {"id": f"okx{self._n}", "average": price or 60030, "filled": amount,
                 "status": "closed", "fee": {"cost": 0.3}}
 
     async def set_leverage(self, lev, symbol, params=None):
         self.calls.append({"set_leverage": lev, "params": params or {}})
+
+    async def cancel_order(self, order_id, symbol=None):
+        self.calls.append({"cancel_order": order_id, "symbol": symbol})
+        raise RuntimeError("normal cancel rejected")
+
+    async def privatePostTradeCancelAlgos(self, payload):
+        self.calls.append({"cancel_algos": payload})
+        return {"code": "0", "data": payload}
 
 
 def _okx(fake, sandbox=True):
@@ -67,18 +79,48 @@ def test_okx_spot_uses_tdmode_cash_and_unified_stop_params():
     # 保护单用 OKX 风格的 stopLossPrice / takeProfitPrice
     sl = next(c for c in fake.calls if "stopLossPrice" in c["params"])
     tp = next(c for c in fake.calls if "takeProfitPrice" in c["params"])
-    assert sl["params"]["reduceOnly"] and tp["params"]["reduceOnly"]
+    assert "reduceOnly" not in sl["params"] and "reduceOnly" not in tp["params"]
     assert {p.kind for p in res.protective_orders} == {"stop_loss", "take_profit"}
+    assert not any(p.reduce_only for p in res.protective_orders)
+
+
+def test_okx_client_ids_are_sanitized():
+    fake = FakeOkx()
+    run(_okx(fake).place(_intent(client_id="run-1_with-symbols", take_profit=[])))
+    ids = [c["params"].get("clientOrderId") for c in fake.calls if c["params"].get("clientOrderId")]
+    assert ids
+    assert all(x.isalnum() and len(x) <= 32 for x in ids)
+
+
+def test_okx_market_order_none_filled_falls_back_to_requested_amount():
+    fake = FakeOkx(none_filled=True)
+    res = run(_okx(fake).place(_intent(take_profit=[])))
+    assert res.status == "filled"
+    assert res.filled_base > 0
+    assert res.avg_price is not None
 
 
 def test_okx_perp_sets_leverage_with_mgnmode_and_isolated_tdmode():
     fake = FakeOkx()
     run(_okx(fake).place(_intent(instrument="perp", leverage=3.0, margin_mode="isolated",
-                                 take_profit=[])))
+                                 take_profit=[Decimal("64000")])))
     lev = next(c for c in fake.calls if "set_leverage" in c)
     assert lev["params"]["mgnMode"] == "isolated"     # OKX 杠杆需带 mgnMode
     entry = fake.calls[next(i for i, c in enumerate(fake.calls) if c.get("type") == "market")]
     assert entry["params"]["tdMode"] == "isolated"
+    sl = next(c for c in fake.calls if "stopLossPrice" in c["params"])
+    tp = next(c for c in fake.calls if "takeProfitPrice" in c["params"])
+    assert sl["params"]["reduceOnly"] and tp["params"]["reduceOnly"]
+
+
+def test_okx_cancel_protective_algo_falls_back_to_cancel_algos():
+    fake = FakeOkx()
+    venue = _okx(fake)
+    res = run(venue.place(_intent(take_profit=[])))
+    run(venue.cancel(res.protective_orders[0].order_id))
+    cancel = next(c for c in fake.calls if "cancel_algos" in c)
+    assert cancel["cancel_algos"][0]["algoId"] == res.protective_orders[0].order_id
+    assert cancel["cancel_algos"][0]["instId"] == "BTC-USDT"
 
 
 def test_registry_registers_okx_readonly_without_creds():

@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+import os
+from contextlib import suppress
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -46,6 +48,7 @@ class CexVenue:
         self.caps = VenueCaps(spot=True, perp=True, native_protective_orders=True, read_only=read_only)
         self._client = client            # 注入的假交易所（测试）或惰性构造的 ccxt
         self._fills: dict[str, ExecutionResult] = {}   # client_id -> 结果（幂等）
+        self._protective_symbols: dict[str, str] = {}   # protective order/algo id -> symbol
         self.log = get_logger("cex")
 
     def is_configured(self) -> bool:
@@ -62,6 +65,11 @@ class CexVenue:
                 raise RuntimeError("需要 ccxt：pip install ccxt") from e
             cls = getattr(ccxt, self.id)
             cfg = {"apiKey": self._api_key, "secret": self._api_secret, "enableRateLimit": True}
+            http_proxy = os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy")
+            https_proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+            proxy = https_proxy or http_proxy
+            if proxy:
+                cfg["httpsProxy"] = proxy
             if self._password:
                 cfg["password"] = self._password
             self._client = cls(cfg)
@@ -172,14 +180,22 @@ class CexVenue:
             return self._remember(intent, ExecutionResult(
                 client_id=intent.client_id, status="failed", error=f"下单失败:{e}"))
 
-        filled = Decimal(str(order.get("filled", amount)))
-        avg = Decimal(str(order.get("average") or price))
+        if order.get("id") and (order.get("filled") is None or order.get("average") is None):
+            with suppress(Exception):
+                fetched = await ex.fetch_order(order["id"], intent.symbol)
+                order = {**order, **fetched}
+
+        filled = self._decimal_or(order.get("filled"), Decimal(str(amount)))
+        avg = self._decimal_or(order.get("average"), price)
         fee = Decimal(str((order.get("fee") or {}).get("cost", 0)))
 
         protective: list[ProtectiveOrder] = []
         if not is_close and (intent.stop_loss or intent.take_profit):
             try:
                 protective = await self.adapter.place_protective(ex, intent, filled)
+                for p in protective:
+                    if p.order_id:
+                        self._protective_symbols[p.order_id] = intent.symbol
             except Exception as e:  # noqa: BLE001
                 # ★ 有仓必有保护：保护单失败 → 立即市价平掉裸仓
                 self.log.error("protective_failed_flatten", symbol=intent.symbol, error=str(e))
@@ -195,12 +211,38 @@ class CexVenue:
     async def _flatten(self, ex, intent: OrderIntent, amount: Decimal) -> None:
         close_side = "sell" if intent.side == "long" else "buy"
         params = self.adapter.entry_params(intent, is_close=True)
-        params["clientOrderId"] = f"{intent.client_id}-flat"
+        if self.id == "okx":
+            params["clientOrderId"] = "".join(ch for ch in f"{intent.client_id}flat" if ch.isalnum())[:32]
+        else:
+            params["clientOrderId"] = f"{intent.client_id}-flat"
         await ex.create_order(intent.symbol, "market", close_side, float(amount), None, params)
 
     def _remember(self, intent: OrderIntent, res: ExecutionResult) -> ExecutionResult:
         self._fills[intent.client_id] = res
         return res
 
+    def _decimal_or(self, value, default: Decimal) -> Decimal:
+        if value is None:
+            return default
+        try:
+            return Decimal(str(value))
+        except Exception:  # noqa: BLE001
+            return default
+
     async def cancel(self, order_id: str) -> None:
-        await self._ccxt().cancel_order(order_id)
+        ex = self._ccxt()
+        symbol = self._protective_symbols.get(order_id)
+        try:
+            await ex.cancel_order(order_id, symbol)
+            self._protective_symbols.pop(order_id, None)
+            return
+        except Exception:
+            if self.id != "okx" or not symbol:
+                raise
+        inst_id = self._okx_inst_id(symbol)
+        await ex.privatePostTradeCancelAlgos([{"algoId": order_id, "instId": inst_id}])
+        self._protective_symbols.pop(order_id, None)
+
+    def _okx_inst_id(self, symbol: str) -> str:
+        base = symbol.split(":")[0].replace("/", "-")
+        return f"{base}-SWAP" if ":USDT" in symbol else base

@@ -55,6 +55,10 @@ def _summary(res: RunResult) -> None:
         print(f"  保护单：{[(p.kind, str(p.trigger_price)) for p in e.protective_orders]}")
         if res.review and res.review.lessons:
             print(f"  复盘经验：{res.review.lessons}")
+    elif res.status == "execution_failed":
+        print(f"  执行失败：{res.execution.error if res.execution else res.error}")
+        if res.review and res.review.lessons:
+            print(f"  复盘经验：{res.review.lessons}")
     elif res.status == "rejected":
         print(f"  风控否决：{res.assessment.hard_violations}")
     elif res.status == "not_approved":
@@ -62,6 +66,18 @@ def _summary(res: RunResult) -> None:
     elif res.status == "no_trade":
         print("  信号不足，本轮不开仓。")
     print("-" * 56)
+
+
+async def _close_venues(venues: list) -> None:
+    seen: set[int] = set()
+    for venue in venues:
+        marker = id(venue)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        close = getattr(venue, "close", None)
+        if close is not None:
+            await close()
 
 
 def _build(args, settings: Settings) -> Orchestrator:
@@ -103,14 +119,17 @@ def main(argv: list[str] | None = None) -> int:
     print(f"cyp-agent · mode={settings.mode} · llm={'on' if settings.llm_enabled else 'off(规则降级)'} "
           f"· data={args.data} · approve={args.approve}")
     orch = _build(args, settings)
-    if args.loop > 0:
-        from cyp.runtime import build_engine
-        engine = build_engine(settings, orch, orch.venue, events=orch.events)
-        asyncio.run(engine.run_bounded(scan_cycles=args.loop, monitor_cycles=1))
-        print(f"\n运行时跑完 {args.loop} 轮扫描。指标：{orch.metrics.snapshot()}")
-    else:
-        res = asyncio.run(orch.run_once(args.symbol))
-        _summary(res)
+    try:
+        if args.loop > 0:
+            from cyp.runtime import build_engine
+            engine = build_engine(settings, orch, orch.venue, events=orch.events)
+            asyncio.run(engine.run_bounded(scan_cycles=args.loop, monitor_cycles=1))
+            print(f"\n运行时跑完 {args.loop} 轮扫描。指标：{orch.metrics.snapshot()}")
+        else:
+            res = asyncio.run(orch.run_once(args.symbol))
+            _summary(res)
+    finally:
+        asyncio.run(_close_venues(orch.risk_venues))
     return 0
 
 

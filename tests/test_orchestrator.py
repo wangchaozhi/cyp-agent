@@ -6,7 +6,14 @@ from decimal import Decimal
 
 from cyp.approval import AutoApprove, AutoReject
 from cyp.config import Settings
-from cyp.contracts import Candle, DerivativesData, MarketSnapshot, SentimentData
+from cyp.contracts import (
+    ApprovalDecision,
+    Candle,
+    DerivativesData,
+    ExecutionResult,
+    MarketSnapshot,
+    SentimentData,
+)
 from cyp.events import EventBus
 from cyp.orchestrator import Orchestrator
 from cyp.venue import PaperVenue
@@ -85,3 +92,39 @@ def test_synthetic_run_does_not_crash():
     res = run(orch.run_once("BTC/USDT"))
     assert res.status in ("executed", "no_trade", "rejected")
     assert len(res.reports) == 4
+
+
+class ModifySmall:
+    async def decide(self, proposal, assessment, run_id=""):
+        modified = proposal.model_copy(update={"size_quote": Decimal("100")})
+        return ApprovalDecision(decision="modify", modified=modified, operator="test")
+
+
+class CapturingVenue(PaperVenue):
+    def __init__(self):
+        super().__init__()
+        self.last_size = None
+
+    async def place(self, intent):
+        self.last_size = intent.size_quote
+        return await super().place(intent)
+
+
+def test_manual_modify_below_risk_downsize_is_honored():
+    venue = CapturingVenue()
+    orch = _orch(venue=venue, approval=ModifySmall())
+    res = run(orch.run_once("BTC/USDT"))
+    assert res.status == "executed"
+    assert venue.last_size == Decimal("100")
+
+
+class FailingVenue(PaperVenue):
+    async def place(self, intent):
+        return ExecutionResult(client_id=intent.client_id, status="failed", error="boom")
+
+
+def test_execution_failure_is_not_marked_executed():
+    orch = _orch(venue=FailingVenue(), approval=AutoApprove())
+    res = run(orch.run_once("BTC/USDT"))
+    assert res.status == "execution_failed"
+    assert res.execution.status == "failed"

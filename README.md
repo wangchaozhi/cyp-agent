@@ -11,7 +11,7 @@
 | M0 骨架闭环 | 已完成：无密钥离线跑通 7 步闭环，含 CLI、审批门、FastAPI、SSE、仪表盘、Kill Switch |
 | M1 永续合约 | 已完成模拟盘侧保证金、杠杆、爆仓缓冲、逐仓与维持保证金护栏 |
 | M2 CEX 实盘 | 离线实现完成：ccxt 下单、保护单、LiveGuard、熔断、告警；真实网络 Testnet/小额实操仍需凭据验证 |
-| M4 多所与组合 | 部分完成：Binance/OKX 适配、OKX Demo、跨所行情聚合、组合级风控与组合面板 |
+| M4 多所与组合 | 部分完成：Binance/OKX 适配、OKX Demo 已实测、跨所行情聚合、组合级风控与组合面板 |
 | M5 回测与择优 | 部分完成：合成历史回放、同管线回测、扫参、样本外验证与 PBO/DSR 基础件 |
 | Q1 量化内核 | 部分完成：walk-forward、purged K-fold、PBO、PSR/DSR/MinTRL、EWMA 波动率、VaR/CVaR 护栏 |
 
@@ -77,6 +77,15 @@ python -m cyp.cli --loop 3 --approve auto
 # OKX Demo 模拟交易；需要 OKX Demo API key/secret/passphrase
 python -m cyp.cli --venue okx --data cex --approve cli
 ```
+
+OKX Demo smoke test 已实测覆盖：
+
+- 配置加载与私有余额接口（验证 key / secret / passphrase 可用，不打印密钥）
+- `BTC/USDT` 现货小额 Demo 下单（示例验证规模 20 USDT）
+- OKX 条件保护单（止损/止盈）创建、查询、取消
+- 测试仓位卖回清理；最终普通挂单与 conditional algo 单均为 0
+
+安全注意：OKX Demo API 也只应授予「读取 + 交易」，不要开启提现；`.env` 不入库。
 
 ## 服务与仪表盘
 

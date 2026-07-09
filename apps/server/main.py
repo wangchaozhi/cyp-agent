@@ -60,6 +60,24 @@ class BacktestRequest(BaseModel):
     vol: float = Field(default=0.01, gt=0, le=0.2)
 
 
+async def _close_app_resources(app: FastAPI) -> None:
+    for task in list(app.state.tasks):
+        task.cancel()
+    if app.state.tasks:
+        await asyncio.gather(*app.state.tasks, return_exceptions=True)
+
+    seen: set[int] = set()
+    venues = [app.state.venue, *app.state.registry.all()]
+    for v in venues:
+        marker = id(v)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        close = getattr(v, "close", None)
+        if close is not None:
+            await close()
+
+
 def create_app(settings: Settings | None = None, data_source=None, venue=None) -> FastAPI:
     settings = settings or get_settings()
     events = EventBus()
@@ -72,7 +90,12 @@ def create_app(settings: Settings | None = None, data_source=None, venue=None) -
     orch = Orchestrator(settings=settings, data_source=data, venue=venue, events=events,
                         approval=gate, risk_venues=[venue, *others])
 
-    app = FastAPI(title="cyp-agent", version="0.1.0")
+    @contextlib.asynccontextmanager
+    async def lifespan(app: FastAPI):
+        yield
+        await _close_app_resources(app)
+
+    app = FastAPI(title="cyp-agent", version="0.1.0", lifespan=lifespan)
     app.state.settings = settings
     app.state.orch = orch
     app.state.gate = gate
