@@ -61,6 +61,10 @@ def test_exit_short_hits_stop_then_tp():
     assert bt._exit_price(_bar(101, 89)) == Decimal("90")     # 空头止盈在下
 
 
+def test_exit_without_active_trade_is_safe():
+    assert _bt()._exit_price(_bar(101, 99)) is None
+
+
 def test_close_realizes_pnl_and_clears_active():
     bt = _bt()
     bt.venue.set_mark_price("BTC/USDT", Decimal("100"))

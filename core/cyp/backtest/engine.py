@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from cyp.agents import StrategyConfig
 from cyp.approval import AutoApprove
@@ -28,7 +28,7 @@ class BacktestReport(BaseModel):
     metrics: dict
     trades: list[dict]
     equity_curve: list[float]
-    lessons: list[str] = []          # 回测全程复盘官沉淀的经验（供策略择优参考）
+    lessons: list[str] = Field(default_factory=list)  # 回测全程复盘官沉淀的经验
 
 
 class Backtester:
@@ -64,12 +64,18 @@ class Backtester:
 
             if not self.active:                     # 空仓才找新机会（单持仓）
                 res = await self.orch.run_once(self.symbol, run_id=f"bt{i}")
-                if res.status == "executed" and res.proposal.side in ("long", "short"):
+                if res.status == "executed":
+                    proposal = res.proposal
+                    execution = res.execution
+                    if proposal is None or execution is None or execution.avg_price is None:
+                        raise RuntimeError("executed 回测结果缺少 proposal/execution/avg_price")
+                    if proposal.side not in ("long", "short"):
+                        raise RuntimeError("executed 回测结果必须包含 long/short 提案")
                     self.active = {
-                        "side": res.proposal.side, "instrument": res.proposal.instrument,
-                        "entry": res.execution.avg_price, "size_base": res.execution.filled_base,
-                        "stop": res.proposal.stop_loss,
-                        "tp": res.proposal.take_profit[0] if res.proposal.take_profit else None,
+                        "side": proposal.side, "instrument": proposal.instrument,
+                        "entry": execution.avg_price, "size_base": execution.filled_base,
+                        "stop": proposal.stop_loss,
+                        "tp": proposal.take_profit[0] if proposal.take_profit else None,
                         "bar_in": i,
                     }
 
@@ -88,6 +94,8 @@ class Backtester:
 
     def _exit_price(self, bar: Candle) -> Decimal | None:
         a = self.active
+        if a is None:
+            return None
         if a["side"] == "long":
             if a["stop"] is not None and bar.low <= a["stop"]:
                 return a["stop"]
@@ -102,6 +110,8 @@ class Backtester:
 
     async def _close(self, price: Decimal, i: int) -> None:
         a = self.active
+        if a is None:
+            raise RuntimeError("没有可平的回测持仓")
         self.venue.set_mark_price(self.symbol, price)
         res = await self.venue.place(OrderIntent(
             client_id=f"bt-close-{i}", symbol=self.symbol, venue="paper", side=a["side"],

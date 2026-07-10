@@ -315,18 +315,15 @@ def create_app(settings: Settings | None = None, data_source=None, venue=None) -
     @app.get("/api/market")
     async def market(symbol: str | None = None):
         sym = symbol or settings.watchlist_symbols()[0]
-        tickers = await aggregator.tickers(sym)
-        buy_v, buy_p = await aggregator.best_venue(sym, "long")
-        sell_v, sell_p = await aggregator.best_venue(sym, "short")
-        spread = await aggregator.spread_bps(sym)
-        funding = await aggregator.funding_rates(sym)
-        hints = await aggregator.arb_hints(sym)
-        return {"symbol": sym, "tickers": {k: str(v) for k, v in tickers.items()},
+        summary = await aggregator.summary(sym)
+        buy_v, buy_p = summary.best_buy
+        sell_v, sell_p = summary.best_sell
+        return {"symbol": sym, "tickers": {k: str(v) for k, v in summary.tickers.items()},
                 "best_buy": {"venue": buy_v, "price": str(buy_p) if buy_p else None},
                 "best_sell": {"venue": sell_v, "price": str(sell_p) if sell_p else None},
-                "spread_bps": str(spread) if spread is not None else None,
-                "funding_rates": {k: str(v) for k, v in funding.items()},
-                "arb_hints": hints}
+                "spread_bps": str(summary.spread_bps) if summary.spread_bps is not None else None,
+                "funding_rates": {k: str(v) for k, v in summary.funding_rates.items()},
+                "arb_hints": summary.arb_hints}
 
     @app.get("/api/positions")
     async def positions():

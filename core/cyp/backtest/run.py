@@ -11,11 +11,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import contextlib
-import sys
 
 from cyp.backtest import Backtester
 from cyp.config import Settings
+from cyp.console import configure_utf8_stdio
 from cyp.data import SyntheticMarketData
 
 
@@ -32,9 +31,7 @@ async def load_real_candles(exchange_id: str, symbol: str, timeframe: str, bars:
 
 
 def main(argv: list[str] | None = None) -> int:
-    for stream in (sys.stdout, sys.stderr):
-        with contextlib.suppress(Exception):
-            stream.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+    configure_utf8_stdio()
 
     parser = argparse.ArgumentParser(prog="cyp-backtest", description="cyp-agent 回测（合成/真实历史）")
     parser.add_argument("--symbol", default="BTC/USDT")

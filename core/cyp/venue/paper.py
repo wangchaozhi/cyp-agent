@@ -19,12 +19,12 @@ from cyp.contracts import (
     Position,
     ProtectiveOrder,
 )
-from cyp.venue.base import PreflightReport, VenueCaps
+from cyp.venue.base import PreflightReport, VenueCaps, VenueKind
 
 
 class PaperVenue:
     id = "paper"
-    kind = "paper"
+    kind: VenueKind = "paper"
 
     def __init__(
         self,

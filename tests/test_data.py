@@ -128,3 +128,35 @@ def test_cex_snapshot_partial_derivatives_ok():
     d = snap.derivatives
     assert d is not None and d.funding_rate == Decimal("0.0004")
     assert d.open_interest is None and d.long_short_ratio is None
+
+
+def test_cex_snapshot_loads_independent_dimensions_concurrently():
+    async def scenario():
+        ready = asyncio.Event()
+        started = 0
+
+        class CoordinatedVenue:
+            id = "coordinated"
+
+            async def _rendezvous(self):
+                nonlocal started
+                started += 1
+                if started == 2:
+                    ready.set()
+                await asyncio.wait_for(ready.wait(), timeout=0.5)
+
+            async def fetch_ohlcv(self, symbol, timeframe="1h", limit=200):
+                await self._rendezvous()
+                now = datetime.now(timezone.utc)
+                return [Candle(ts=now, open=Decimal("100"), high=Decimal("101"),
+                               low=Decimal("99"), close=Decimal("100"), volume=Decimal("1"))]
+
+            async def fetch_orderbook(self, symbol, depth=20):
+                await self._rendezvous()
+                return OrderBook()
+
+        return await CexMarketData(CoordinatedVenue()).snapshot("BTC/USDT")
+
+    snap = asyncio.run(scenario())
+    assert len(snap.ohlcv) == 1
+    assert snap.orderbook == OrderBook()

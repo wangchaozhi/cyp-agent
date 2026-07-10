@@ -61,6 +61,14 @@ def test_vol_stop_mode_differs_from_atr():
 def test_vol_target_sizes_by_target_over_sigma():
     snap = _snap_uptrend()
     sigma = ewma_volatility(simple_returns(snap.ohlcv))
-    p = run(Strategist(StrategyConfig(vol_target=0.02)).run(_bull(), snap, Decimal("10000"), CFG, _ctx()))
-    expected = Decimal("10000") * Decimal("0.02") / Decimal(str(sigma))
+    # 放宽单仓上限，让波动目标公式成为约束项
+    cfg = RiskConfig(_env_file=None, max_position_pct=Decimal("100"))
+    p = run(Strategist(StrategyConfig(vol_target=0.02)).run(_bull(), snap, Decimal("10000"), cfg, _ctx()))
+    expected = Decimal("10000") * Decimal("0.02") / Decimal(str(sigma)) * Decimal("0.995")
     assert abs(p.size_quote - expected.quantize(Decimal("0.01"))) < Decimal("1")
+
+
+def test_vol_target_size_clamped_by_position_cap():
+    snap = _snap_uptrend()
+    p = run(Strategist(StrategyConfig(vol_target=0.02)).run(_bull(), snap, Decimal("10000"), CFG, _ctx()))
+    assert p.size_quote <= Decimal("10000") * CFG.max_position_pct

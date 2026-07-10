@@ -25,11 +25,11 @@ from cyp.contracts import (
 )
 from cyp.observability import get_logger
 from cyp.venue.adapters import get_adapter
-from cyp.venue.base import PreflightReport, VenueCaps
+from cyp.venue.base import PreflightReport, VenueCaps, VenueKind
 
 
 class CexVenue:
-    kind = "cex"
+    kind: VenueKind = "cex"
 
     def __init__(self, exchange_id: str = "binance", api_key: str | None = None,
                  api_secret: str | None = None, password: str | None = None,

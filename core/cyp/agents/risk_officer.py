@@ -9,7 +9,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from cyp.agents.base import AgentContext
-from cyp.contracts import AnalystReport, RiskAssessment, TradeProposal
+from cyp.contracts import AnalystReport, RiskAssessment, TradeProposal, Verdict
 
 
 class _RiskReview(BaseModel):
@@ -37,7 +37,10 @@ class RiskOfficer:
         lessons = "；".join(ctx.lessons[-5:]) or "无"
         review = await ctx.llm.json(
             system=("你是加密交易风控官。只能收紧不能放宽：若发现 thesis 不自洽、极端行情/事件窗口、"
-                    "或与已有敞口叠加同向风险，可 escalate_reject=true。给出 0-1 风险分与简短中文说明。"),
+                    "或与已有敞口叠加同向风险，可 escalate_reject=true。"
+                    "注意：置信度已通过策略官的开仓阈值且仓位由确定性护栏约束，"
+                    "「置信度偏低」本身不是否决理由——应体现为抬高 risk_score 而非 escalate_reject。"
+                    "给出 0-1 风险分与简短中文说明。"),
             user=f"提案：{proposal.side} {proposal.symbol} 仓位={proposal.size_quote} "
                  f"止损={proposal.stop_loss} 置信={proposal.confidence:.2f}\n分析：{drivers}\n"
                  f"历史复盘经验：{lessons}",
@@ -46,7 +49,7 @@ class RiskOfficer:
         if review is None:
             return assessment
 
-        verdict = assessment.verdict
+        verdict: Verdict = assessment.verdict
         violations = list(assessment.hard_violations)
         if review.escalate_reject:
             verdict = "rejected"

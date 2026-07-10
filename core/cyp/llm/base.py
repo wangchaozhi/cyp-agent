@@ -118,13 +118,19 @@ class ResilientLLM:
     # ---- 公开接口 ----------------------------------------------------------
 
     async def text(self, *, system: str, user: str, fast: bool = False) -> str | None:
+        provider = self.provider
+        if provider is None:
+            return None
         model = self.model_fast if fast else self.model
-        return await self._call(lambda: self.provider.text(system=system, user=user, model=model))
+        return await self._call(lambda: provider.text(system=system, user=user, model=model))
 
     async def json(self, *, system: str, user: str, schema: type[T], fast: bool = False) -> T | None:
+        provider = self.provider
+        if provider is None:
+            return None
         model = self.model_fast if fast else self.model
         raw = await self._call(
-            lambda: self.provider.json(system=system, user=user, schema=schema.model_json_schema(), model=model)
+            lambda: provider.json(system=system, user=user, schema=schema.model_json_schema(), model=model)
         )
         if raw is None:
             return None

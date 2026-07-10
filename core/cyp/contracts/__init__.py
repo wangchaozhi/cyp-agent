@@ -8,6 +8,7 @@
 """
 
 from cyp.contracts.models import (
+    AgentId,
     AnalystReport,
     ApprovalDecision,
     Balances,
@@ -26,9 +27,11 @@ from cyp.contracts.models import (
     Signal,
     TradeProposal,
     TradeReview,
+    Verdict,
 )
 
 __all__ = [
+    "AgentId",
     "AnalystReport",
     "ApprovalDecision",
     "Balances",
@@ -47,4 +50,5 @@ __all__ = [
     "Signal",
     "TradeProposal",
     "TradeReview",
+    "Verdict",
 ]

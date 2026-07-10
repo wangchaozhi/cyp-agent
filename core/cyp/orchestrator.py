@@ -14,7 +14,7 @@ import uuid
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from cyp.agents import (
     ANALYSTS,
@@ -53,7 +53,7 @@ class RunResult(BaseModel):
     run_id: str
     symbol: str
     status: RunStatus
-    reports: list[AnalystReport] = []
+    reports: list[AnalystReport] = Field(default_factory=list)
     proposal: TradeProposal | None = None
     assessment: RiskAssessment | None = None
     decision: ApprovalDecision | None = None
@@ -131,7 +131,9 @@ class Orchestrator:
             results = await asyncio.gather(*(a.run(snap, ctx) for a in ANALYSTS), return_exceptions=True)
         reports: list[AnalystReport] = []
         for a, r in zip(ANALYSTS, results, strict=False):
-            if isinstance(r, Exception):
+            if isinstance(r, asyncio.CancelledError):
+                raise r
+            if isinstance(r, BaseException):
                 reports.append(AnalystReport(agent=a.id, stance="neutral", confidence=0.0,
                                              rationale=f"分析失败：{r}", degraded=True))
             else:

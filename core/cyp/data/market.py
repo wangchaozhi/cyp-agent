@@ -42,12 +42,21 @@ class CexMarketData:
         self.venue = venue
 
     async def snapshot(self, symbol: str) -> MarketSnapshot:
-        candles = await self.venue.fetch_ohlcv(symbol, "1h", 200)
-        try:
-            ob: OrderBook | None = await self.venue.fetch_orderbook(symbol)
-        except Exception:
-            ob = None
-        derivatives = await self._derivatives(symbol) if ":" in symbol else None
+        async def load_orderbook() -> OrderBook | None:
+            try:
+                return await self.venue.fetch_orderbook(symbol)
+            except Exception:  # noqa: BLE001 —— 盘口缺失不阻断 K 线主数据
+                return None
+
+        async def load_derivatives() -> DerivativesData | None:
+            return await self._derivatives(symbol) if ":" in symbol else None
+
+        # 三个独立网络维度并发；K 线仍是必须项，盘口/衍生品各自降级。
+        candles, ob, derivatives = await asyncio.gather(
+            self.venue.fetch_ohlcv(symbol, "1h", 200),
+            load_orderbook(),
+            load_derivatives(),
+        )
         return MarketSnapshot(symbol=symbol, venue=self.venue.id, ohlcv=candles,
                               orderbook=ob, derivatives=derivatives)
 
@@ -55,20 +64,20 @@ class CexMarketData:
         if not hasattr(self.venue, "fetch_funding_rate"):
             return None
 
-        async def _get(name: str):
+        async def _get(name: str) -> Decimal | None:
             fn = getattr(self.venue, name, None)
             return await fn(symbol) if fn else None
 
-        funding, oi, lsr = await asyncio.gather(
+        funding_result, oi_result, lsr_result = await asyncio.gather(
             _get("fetch_funding_rate"), _get("fetch_open_interest"),
             _get("fetch_long_short_ratio"), return_exceptions=True)
-        funding = None if isinstance(funding, BaseException) else funding
-        if funding is None:      # 分析师以资金费为主信号，缺失即视为无衍生品数据
+        if isinstance(funding_result, BaseException) or funding_result is None:
+            # 分析师以资金费为主信号，缺失即视为无衍生品数据
             return None
         return DerivativesData(
-            funding_rate=funding,
-            open_interest=None if isinstance(oi, BaseException) else oi,
-            long_short_ratio=None if isinstance(lsr, BaseException) else lsr)
+            funding_rate=funding_result,
+            open_interest=None if isinstance(oi_result, BaseException) else oi_result,
+            long_short_ratio=None if isinstance(lsr_result, BaseException) else lsr_result)
 
 
 class SyntheticMarketData:

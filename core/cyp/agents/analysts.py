@@ -7,14 +7,21 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from typing import Protocol
 
 from cyp.agents.base import AgentContext, Vote, blend
-from cyp.contracts import AnalystReport, MarketSnapshot, Signal
+from cyp.contracts import AgentId, AnalystReport, MarketSnapshot, Signal
 from cyp.data import indicator_snapshot
 
 
+class Analyst(Protocol):
+    id: AgentId
+
+    async def run(self, snap: MarketSnapshot, ctx: AgentContext) -> AnalystReport: ...
+
+
 class TechnicalAnalyst:
-    id = "technical"
+    id: AgentId = "technical"
 
     async def run(self, snap: MarketSnapshot, ctx: AgentContext) -> AnalystReport:
         ind = indicator_snapshot(snap.ohlcv)
@@ -52,7 +59,7 @@ class TechnicalAnalyst:
 
 
 class DerivativesAnalyst:
-    id = "derivatives"
+    id: AgentId = "derivatives"
 
     async def run(self, snap: MarketSnapshot, ctx: AgentContext) -> AnalystReport:
         d = snap.derivatives
@@ -80,7 +87,7 @@ class DerivativesAnalyst:
 
 
 class SentimentAnalyst:
-    id = "sentiment"
+    id: AgentId = "sentiment"
 
     async def run(self, snap: MarketSnapshot, ctx: AgentContext) -> AnalystReport:
         s = snap.sentiment
@@ -104,7 +111,7 @@ class SentimentAnalyst:
 
 
 class OnchainAnalyst:
-    id = "onchain"
+    id: AgentId = "onchain"
 
     async def run(self, snap: MarketSnapshot, ctx: AgentContext) -> AnalystReport:
         o = snap.onchain
@@ -126,4 +133,6 @@ class OnchainAnalyst:
                              signals=[v.signal for v in votes], rationale="链上：聪明钱流向")
 
 
-ANALYSTS = [TechnicalAnalyst(), DerivativesAnalyst(), SentimentAnalyst(), OnchainAnalyst()]
+ANALYSTS: tuple[Analyst, ...] = (
+    TechnicalAnalyst(), DerivativesAnalyst(), SentimentAnalyst(), OnchainAnalyst()
+)

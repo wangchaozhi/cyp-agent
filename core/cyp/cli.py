@@ -10,13 +10,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import contextlib
-import sys
 
-from cyp.approval import AutoApprove, wrap_with_policy
+from cyp.approval import ApprovalGate, AutoApprove, wrap_with_policy
 from cyp.approval.cli import CLIApprovalGate
 from cyp.config import Settings
-from cyp.data import CexMarketData, SyntheticMarketData
+from cyp.console import configure_utf8_stdio
+from cyp.data import CexMarketData, MarketDataSource, SyntheticMarketData
 from cyp.events import EventBus
 from cyp.orchestrator import Orchestrator, RunResult
 from cyp.venue import PaperVenue, build_registry
@@ -50,9 +49,13 @@ def _summary(res: RunResult) -> None:
     print("\n" + "-" * 56)
     print(f"结果：{res.status}   run_id={res.run_id}   symbol={res.symbol}")
     if res.status == "executed":
+        p = res.proposal
         e = res.execution
-        print(f"  已在模拟盘成交：{res.proposal.side} 均价={e.avg_price} 滑点={e.slippage_bps}bps")
-        print(f"  保护单：{[(p.kind, str(p.trigger_price)) for p in e.protective_orders]}")
+        if p is None or e is None:
+            print("  执行结果不完整，请检查 run 日志。")
+            return
+        print(f"  已成交：{p.side} 均价={e.avg_price} 滑点={e.slippage_bps}bps")
+        print(f"  保护单：{[(order.kind, str(order.trigger_price)) for order in e.protective_orders]}")
         if res.review and res.review.lessons:
             print(f"  复盘经验：{res.review.lessons}")
     elif res.status == "execution_failed":
@@ -60,7 +63,8 @@ def _summary(res: RunResult) -> None:
         if res.review and res.review.lessons:
             print(f"  复盘经验：{res.review.lessons}")
     elif res.status == "rejected":
-        print(f"  风控否决：{res.assessment.hard_violations}")
+        violations = res.assessment.hard_violations if res.assessment else ["风控结果缺失"]
+        print(f"  风控否决：{violations}")
     elif res.status == "not_approved":
         print("  人工拒绝，未下单。")
     elif res.status == "no_trade":
@@ -83,10 +87,12 @@ async def _close_venues(venues: list) -> None:
 def _build(args, settings: Settings) -> Orchestrator:
     registry = build_registry(settings)
     venue = PaperVenue() if args.venue == "paper" else registry.get(args.venue)
+    data: MarketDataSource
     if args.data == "cex":
         data = CexMarketData(registry.get(settings.cex_id))
     else:
         data = SyntheticMarketData()
+    approval: ApprovalGate
     if args.approve == "auto":
         approval = AutoApprove()                     # 显式 --approve auto：无条件放行（演示）
     else:
@@ -101,9 +107,7 @@ def _build(args, settings: Settings) -> Orchestrator:
 
 def main(argv: list[str] | None = None) -> int:
     # Windows 控制台常为 GBK，重配为 UTF-8 以正确输出步骤符号与中文
-    for stream in (sys.stdout, sys.stderr):
-        with contextlib.suppress(Exception):
-            stream.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+    configure_utf8_stdio()
     settings = Settings()
     from cyp.observability import configure_logging
     configure_logging(settings.log_level)

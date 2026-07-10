@@ -77,21 +77,70 @@ def _bullish_reports():
 def test_strategist_goes_long_and_sizes_by_risk_budget():
     s = snap()
     equity = Decimal("10000")
-    prop = run(Strategist().run(_bullish_reports(), s, equity, CFG, ctx()))
+    # 放宽单仓上限，让风险预算成为约束项，验证「size = 预算 / 止损距离」
+    cfg = RiskConfig(_env_file=None, max_position_pct=Decimal("1.0"))
+    prop = run(Strategist().run(_bullish_reports(), s, equity, cfg, ctx()))
     assert prop.side == "long"
     assert prop.size_quote > 0
     assert prop.stop_loss is not None and prop.stop_loss < Decimal(str(s.ohlcv[-1].close))
-    # 单笔风险 = size × 止损距离占比 应 ≈ 账户 × 1% = 100（允许量化误差）
+    # 单笔风险 = size × 止损距离占比 应 ≈ 账户 × 1% = 100（含 0.995 安全边际与量化误差）
     ref = Decimal(str(s.ohlcv[-1].close))
     stop_frac = abs(ref - prop.stop_loss) / ref
     risk = prop.size_quote * stop_frac
     assert abs(risk - Decimal("100")) < Decimal("2")
+    assert risk <= Decimal("100")            # 永不超预算（主动贴合护栏）
+
+
+def test_strategist_clamps_size_to_position_cap():
+    s = snap()
+    equity = Decimal("10000")
+    prop = run(Strategist().run(_bullish_reports(), s, equity, CFG, ctx()))
+    cap = equity * CFG.max_position_pct     # 默认 20% → 2000
+    assert prop.side == "long"
+    assert prop.size_quote <= cap           # 止损近 → 预算反推超上限 → 夹到单仓上限
 
 
 def test_strategist_flat_on_weak_signal():
     weak = [AnalystReport(agent="technical", stance="neutral", confidence=0.1)]
     prop = run(Strategist().run(weak, snap(), Decimal("10000"), CFG, ctx()))
     assert prop.side == "flat" and prop.size_quote == 0
+
+
+def _bearish_reports():
+    return [
+        AnalystReport(agent="technical", stance="bearish", confidence=0.8),
+        AnalystReport(agent="derivatives", stance="bearish", confidence=0.7),
+    ]
+
+
+def _perp_snap() -> MarketSnapshot:
+    return run(SyntheticMarketData().snapshot("BTC/USDT:USDT"))
+
+
+def test_strategist_uses_perp_for_perp_symbol_even_at_low_confidence():
+    # 永续符号 + 低置信：工具必须是 perp（现货参数下单必被交易所拒），杠杆保持 1x
+    weak_bear = [AnalystReport(agent="technical", stance="bearish", confidence=0.2)]
+    settings = Settings(_env_file=None, allow_perp=True)
+    c = AgentContext(llm=build_llm(settings), settings=settings)
+    prop = run(Strategist().run(weak_bear, _perp_snap(), Decimal("10000"), CFG, c))
+    assert prop.side == "short"
+    assert prop.instrument == "perp"
+    assert prop.leverage == 1.0
+
+
+def test_strategist_flat_on_perp_symbol_when_perp_disallowed():
+    settings = Settings(_env_file=None, allow_perp=False)
+    c = AgentContext(llm=build_llm(settings), settings=settings)
+    prop = run(Strategist().run(_bearish_reports(), _perp_snap(), Decimal("10000"), CFG, c))
+    assert prop.side == "flat"
+    assert "allow_perp" in prop.thesis
+
+
+def test_strategist_flat_on_short_spot():
+    # 现货符号 + 看空 + 不允许合约：无法裸卖空 → 观望
+    prop = run(Strategist().run(_bearish_reports(), snap(), Decimal("10000"), CFG, ctx()))
+    assert prop.side == "flat"
+    assert "卖空" in prop.thesis
 
 
 def test_strategist_avoids_adding_to_same_direction_position():

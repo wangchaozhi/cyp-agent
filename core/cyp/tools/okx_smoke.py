@@ -13,12 +13,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import contextlib
-import sys
 import time
 from decimal import Decimal
 
 from cyp.config import Settings
+from cyp.console import configure_utf8_stdio
 from cyp.contracts import OrderIntent
 from cyp.venue import CexVenue
 
@@ -130,9 +129,7 @@ async def smoke(symbol: str, size_quote: Decimal) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    for stream in (sys.stdout, sys.stderr):
-        with contextlib.suppress(Exception):
-            stream.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+    configure_utf8_stdio()
     parser = argparse.ArgumentParser(prog="okx-smoke", description="OKX Demo 联网 smoke 实测")
     parser.add_argument("--symbol", default="BTC/USDT")
     parser.add_argument("--size", type=float, default=10.0, help="名义规模（USDT）")
