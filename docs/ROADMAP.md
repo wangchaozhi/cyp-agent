@@ -76,6 +76,7 @@
 当前 `config.LiveExecutionSupported` 为 `false`。以下项目全部完成、独立审计并通过验收后，才可讨论修改：
 
 - [ ] 持久化 OrderIntent/Order/Ack/Fill/Cancel 状态机，所有转移可幂等重放。
+  - `internal/orders` 已提供合法转移表、append-only 事件日志、幂等重放与 Unresolved 清单，并接入 paper 执行路径；剩余工作：事件日志落库（orders/order_events 表）与真实场所对账消费。
 - [ ] Binance 与 OKX 的远端订单、成交、余额、仓位和保护单对账。
 - [ ] 下单超时后的未知状态处理，禁止盲目重试。
 - [ ] 原生止损/止盈创建失败后的确定性补救与人工告警。

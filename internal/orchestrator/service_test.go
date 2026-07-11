@@ -281,6 +281,40 @@ func TestStartAsyncLifecycleAndClose(t *testing.T) {
 	}
 }
 
+func TestExecutedRunJournalsOrderLifecycle(t *testing.T) {
+	harness := newHarness(t, func(settings *config.Settings) {
+		settings.Approval = "auto"
+		settings.AutoSymbols = "BTC/USDT"
+		settings.AutoMaxRiskScore = 1
+		settings.AutoMaxQuote = contracts.MustDecimal("10000")
+	}, orchestrator.WithDataSource(bullishSource{}))
+
+	result := harness.service.RunOnce(context.Background(), "run-journal", "BTC/USDT")
+	if result.Status != contracts.RunExecuted {
+		t.Fatalf("status = %s, error = %v", result.Status, result.Error)
+	}
+	order, ok := harness.service.Order("run-journal")
+	if !ok {
+		t.Fatal("executed run left no order in the journal")
+	}
+	wantStatus := contracts.OrderStatusFilled
+	if len(result.Execution.ProtectiveOrders) > 0 {
+		wantStatus = contracts.OrderStatusProtectivePlaced
+	}
+	if order.Status != wantStatus {
+		t.Fatalf("journaled status = %s, want %s", order.Status, wantStatus)
+	}
+	if len(order.Events) < 3 {
+		t.Fatalf("expected open/submit/result events, got %d", len(order.Events))
+	}
+	for _, unresolved := range harness.service.UnresolvedOrders() {
+		if unresolved.ClientID == "run-journal" && wantStatus == contracts.OrderStatusFilled {
+			// filled without protective orders stays unresolved by design
+			return
+		}
+	}
+}
+
 // TestStartSerializesOnSharedSymbolLocks proves that a lock held by an
 // external runtime caller (scanner, close, reconciliation) delays the
 // orchestrator run for the same symbol until the lock is released.

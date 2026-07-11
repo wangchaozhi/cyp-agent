@@ -23,6 +23,7 @@ import (
 	"github.com/wangchaozhi/cyp-agent/internal/llm"
 	"github.com/wangchaozhi/cyp-agent/internal/metrics"
 	"github.com/wangchaozhi/cyp-agent/internal/observability"
+	"github.com/wangchaozhi/cyp-agent/internal/orders"
 	"github.com/wangchaozhi/cyp-agent/internal/persistence"
 	"github.com/wangchaozhi/cyp-agent/internal/portfolio"
 	"github.com/wangchaozhi/cyp-agent/internal/risk"
@@ -55,10 +56,11 @@ type Service struct {
 	riskOfficer agents.RiskOfficer
 	reviewer    agents.Reviewer
 
-	ctx    context.Context
-	cancel context.CancelFunc
-	sem    chan struct{}
-	locks  *runtimecore.SymbolLocks
+	ctx     context.Context
+	cancel  context.CancelFunc
+	sem     chan struct{}
+	locks   *runtimecore.SymbolLocks
+	journal *orders.Journal
 
 	mu      sync.RWMutex
 	runs    map[string]contracts.RunResult
@@ -125,6 +127,7 @@ func New(
 		control: state, venue: executionVenue, events: bus, gate: gate, metrics: runMetrics,
 		ctx: ctx, cancel: cancel, sem: make(chan struct{}, concurrency),
 		locks:        runtimecore.NewSymbolLocks(),
+		journal:      orders.NewJournal(),
 		runs:         make(map[string]contracts.RunResult),
 		marks:        make(map[string]contracts.Decimal),
 		dataSource:   data.NewSyntheticMarketData(data.WithLiveTicks(true)),
@@ -527,12 +530,16 @@ func (s *Service) run(ctx context.Context, runID, symbol string) contracts.RunRe
 	if err := s.checkpoint(ctx, runID, "order_intent", orderIntent); err != nil {
 		return fail(result, err)
 	}
+	_ = s.journal.Open(runID+":open", orderIntent)
+	_ = s.journal.Transition(runID+":submit", orderIntent.ClientID, contracts.OrderStatusSubmitting, nil, "")
 	executionSpan := startSpan(ctx, "execution")
 	execution, err := s.venue.Place(ctx, orderIntent)
 	executionSpan.End(err)
 	if err != nil {
+		_ = s.journal.Transition(runID+":fail", orderIntent.ClientID, contracts.OrderStatusFailed, nil, err.Error())
 		return fail(result, fmt.Errorf("execute: %w", err))
 	}
+	s.recordExecution(runID, orderIntent.ClientID, execution)
 	result.Execution = &execution
 	s.events.Emit("executed", runID, map[string]any{"symbol": symbol, "execution": execution})
 	if err := s.checkpoint(ctx, runID, "execution", execution); err != nil {
@@ -627,6 +634,31 @@ func (s *Service) checkNewPosition(settings config.Settings) error {
 		return errors.New("only mode=paper and execution_venue=paper may open positions")
 	}
 	return nil
+}
+
+// recordExecution journals the venue outcome. The journal only accepts legal
+// transitions, so a venue reporting an unexpected status leaves the order in
+// its last consistent state instead of corrupting the log.
+func (s *Service) recordExecution(runID, clientID string, execution contracts.ExecutionResult) {
+	status := execution.Status
+	if !orders.CanTransition(contracts.OrderStatusSubmitting, status) {
+		status = contracts.OrderStatusUnknown
+	}
+	_ = s.journal.Transition(runID+":result", clientID, status, &execution, "")
+	if execution.Status == contracts.OrderStatusFilled && len(execution.ProtectiveOrders) > 0 {
+		_ = s.journal.Transition(runID+":protective", clientID, contracts.OrderStatusProtectivePlaced, nil, "")
+	}
+}
+
+// Order exposes the journaled state of one order for reconciliation and the
+// API layer.
+func (s *Service) Order(clientID string) (orders.Order, bool) {
+	return s.journal.Get(clientID)
+}
+
+// UnresolvedOrders lists journaled orders that still need reconciliation.
+func (s *Service) UnresolvedOrders() []orders.Order {
+	return s.journal.Unresolved()
 }
 
 func (s *Service) checkpoint(ctx context.Context, runID, step string, value any) error {
