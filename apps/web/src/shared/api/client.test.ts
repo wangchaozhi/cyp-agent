@@ -1,0 +1,84 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { cypApi, setApiToken } from "./client";
+
+function fakeStorage(): Storage {
+  const values = new Map<string, string>();
+  return {
+    get length() {
+      return values.size;
+    },
+    clear: () => values.clear(),
+    getItem: (key: string) => values.get(key) ?? null,
+    key: (index: number) => [...values.keys()][index] ?? null,
+    removeItem: (key: string) => void values.delete(key),
+    setItem: (key: string, value: string) => void values.set(key, value),
+  };
+}
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+const fetchMock = vi.fn();
+
+beforeEach(() => {
+  vi.stubGlobal("window", { localStorage: fakeStorage() });
+  vi.stubGlobal("fetch", fetchMock);
+  fetchMock.mockReset();
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+describe("api client authentication", () => {
+  it("sends the stored bearer token only on mutating requests", async () => {
+    setApiToken("  write-secret  ");
+    fetchMock.mockResolvedValue(jsonResponse({ kill: true }));
+
+    await cypApi.setKillSwitch(true);
+    const [, mutateInit] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(new Headers(mutateInit.headers).get("Authorization")).toBe("Bearer write-secret");
+    expect(new Headers(mutateInit.headers).get("Content-Type")).toBe("application/json");
+
+    fetchMock.mockResolvedValue(jsonResponse({ status: "ok" }));
+    await cypApi.health();
+    const [, readInit] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(new Headers(readInit?.headers).get("Authorization")).toBeNull();
+  });
+
+  it("clears the token when set to blank", async () => {
+    setApiToken("write-secret");
+    setApiToken("   ");
+    fetchMock.mockResolvedValue(jsonResponse({ kill: false }));
+
+    await cypApi.setKillSwitch(false);
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(new Headers(init.headers).get("Authorization")).toBeNull();
+  });
+});
+
+describe("api client error handling", () => {
+  it("surfaces the structured detail from error responses", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ detail: "窗口必须小于 bars" }, 422));
+    await expect(
+      cypApi.backtest({ bars: 10, window: 20 } as never),
+    ).rejects.toThrow("窗口必须小于 bars");
+  });
+
+  it("falls back to the HTTP status for empty error bodies", async () => {
+    fetchMock.mockResolvedValue(new Response("", { status: 503 }));
+    await expect(cypApi.health()).rejects.toThrow("HTTP 503");
+  });
+
+  it("encodes query parameters", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ symbol: "BTC/USDT" }));
+    await cypApi.market("BTC/USDT");
+    const [url] = fetchMock.mock.calls[0] as [string];
+    expect(url).toBe("/api/market?symbol=BTC%2FUSDT");
+  });
+});

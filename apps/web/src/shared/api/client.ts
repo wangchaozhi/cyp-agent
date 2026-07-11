@@ -50,12 +50,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   const response = await fetch(path, { ...init, headers });
   if (!response.ok) {
+    // The body can only be consumed once, so read it as text first and only
+    // then try to extract a structured error detail from it.
     let detail = response.statusText;
     try {
-      const body = (await response.json()) as { detail?: string };
-      detail = body.detail || detail;
+      const text = await response.text();
+      detail = text || detail;
+      const body = JSON.parse(text) as { detail?: string };
+      if (body.detail) detail = body.detail;
     } catch {
-      detail = await response.text();
+      // Keep the best detail collected so far.
     }
     throw new Error(detail || `HTTP ${response.status}`);
   }
