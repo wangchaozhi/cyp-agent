@@ -147,6 +147,7 @@ func LoadWithOptions(options LoadOptions) (Settings, error) {
 	setString("CYP_ALERT_WEBHOOK", &settings.AlertWebhook)
 	setString("CYP_EVM_RPC_URL", &settings.EVMRPCURL)
 	setString("CYP_SIGNER", &settings.Signer)
+	setString("CYP_ONCHAIN_DATA_API", &settings.OnchainDataAPI)
 	setString("CYP_WATCHLIST", &settings.Watchlist)
 	setString("CYP_DB_URL", &settings.DBURL)
 	setString("CYP_PERSISTENCE", &settings.Persistence)
@@ -242,6 +243,10 @@ func (s Settings) Validate() error {
 	}
 	if s.Persistence == "postgres" && strings.TrimSpace(s.DBURL) == "" {
 		return errors.New("CYP_DB_URL is required when CYP_PERSISTENCE=postgres")
+	}
+	if api := strings.TrimSpace(s.OnchainDataAPI); api != "" &&
+		!strings.HasPrefix(api, "http://") && !strings.HasPrefix(api, "https://") {
+		return errors.New("CYP_ONCHAIN_DATA_API must be an http(s) URL")
 	}
 	if math.IsNaN(s.AutoMaxRiskScore) || math.IsInf(s.AutoMaxRiskScore, 0) || s.AutoMaxRiskScore < 0 || s.AutoMaxRiskScore > 1 {
 		return errors.New("CYP_AUTO_MAX_RISK_SCORE must be between 0 and 1")

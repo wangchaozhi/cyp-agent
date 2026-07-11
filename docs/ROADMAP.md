@@ -92,6 +92,7 @@
 `internal/venue/onchain.go` 和签名器目前只提供安全抽象与离线测试，不在应用执行链中。后续顺序：
 
 1. 只读 RPC/索引数据和合约白名单。
+   - `CYP_ONCHAIN_DATA_API` 已接线：配置后行情快照通过只读 HTTP 拉取链上指标（`internal/data/onchain.go`），拉取失败自动降级；合约白名单硬护栏已存在于风控层。
 2. 本地开发链与测试网 preflight、精确授权、nonce、确认与 revert 恢复。
 3. KMS/硬件签名器，私钥不进入主进程和 Agent 上下文。
 4. 流动性、价格冲击、gas、MEV 私有路由和合约风险硬护栏。

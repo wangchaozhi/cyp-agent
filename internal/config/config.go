@@ -97,9 +97,10 @@ type Settings struct {
 	OKXPassword      Secret
 	OKXDemo          bool
 
-	AlertWebhook string
-	EVMRPCURL    string
-	Signer       string
+	AlertWebhook   string
+	EVMRPCURL      string
+	Signer         string
+	OnchainDataAPI string
 
 	RuntimeAutostart bool
 	ScanInterval     int

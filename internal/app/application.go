@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -113,6 +114,20 @@ func New(
 			}
 		} else {
 			source = data.NewSyntheticMarketData(data.WithLiveTicks(true))
+		}
+	}
+	if api := strings.TrimSpace(settings.OnchainDataAPI); api != "" {
+		fetcher, fetchErr := data.NewHTTPOnchainFetcher(api, nil)
+		if fetchErr != nil {
+			_ = binance.Close()
+			_ = okx.Close()
+			return nil, fmt.Errorf("configure onchain data API: %w", fetchErr)
+		}
+		source, err = data.NewOnchainEnrichedSource(source, data.NewOnchainDataSource(fetcher))
+		if err != nil {
+			_ = binance.Close()
+			_ = okx.Close()
+			return nil, err
 		}
 	}
 	aggregator := configured.market
