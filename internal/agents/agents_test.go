@@ -103,10 +103,15 @@ func TestAnalystsRuleOutputsAndMissingDataDegrade(t *testing.T) {
 
 	funding := contracts.MustDecimal("0.001")
 	ratio := contracts.MustDecimal("1.20")
+	basis := contracts.MustDecimal("0.01")
+	openInterest := contracts.MustDecimal("123456")
 	derivatives, err := (DerivativesAnalyst{}).Run(context.Background(), contracts.MarketSnapshot{
-		Derivatives: &contracts.DerivativesData{FundingRate: &funding, LongShortRatio: &ratio},
+		Derivatives: &contracts.DerivativesData{
+			FundingRate: &funding, LongShortRatio: &ratio, Basis: &basis, OpenInterest: &openInterest,
+		},
 	}, AgentContext{})
-	if err != nil || derivatives.Stance != contracts.StanceBearish || derivatives.Degraded {
+	if err != nil || derivatives.Stance != contracts.StanceBearish || derivatives.Degraded ||
+		!hasSignal(derivatives.Signals, "basis") || !hasSignal(derivatives.Signals, "open_interest") {
 		t.Fatalf("derivatives = %+v, %v", derivatives, err)
 	}
 
@@ -127,6 +132,15 @@ func TestAnalystsRuleOutputsAndMissingDataDegrade(t *testing.T) {
 	if err != nil || onchain.Stance != contracts.StanceBullish {
 		t.Fatalf("onchain = %+v, %v", onchain, err)
 	}
+}
+
+func hasSignal(signals []contracts.Signal, name string) bool {
+	for _, signal := range signals {
+		if signal.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 type failingAnalyst struct{ id contracts.AgentID }

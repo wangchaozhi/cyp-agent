@@ -72,7 +72,7 @@ type Analyst interface {
 | 项 | 内容 |
 | --- | --- |
 | 输入 | `MarketSnapshot.OHLCV` |
-| 规则 | SMA20/50、MACD/Signal、RSI、布林位置与 ATR 上下文 |
+| 规则 | SMA20/50、MACD/Signal、RSI、布林位置、ATR 上下文与趋势/震荡/高波动状态标签 |
 | 输出 | stance、confidence、signals、rationale |
 | 降级 | 无有效 K 线时返回中性 degraded 报告 |
 
@@ -83,7 +83,7 @@ type Analyst interface {
 | 项 | 内容 |
 | --- | --- |
 | 输入 | funding rate、open interest、long/short ratio、basis 等衍生品字段 |
-| 规则 | 资金费拥挤、OI 变化、多空失衡与基差投票 |
+| 规则 | 资金费拥挤、多空失衡与基差投票；单点 OI 只展示覆盖，不在缺少历史变化率时硬猜方向 |
 | 输出 | 统一 `AnalystReport` |
 | 降级 | 衍生品字段缺失时中性 degraded，不阻断现货分析 |
 

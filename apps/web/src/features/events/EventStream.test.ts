@@ -30,7 +30,7 @@ describe("event stream semantics", () => {
       }),
     );
 
-    expect(summary).toBe("sentiment:无数据");
+    expect(summary).toBe("覆盖=0/1  sentiment:无数据");
     expect(summary).not.toContain("0.20");
   });
 

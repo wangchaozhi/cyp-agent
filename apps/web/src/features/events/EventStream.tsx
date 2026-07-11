@@ -45,16 +45,17 @@ const RUN_STATUS_LABELS: Record<string, string> = {
 
 export function summarizeEvent(event: DashboardEvent): string {
   if (event.type === "reports_ready") {
-    return (
-      event.reports
+    const reports = event.reports ?? [];
+    const coverage = reports.filter((report) => !report.degraded).length;
+    const detail = reports
         ?.map((report) => {
           if (report.degraded) {
             return `${report.agent}:无数据`;
           }
           return `${report.agent}:${report.stance}(强度=${formatConfidence(report.confidence)})`;
         })
-        .join("  ") || "分析完成"
-    );
+        .join("  ") || "分析完成";
+    return `覆盖=${coverage}/${reports.length}  ${detail}`;
   }
 
   if (event.type === "proposal_ready" && event.proposal) {
