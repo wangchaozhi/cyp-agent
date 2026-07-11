@@ -30,6 +30,7 @@ import (
 	"github.com/wangchaozhi/cyp-agent/internal/metrics"
 	"github.com/wangchaozhi/cyp-agent/internal/observability"
 	"github.com/wangchaozhi/cyp-agent/internal/orchestrator"
+	"github.com/wangchaozhi/cyp-agent/internal/riskstate"
 	runtimecore "github.com/wangchaozhi/cyp-agent/internal/runtime"
 	"github.com/wangchaozhi/cyp-agent/internal/venue"
 )
@@ -47,6 +48,7 @@ type Server struct {
 	registry        *venue.VenueRegistry
 	marketData      *data.MarketAggregator
 	safety          *runtimecore.SafetyState
+	riskState       *riskstate.Tracker
 	historicalVenue venue.Venue
 	webDir          string
 	logger          *slog.Logger
@@ -66,6 +68,7 @@ type Dependencies struct {
 	Registry        *venue.VenueRegistry
 	Market          *data.MarketAggregator
 	Safety          *runtimecore.SafetyState
+	RiskState       *riskstate.Tracker
 	HistoricalVenue venue.Venue
 	WebDir          string
 	Logger          *slog.Logger
@@ -86,6 +89,7 @@ func New(dependencies Dependencies) (*Server, error) {
 		gate: dependencies.Gate, orchestrator: dependencies.Orchestrator,
 		metrics: dependencies.Metrics, runtimeMetrics: dependencies.RuntimeMetrics,
 		registry: dependencies.Registry, marketData: dependencies.Market, safety: dependencies.Safety,
+		riskState:       dependencies.RiskState,
 		historicalVenue: dependencies.HistoricalVenue,
 		webDir:          dependencies.WebDir, logger: logger, authToken: strings.TrimSpace(dependencies.APIToken),
 		corsOrigins: configuredCORSOrigins(),
@@ -105,6 +109,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/settings", s.updateSettings)
 	mux.HandleFunc("GET /api/market", s.market)
 	mux.HandleFunc("GET /api/positions", s.positions)
+	mux.HandleFunc("GET /api/trades", s.trades)
 	mux.HandleFunc("POST /api/positions/close", s.closePosition)
 	mux.HandleFunc("GET /api/metrics", s.metricsSnapshot)
 	mux.HandleFunc("GET /api/risk", s.riskSnapshot)

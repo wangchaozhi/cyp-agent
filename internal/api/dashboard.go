@@ -43,6 +43,10 @@ func (s *Server) positions(w http.ResponseWriter, request *http.Request) {
 	writeJSON(w, http.StatusOK, views)
 }
 
+func (s *Server) trades(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, s.riskState.Trades())
+}
+
 func (s *Server) positionView(ctx context.Context, position contracts.Position) positionView {
 	mark, err := s.venue.FetchTicker(ctx, position.Symbol)
 	if err != nil || !mark.IsPositive() {
@@ -123,6 +127,20 @@ func (s *Server) closePosition(w http.ResponseWriter, request *http.Request) {
 		writeError(w, http.StatusBadRequest, detail)
 		return
 	}
+	if s.riskState != nil {
+		balances, balanceErr := s.venue.Balances(request.Context())
+		if balanceErr != nil {
+			s.logger.ErrorContext(request.Context(), "risk_state_close_balance_failed", "error", balanceErr.Error())
+		} else {
+			equity := balances.TotalQuote
+			if !equity.IsPositive() {
+				equity = balances.FreeQuote
+			}
+			if stateErr := s.riskState.RecordClose(request.Context(), result.ClientID, *found, result, equity); stateErr != nil {
+				s.logger.ErrorContext(request.Context(), "risk_state_close_persist_failed", "error", stateErr.Error())
+			}
+		}
+	}
 	writeJSON(w, http.StatusOK, result)
 }
 
@@ -156,6 +174,9 @@ type riskBoard struct {
 	Drawdown          drawdownSnapshot   `json:"drawdown"`
 	OrdersLastHour    int                `json:"orders_last_hour"`
 	ConsecutiveLosses int                `json:"consecutive_losses"`
+	RealizedPNL       contracts.Decimal  `json:"realized_pnl"`
+	PortfolioCVAR     *contracts.Decimal `json:"portfolio_cvar_quote"`
+	CVaRSamples       int                `json:"cvar_samples"`
 	MarginRatio       *contracts.Decimal `json:"margin_ratio"`
 	PerpetualNotional contracts.Decimal  `json:"perp_notional"`
 	Limits            riskLimitSnapshot  `json:"limits"`
@@ -191,10 +212,15 @@ func (s *Server) riskSnapshot(w http.ResponseWriter, request *http.Request) {
 		}
 	}
 	riskConfig := settings.Risk
+	riskState := s.riskState.Snapshot(equity)
 	writeJSON(w, http.StatusOK, riskBoard{
 		Mode: settings.Mode, Kill: settings.Kill, Equity: equity,
-		Drawdown:       drawdownSnapshot{Daily: contracts.Zero(), Weekly: contracts.Zero(), Total: contracts.Zero()},
-		OrdersLastHour: 0, ConsecutiveLosses: 0, MarginRatio: marginRatio,
+		Drawdown: drawdownSnapshot{
+			Daily: riskState.DailyDrawdown, Weekly: riskState.WeeklyDrawdown, Total: riskState.TotalDrawdown,
+		},
+		OrdersLastHour: riskState.OrdersLastHour, ConsecutiveLosses: riskState.ConsecutiveLosses,
+		RealizedPNL: riskState.RealizedPNL, PortfolioCVAR: riskState.PortfolioCVARQuote,
+		CVaRSamples: riskState.CVaRSamples, MarginRatio: marginRatio,
 		PerpetualNotional: perpetualNotional,
 		Limits: riskLimitSnapshot{
 			DailyDrawdown:        riskConfig.DailyDrawdownLimit,

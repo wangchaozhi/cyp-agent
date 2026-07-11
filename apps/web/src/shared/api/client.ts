@@ -12,6 +12,7 @@ import type {
   RiskSnapshot,
   RuntimeSettings,
   RuntimeSettingsUpdate,
+  TradeRecord,
   VenueInfo,
 } from "./types";
 
@@ -73,6 +74,7 @@ export const cypApi = {
     }),
   pending: () => request<PendingApproval[]>("/api/pending"),
   positions: () => request<Position[]>("/api/positions"),
+  trades: () => request<TradeRecord[]>("/api/trades"),
   closePosition: (payload: { symbol: string; instrument: string }) =>
     request<ExecutionResult>("/api/positions/close", {
       method: "POST",

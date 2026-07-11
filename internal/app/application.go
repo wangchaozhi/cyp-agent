@@ -20,6 +20,7 @@ import (
 	"github.com/wangchaozhi/cyp-agent/internal/observability"
 	"github.com/wangchaozhi/cyp-agent/internal/orchestrator"
 	"github.com/wangchaozhi/cyp-agent/internal/persistence"
+	"github.com/wangchaozhi/cyp-agent/internal/riskstate"
 	runtimecore "github.com/wangchaozhi/cyp-agent/internal/runtime"
 	"github.com/wangchaozhi/cyp-agent/internal/venue"
 )
@@ -36,6 +37,7 @@ type Application struct {
 	Metrics        *metrics.Runs
 	RuntimeMetrics *observability.RuntimeMetrics
 	Safety         *runtimecore.SafetyState
+	RiskState      *riskstate.Tracker
 	Runtime        *runtimecore.Engine
 	Orchestrator   *orchestrator.Service
 	API            *api.Server
@@ -128,6 +130,16 @@ func New(
 		}
 	}
 	runMetrics := metrics.NewRuns()
+	balances, err := paper.Balances(ctx)
+	if err != nil {
+		_ = repository.Close()
+		return nil, fmt.Errorf("read initial paper balance: %w", err)
+	}
+	riskTracker, err := riskstate.New(ctx, repository, balances.TotalQuote)
+	if err != nil {
+		_ = repository.Close()
+		return nil, fmt.Errorf("restore risk state: %w", err)
+	}
 	runtimeMetrics := &observability.RuntimeMetrics{}
 	timeout := time.Duration(settings.Risk.ApprovalTimeoutSeconds) * time.Second
 	gate := approval.NewPendingGate(timeout, bus)
@@ -135,7 +147,7 @@ func New(
 	baseLLM := llm.FromSettings(settings)
 	orch := orchestrator.New(ctx, state, paper, bus, gate, runMetrics,
 		orchestrator.WithDataSource(source), orchestrator.WithRepository(repository),
-		orchestrator.WithSafety(safety), orchestrator.WithLLM(baseLLM))
+		orchestrator.WithRiskState(riskTracker), orchestrator.WithSafety(safety), orchestrator.WithLLM(baseLLM))
 
 	reconciler, err := runtimecore.NewVenueReconciler(paper, bus, logger)
 	if err != nil {
@@ -202,7 +214,8 @@ func New(
 		Control: state, Venue: paper, Events: bus, Gate: gate, Orchestrator: orch,
 		Metrics: runMetrics, RuntimeMetrics: runtimeMetrics, Registry: registry,
 		Market: aggregator, Safety: safety, HistoricalVenue: historicalVenue,
-		WebDir: webDir, Logger: logger, APIToken: settings.APIToken.Reveal(),
+		RiskState: riskTracker,
+		WebDir:    webDir, Logger: logger, APIToken: settings.APIToken.Reveal(),
 	})
 	if err != nil {
 		stopContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -217,7 +230,8 @@ func New(
 		Control: state, Events: bus, Gate: gate, Venue: paper, Registry: registry,
 		DataSource: source, Market: aggregator, Repository: repository,
 		Metrics: runMetrics, RuntimeMetrics: runtimeMetrics, Safety: safety,
-		Runtime: runtimeEngine, Orchestrator: orch, API: server,
+		RiskState: riskTracker,
+		Runtime:   runtimeEngine, Orchestrator: orch, API: server,
 	}, nil
 }
 

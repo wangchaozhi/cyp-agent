@@ -26,6 +26,7 @@ import (
 	"github.com/wangchaozhi/cyp-agent/internal/persistence"
 	"github.com/wangchaozhi/cyp-agent/internal/portfolio"
 	"github.com/wangchaozhi/cyp-agent/internal/risk"
+	"github.com/wangchaozhi/cyp-agent/internal/riskstate"
 	runtimecore "github.com/wangchaozhi/cyp-agent/internal/runtime"
 	"github.com/wangchaozhi/cyp-agent/internal/venue"
 )
@@ -44,6 +45,7 @@ type Service struct {
 	dataSource   data.Source
 	fallbackData data.Source
 	repository   persistence.Repository
+	riskState    *riskstate.Tracker
 	safety       *runtimecore.SafetyState
 
 	pipelineMu  sync.RWMutex
@@ -77,6 +79,10 @@ func WithDataSource(source data.Source) Option {
 
 func WithRepository(repository persistence.Repository) Option {
 	return func(service *Service) { service.repository = repository }
+}
+
+func WithRiskState(tracker *riskstate.Tracker) Option {
+	return func(service *Service) { service.riskState = tracker }
 }
 
 func WithSafety(safety *runtimecore.SafetyState) Option {
@@ -309,6 +315,13 @@ func (s *Service) run(ctx context.Context, runID, symbol string) contracts.RunRe
 	if !equity.IsPositive() {
 		equity = balances.FreeQuote
 	}
+	accountRisk := riskstate.Snapshot{CurrentEquity: equity}
+	if s.riskState != nil {
+		if err := s.riskState.ObserveEquity(ctx, equity); err != nil {
+			return fail(result, fmt.Errorf("persist risk state: %w", err))
+		}
+		accountRisk = s.riskState.Snapshot(equity)
+	}
 	positions, err := s.venue.Positions(ctx)
 	if err != nil {
 		return fail(result, fmt.Errorf("positions: %w", err))
@@ -393,8 +406,13 @@ func (s *Service) run(ctx context.Context, runID, symbol string) contracts.RunRe
 		GrossExposureQuote:      view.Gross,
 		SymbolExposureQuote:     portfolio.SymbolNotional(view, symbol),
 		CorrelatedExposureQuote: &correlated,
-		DailyDrawdown:           contracts.Zero(), WeeklyDrawdown: contracts.Zero(), TotalDrawdown: contracts.Zero(),
-		Kill: settings.Kill, Reconciling: reconciling,
+		PortfolioCVARQuote:      accountRisk.PortfolioCVARQuote,
+		OrdersLastHour:          accountRisk.OrdersLastHour,
+		ConsecutiveLosses:       accountRisk.ConsecutiveLosses,
+		DailyDrawdown:           accountRisk.DailyDrawdown,
+		WeeklyDrawdown:          accountRisk.WeeklyDrawdown,
+		TotalDrawdown:           accountRisk.TotalDrawdown,
+		Kill:                    settings.Kill, Reconciling: reconciling,
 		EstimatedSlippageBPS:      preflight.EstSlippageBPS,
 		EstimatedLiquidationPrice: preflight.EstLiquidationPrice,
 		EstimatedPriceImpact:      preflight.EstPriceImpact,
@@ -471,6 +489,19 @@ func (s *Service) run(ctx context.Context, runID, symbol string) contracts.RunRe
 	s.events.Emit("executed", runID, map[string]any{"symbol": symbol, "execution": execution})
 	if err := s.checkpoint(ctx, runID, "execution", execution); err != nil {
 		return fail(result, err)
+	}
+	if s.riskState != nil && execution.Status == contracts.OrderStatusFilled {
+		balancesAfter, balanceErr := s.venue.Balances(ctx)
+		if balanceErr != nil {
+			return fail(result, fmt.Errorf("post-execution balances: %w", balanceErr))
+		}
+		equityAfter := balancesAfter.TotalQuote
+		if !equityAfter.IsPositive() {
+			equityAfter = balancesAfter.FreeQuote
+		}
+		if err := s.riskState.RecordOpen(ctx, runID, finalProposal, execution, equityAfter); err != nil {
+			return fail(result, fmt.Errorf("persist executed trade risk state: %w", err))
+		}
 	}
 
 	reviewSpan := startSpan(ctx, "review")

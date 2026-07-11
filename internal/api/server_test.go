@@ -97,7 +97,7 @@ func TestHealthSettingsKillAndDashboardShapes(t *testing.T) {
 	})
 	client := server.Client()
 
-	for _, path := range []string{"/api/health", "/api/venues", "/api/settings", "/api/risk", "/api/portfolio", "/api/market", "/api/metrics", "/api/pending"} {
+	for _, path := range []string{"/api/health", "/api/venues", "/api/settings", "/api/risk", "/api/portfolio", "/api/market", "/api/metrics", "/api/pending", "/api/trades"} {
 		response, body := requestJSON(t, client, http.MethodGet, server.URL+path, nil)
 		if response.StatusCode != http.StatusOK {
 			t.Fatalf("GET %s status = %d, body = %s", path, response.StatusCode, body)
@@ -266,6 +266,23 @@ func TestFullHTTPApprovalAndCloseLoop(t *testing.T) {
 			t.Fatalf("position field %s is not a decimal string: %#v", field, positions[0][field])
 		}
 	}
+	for {
+		response, body = requestJSON(t, client, http.MethodGet, server.URL+"/api/risk", nil)
+		var riskSnapshot struct {
+			OrdersLastHour int    `json:"orders_last_hour"`
+			RealizedPNL    string `json:"realized_pnl"`
+		}
+		if err := json.Unmarshal(body, &riskSnapshot); err != nil {
+			t.Fatalf("decode risk snapshot: %v: %s", err, body)
+		}
+		if riskSnapshot.OrdersLastHour == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("risk state did not record opening order: %s", body)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 
 	response, body = requestJSON(t, client, http.MethodPost, server.URL+"/api/positions/close", map[string]any{"symbol": "BTC/USDT", "instrument": "spot"})
 	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), `"status":"filled"`) {
@@ -274,6 +291,25 @@ func TestFullHTTPApprovalAndCloseLoop(t *testing.T) {
 	response, body = requestJSON(t, client, http.MethodGet, server.URL+"/api/positions", nil)
 	if response.StatusCode != http.StatusOK || strings.TrimSpace(string(body)) != "[]" {
 		t.Fatalf("positions after close = %d %s", response.StatusCode, body)
+	}
+	response, body = requestJSON(t, client, http.MethodGet, server.URL+"/api/risk", nil)
+	var riskSnapshot struct {
+		OrdersLastHour int    `json:"orders_last_hour"`
+		RealizedPNL    string `json:"realized_pnl"`
+	}
+	if err := json.Unmarshal(body, &riskSnapshot); err != nil {
+		t.Fatalf("decode risk snapshot after close: %v: %s", err, body)
+	}
+	if riskSnapshot.OrdersLastHour != 2 || !strings.HasPrefix(riskSnapshot.RealizedPNL, "-") {
+		t.Fatalf("risk state did not record closed trade: %s", body)
+	}
+	response, body = requestJSON(t, client, http.MethodGet, server.URL+"/api/trades", nil)
+	var trades []map[string]any
+	if err := json.Unmarshal(body, &trades); err != nil || len(trades) != 2 {
+		t.Fatalf("trade ledger response is incomplete: %v %s", err, body)
+	}
+	if trades[0]["kind"] != "open" || trades[1]["kind"] != "close" {
+		t.Fatalf("trade ledger ordering is invalid: %s", body)
 	}
 }
 

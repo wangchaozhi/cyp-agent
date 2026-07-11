@@ -113,6 +113,7 @@ curl http://127.0.0.1:8000/api/pending
 | `POST /api/approvals/{run_id}` | 批准、拒绝或修改提案 |
 | `GET /api/positions`、`POST /api/positions/close` | Paper 持仓与平仓 |
 | `GET /api/risk`、`GET /api/portfolio` | 风控和组合视图 |
+| `GET /api/trades` | 持久化 Paper 开平仓账本 |
 | `GET /api/market`、`GET /api/venues` | 市场聚合与场所能力 |
 | `POST /api/backtest` | 合成或历史 K 线回测 |
 | `GET /api/metrics` | 闭环与运行时指标 |

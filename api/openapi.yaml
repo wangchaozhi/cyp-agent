@@ -183,6 +183,23 @@ paths:
         default:
           $ref: "#/components/responses/ErrorResponse"
 
+  /api/trades:
+    get:
+      tags: [Portfolio]
+      operationId: listTrades
+      summary: 获取持久化 Paper 成交账本
+      responses:
+        "200":
+          description: 按发生时间排列的开平仓记录；无记录时返回空数组
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TradeRecord"
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+
   /api/metrics:
     get:
       tags: [System]
@@ -967,6 +984,23 @@ components:
         margin_used: { $ref: "#/components/schemas/NullableDecimalString" }
         funding_rate: { $ref: "#/components/schemas/NullableDecimalString" }
 
+    TradeRecord:
+      type: object
+      additionalProperties: false
+      required: [client_id, kind, symbol, side, instrument, price, size_base, fee_quote, pnl_quote, ts]
+      properties:
+        client_id: { type: string }
+        run_id: { type: string }
+        kind: { type: string, enum: [open, close] }
+        symbol: { type: string }
+        side: { type: string, enum: [long, short] }
+        instrument: { type: string, enum: [spot, perp] }
+        price: { $ref: "#/components/schemas/DecimalString" }
+        size_base: { $ref: "#/components/schemas/DecimalString" }
+        fee_quote: { $ref: "#/components/schemas/DecimalString" }
+        pnl_quote: { $ref: "#/components/schemas/DecimalString" }
+        ts: { type: string, format: date-time }
+
     ProtectiveOrder:
       type: object
       additionalProperties: false
@@ -1033,6 +1067,9 @@ components:
         - drawdown
         - orders_last_hour
         - consecutive_losses
+        - realized_pnl
+        - portfolio_cvar_quote
+        - cvar_samples
         - limits
         - live_guard
       properties:
@@ -1053,6 +1090,11 @@ components:
           type: integer
           minimum: 0
         consecutive_losses:
+          type: integer
+          minimum: 0
+        realized_pnl: { $ref: "#/components/schemas/DecimalString" }
+        portfolio_cvar_quote: { $ref: "#/components/schemas/NullableDecimalString" }
+        cvar_samples:
           type: integer
           minimum: 0
         margin_ratio: { $ref: "#/components/schemas/NullableDecimalString" }

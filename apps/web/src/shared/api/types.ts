@@ -83,6 +83,20 @@ export interface Position {
   funding_rate?: Numeric | null;
 }
 
+export interface TradeRecord {
+  client_id: string;
+  run_id?: string;
+  kind: "open" | "close";
+  symbol: string;
+  side: Exclude<Side, "flat">;
+  instrument: Instrument;
+  price: Numeric;
+  size_base: Numeric;
+  fee_quote: Numeric;
+  pnl_quote: Numeric;
+  ts: string;
+}
+
 export interface RiskSnapshot {
   mode: string;
   kill: boolean;
@@ -94,6 +108,9 @@ export interface RiskSnapshot {
   };
   orders_last_hour: number;
   consecutive_losses: number;
+  realized_pnl: Numeric;
+  portfolio_cvar_quote?: Numeric | null;
+  cvar_samples: number;
   margin_ratio?: Numeric | null;
   perp_notional?: Numeric;
   limits: {

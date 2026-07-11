@@ -38,6 +38,24 @@ export function RiskPanel({ risk }: { risk: RiskSnapshot | null }) {
         <MetricRow label="下单 / 小时" value={`${risk.orders_last_hour} / ${risk.limits.max_orders_per_hour}`} />
         <MetricRow label="连续亏损" value={`${risk.consecutive_losses} / ${risk.limits.max_consecutive_losses}`} />
         <MetricRow
+          label="已实现盈亏"
+          value={
+            <span className={toNumber(risk.realized_pnl) < 0 ? "tone-short" : "tone-long"}>
+              {formatAmount(risk.realized_pnl)}
+            </span>
+          }
+        />
+        <MetricRow
+          label="历史 CVaR (95%)"
+          value={
+            risk.portfolio_cvar_quote != null ? (
+              `${formatAmount(risk.portfolio_cvar_quote)} (${risk.cvar_samples} 样本)`
+            ) : (
+              <span className="tone-muted">样本不足 ({risk.cvar_samples}/20)</span>
+            )
+          }
+        />
+        <MetricRow
           label="保证金健康度"
           value={
             risk.margin_ratio != null ? (
