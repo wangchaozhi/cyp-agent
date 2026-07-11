@@ -14,6 +14,7 @@ import (
 	"github.com/wangchaozhi/cyp-agent/internal/events"
 	"github.com/wangchaozhi/cyp-agent/internal/metrics"
 	"github.com/wangchaozhi/cyp-agent/internal/orchestrator"
+	runtimecore "github.com/wangchaozhi/cyp-agent/internal/runtime"
 	"github.com/wangchaozhi/cyp-agent/internal/venue"
 )
 
@@ -277,5 +278,53 @@ func TestStartAsyncLifecycleAndClose(t *testing.T) {
 	}
 	if _, err := harness.service.Start(" "); !errors.Is(err, orchestrator.ErrEmptySymbol) {
 		t.Fatalf("Start with blank symbol error = %v, want ErrEmptySymbol", err)
+	}
+}
+
+// TestStartSerializesOnSharedSymbolLocks proves that a lock held by an
+// external runtime caller (scanner, close, reconciliation) delays the
+// orchestrator run for the same symbol until the lock is released.
+func TestStartSerializesOnSharedSymbolLocks(t *testing.T) {
+	locks := runtimecore.NewSymbolLocks()
+	harness := newHarness(t, nil,
+		orchestrator.WithDataSource(emptySource{}), orchestrator.WithSymbolLocks(locks))
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	holderDone := make(chan error, 1)
+	go func() {
+		holderDone <- locks.Do(context.Background(), "BTC/USDT", func(context.Context) error {
+			close(entered)
+			<-release
+			return nil
+		})
+	}()
+	<-entered
+
+	accepted, err := harness.service.Start("BTC/USDT")
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if _, ok := harness.service.GetRun(accepted.RunID); ok {
+		t.Fatal("run completed while the shared symbol lock was still held")
+	}
+
+	close(release)
+	if err := <-holderDone; err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if result, ok := harness.service.GetRun(accepted.RunID); ok {
+			if result.Status != contracts.RunNoTrade {
+				t.Fatalf("run status = %s, error = %v", result.Status, result.Error)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("run never completed after the lock was released")
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }

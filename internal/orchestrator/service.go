@@ -58,13 +58,13 @@ type Service struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	sem    chan struct{}
+	locks  *runtimecore.SymbolLocks
 
-	mu          sync.RWMutex
-	runs        map[string]contracts.RunResult
-	symbolLocks map[string]*sync.Mutex
-	marks       map[string]contracts.Decimal
-	stopped     bool
-	wg          sync.WaitGroup
+	mu      sync.RWMutex
+	runs    map[string]contracts.RunResult
+	marks   map[string]contracts.Decimal
+	stopped bool
+	wg      sync.WaitGroup
 }
 
 type Option func(*Service)
@@ -93,6 +93,17 @@ func WithLLM(client *llm.Client) Option {
 	return func(service *Service) { service.llm = client }
 }
 
+// WithSymbolLocks shares one per-symbol lock instance with the runtime
+// scanner and reconciliation paths so that every action on a symbol is
+// serialized by a single mechanism instead of two independent lock maps.
+func WithSymbolLocks(locks *runtimecore.SymbolLocks) Option {
+	return func(service *Service) {
+		if locks != nil {
+			service.locks = locks
+		}
+	}
+}
+
 func New(
 	parent context.Context,
 	state *control.State,
@@ -113,7 +124,8 @@ func New(
 	service := &Service{
 		control: state, venue: executionVenue, events: bus, gate: gate, metrics: runMetrics,
 		ctx: ctx, cancel: cancel, sem: make(chan struct{}, concurrency),
-		runs: make(map[string]contracts.RunResult), symbolLocks: make(map[string]*sync.Mutex),
+		locks:        runtimecore.NewSymbolLocks(),
+		runs:         make(map[string]contracts.RunResult),
 		marks:        make(map[string]contracts.Decimal),
 		dataSource:   data.NewSyntheticMarketData(data.WithLiveTicks(true)),
 		fallbackData: data.NewSyntheticMarketData(data.WithLiveTicks(true)),
@@ -203,10 +215,13 @@ func (s *Service) Start(symbol string) (contracts.RunAccepted, error) {
 			s.finishCanceled(runID, symbol, s.ctx.Err())
 			return
 		}
-		lock := s.symbolLock(symbol)
-		lock.Lock()
-		defer lock.Unlock()
-		s.runAndRecord(s.ctx, runID, symbol)
+		err := s.locks.Do(s.ctx, symbol, func(runContext context.Context) error {
+			s.runAndRecord(runContext, runID, symbol)
+			return nil
+		})
+		if err != nil {
+			s.finishCanceled(runID, symbol, err)
+		}
 	}()
 	return contracts.RunAccepted{RunID: runID, Symbol: symbol}, nil
 }
@@ -630,17 +645,6 @@ func startSpan(ctx context.Context, name string) *observability.Span {
 		return &observability.Span{}
 	}
 	return trace.StartSpan(name)
-}
-
-func (s *Service) symbolLock(symbol string) *sync.Mutex {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	lock := s.symbolLocks[symbol]
-	if lock == nil {
-		lock = &sync.Mutex{}
-		s.symbolLocks[symbol] = lock
-	}
-	return lock
 }
 
 func (s *Service) setMark(symbol string, mark contracts.Decimal) {

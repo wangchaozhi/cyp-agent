@@ -145,9 +145,13 @@ func New(
 	gate := approval.NewPendingGate(timeout, bus)
 	safety := runtimecore.NewSafetyState()
 	baseLLM := llm.FromSettings(settings)
+	// Scanner, manual API runs, and the orchestrator itself serialize on this
+	// single per-symbol lock instance instead of maintaining separate maps.
+	locks := runtimecore.NewSymbolLocks()
 	orch := orchestrator.New(ctx, state, paper, bus, gate, runMetrics,
 		orchestrator.WithDataSource(source), orchestrator.WithRepository(repository),
-		orchestrator.WithRiskState(riskTracker), orchestrator.WithSafety(safety), orchestrator.WithLLM(baseLLM))
+		orchestrator.WithRiskState(riskTracker), orchestrator.WithSafety(safety), orchestrator.WithLLM(baseLLM),
+		orchestrator.WithSymbolLocks(locks))
 
 	reconciler, err := runtimecore.NewVenueReconciler(paper, bus, logger)
 	if err != nil {
@@ -161,7 +165,6 @@ func New(
 		_ = repository.Close()
 		return nil, err
 	}
-	locks := runtimecore.NewSymbolLocks()
 	scanner, err := runtimecore.NewScanner(runtimecore.ScannerConfig{
 		Symbols: settings.WatchlistSymbols(), Interval: time.Duration(settings.ScanInterval) * time.Second,
 		Run: func(_ context.Context, symbol string) error {
