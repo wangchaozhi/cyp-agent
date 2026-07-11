@@ -59,8 +59,8 @@ jobs:
         run: |
           test "$(tr -d '\r\n' < VERSION)" = "${VERSION}"
           node -e 'const p=require("./apps/web/package.json"); if(p.version!==process.env.VERSION) process.exit(1)'
-      - name: Test
-        run: go test -count=1 ./...
+      - name: Test with race detector
+        run: go test -race -count=1 ./...
       - name: Build Go archives
         shell: bash
         env:
@@ -96,6 +96,7 @@ jobs:
         run: |
           npm ci
           npm audit --audit-level=high
+          npm run test
           npm run build
           tar -czf "../../release-assets/cyp-agent-web-${VERSION}.tar.gz" dist
       - name: Checksums
