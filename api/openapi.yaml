@@ -887,10 +887,11 @@ components:
     TradeReview:
       type: object
       additionalProperties: false
-      required: [symbol, proposal_ref, score, pnl_quote, slippage_bps, lessons, notes, ts]
+      required: [symbol, proposal_ref, kind, score, pnl_quote, slippage_bps, lessons, notes, ts]
       properties:
         symbol: { type: string }
         proposal_ref: { type: string }
+        kind: { type: string, enum: [entry, close] }
         score: { type: number }
         pnl_quote: { $ref: "#/components/schemas/DecimalString" }
         slippage_bps: { $ref: "#/components/schemas/NullableDecimalString" }

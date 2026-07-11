@@ -273,7 +273,7 @@ func TestReviewerRuleFallback(t *testing.T) {
 	review, err := reviewer.Run(context.Background(), proposal, contracts.ExecutionResult{
 		Status: contracts.OrderStatusFilled, SlippageBPS: &slippage,
 	}, AgentContext{}, "run-1")
-	if err != nil || math.Abs(review.Score-0.4) > 1e-12 || len(review.Lessons) != 2 || review.ProposalRef != "run-1" {
+	if err != nil || math.Abs(review.Score-0.4) > 1e-12 || len(review.Lessons) != 2 || review.ProposalRef != "run-1" || review.Kind != "entry" {
 		t.Fatalf("review = %+v, %v", review, err)
 	}
 	failure := "venue unavailable"
@@ -282,5 +282,15 @@ func TestReviewerRuleFallback(t *testing.T) {
 	}, AgentContext{}, "run-2")
 	if err != nil || review.Score != 0.2 || !strings.Contains(fmt.Sprint(review.Lessons), failure) {
 		t.Fatalf("failure review = %+v, %v", review, err)
+	}
+	price := contracts.MustDecimal("90")
+	review, err = reviewer.RunClosed(context.Background(), contracts.Position{
+		Symbol: "BTC/USDT", Side: contracts.SideLong,
+	}, contracts.ExecutionResult{
+		Status: contracts.OrderStatusFilled, AvgPrice: &price, SlippageBPS: &slippage,
+	}, contracts.MustDecimal("-11"), "run-1")
+	if err != nil || review.Kind != "close" || review.PNLQuote.String() != "-11" || math.Abs(review.Score-0.1) > 1e-12 ||
+		!strings.Contains(fmt.Sprint(review.Lessons), "亏损") {
+		t.Fatalf("close review = %+v, %v", review, err)
 	}
 }

@@ -215,7 +215,7 @@ func TestBacktestCompatibilityAndValidation(t *testing.T) {
 }
 
 func TestFullHTTPApprovalAndCloseLoop(t *testing.T) {
-	_, server := newTestApplication(t, nil)
+	application, server := newTestApplication(t, nil)
 	client := server.Client()
 	response, body := requestJSON(t, client, http.MethodPost, server.URL+"/api/run", map[string]any{"symbol": "BTC/USDT"})
 	if response.StatusCode != http.StatusOK {
@@ -310,6 +310,10 @@ func TestFullHTTPApprovalAndCloseLoop(t *testing.T) {
 	}
 	if trades[0]["kind"] != "open" || trades[1]["kind"] != "close" {
 		t.Fatalf("trade ledger ordering is invalid: %s", body)
+	}
+	lessons, err := application.Repository.GetLessons(context.Background(), 20, "BTC/USDT")
+	if err != nil || !strings.Contains(strings.Join(lessons, " "), "平仓实现") {
+		t.Fatalf("close review lessons were not persisted: %v %#v", err, lessons)
 	}
 }
 

@@ -143,6 +143,39 @@ func (s *Service) LLMMetrics() llm.MetricsSnapshot {
 	return s.llm.Metrics()
 }
 
+// ReviewClosed completes lifecycle attribution after a position has actually
+// been closed. Entry execution review remains available on the original run,
+// while this review carries realized PnL and durable lessons.
+func (s *Service) ReviewClosed(
+	ctx context.Context,
+	position contracts.Position,
+	execution contracts.ExecutionResult,
+	pnl contracts.Decimal,
+	reference string,
+) (contracts.TradeReview, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	review, err := s.reviewer.RunClosed(ctx, position, execution, pnl, reference)
+	if err != nil {
+		return contracts.TradeReview{}, err
+	}
+	if s.repository != nil {
+		if err := s.repository.AppendLessons(ctx, position.Symbol, review.Lessons); err != nil {
+			return contracts.TradeReview{}, fmt.Errorf("persist close lessons: %w", err)
+		}
+		checkpointID := reference
+		if checkpointID == "" {
+			checkpointID = execution.ClientID
+		}
+		if err := s.checkpoint(ctx, checkpointID, "close_review", review); err != nil {
+			return contracts.TradeReview{}, err
+		}
+	}
+	s.events.Emit("reviewed", reference, map[string]any{"symbol": position.Symbol, "review": review})
+	return review, nil
+}
+
 // Start accepts a run immediately and executes it in a bounded goroutine.
 func (s *Service) Start(symbol string) (contracts.RunAccepted, error) {
 	symbol = strings.TrimSpace(symbol)

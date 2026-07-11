@@ -136,8 +136,17 @@ func (s *Server) closePosition(w http.ResponseWriter, request *http.Request) {
 			if !equity.IsPositive() {
 				equity = balances.FreeQuote
 			}
-			if stateErr := s.riskState.RecordClose(request.Context(), result.ClientID, *found, result, equity); stateErr != nil {
+			reference := result.ClientID
+			if opened, ok := s.riskState.OpenTrade(found.Symbol, found.Instrument); ok && opened.RunID != "" {
+				reference = opened.RunID
+			}
+			record, stateErr := s.riskState.RecordClose(request.Context(), reference, *found, result, equity)
+			if stateErr != nil {
 				s.logger.ErrorContext(request.Context(), "risk_state_close_persist_failed", "error", stateErr.Error())
+			} else if _, reviewErr := s.orchestrator.ReviewClosed(
+				request.Context(), *found, result, record.PNLQuote, reference,
+			); reviewErr != nil {
+				s.logger.ErrorContext(request.Context(), "close_review_failed", "error", reviewErr.Error())
 			}
 		}
 	}

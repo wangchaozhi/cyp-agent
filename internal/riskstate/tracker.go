@@ -204,14 +204,18 @@ func (tracker *Tracker) RecordClose(
 	position contracts.Position,
 	execution contracts.ExecutionResult,
 	equity contracts.Decimal,
-) error {
+) (TradeRecord, error) {
 	if tracker == nil || execution.Status != contracts.OrderStatusFilled || execution.AvgPrice == nil {
-		return nil
+		return TradeRecord{}, nil
 	}
 	tracker.mu.Lock()
 	defer tracker.mu.Unlock()
 	if tracker.hasTradeLocked(execution.ClientID, "close") {
-		return nil
+		for _, trade := range tracker.state.Trades {
+			if trade.ClientID == execution.ClientID && trade.Kind == "close" {
+				return trade, nil
+			}
+		}
 	}
 	now := tracker.now().UTC()
 	pnl := position.SizeBase.Mul(execution.AvgPrice.Sub(position.EntryPrice))
@@ -225,15 +229,31 @@ func (tracker *Tracker) RecordClose(
 	} else if pnl.IsPositive() {
 		tracker.state.ConsecutiveLosses = 0
 	}
-	tracker.state.Trades = append(tracker.state.Trades, TradeRecord{
+	record := TradeRecord{
 		ClientID: execution.ClientID, RunID: reference, Kind: "close", Symbol: position.Symbol,
 		Side: position.Side, Instrument: position.Instrument, Price: *execution.AvgPrice,
 		SizeBase: execution.FilledBase, FeeQuote: execution.FeeQuote, PNLQuote: pnl, TS: now,
-	})
+	}
+	tracker.state.Trades = append(tracker.state.Trades, record)
 	tracker.recordOrderLocked(now)
 	tracker.observeLocked(equity, now)
 	tracker.trimLocked()
-	return tracker.persistLocked(ctx)
+	return record, tracker.persistLocked(ctx)
+}
+
+func (tracker *Tracker) OpenTrade(symbol string, instrument contracts.Instrument) (TradeRecord, bool) {
+	if tracker == nil {
+		return TradeRecord{}, false
+	}
+	tracker.mu.RLock()
+	defer tracker.mu.RUnlock()
+	for index := len(tracker.state.Trades) - 1; index >= 0; index-- {
+		trade := tracker.state.Trades[index]
+		if trade.Kind == "open" && trade.Symbol == symbol && trade.Instrument == instrument {
+			return trade, true
+		}
+	}
+	return TradeRecord{}, false
 }
 
 func (tracker *Tracker) Snapshot(equity contracts.Decimal) Snapshot {

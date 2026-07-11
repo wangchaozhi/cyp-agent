@@ -41,7 +41,7 @@ func TestTrackerPersistsRiskStatisticsAndTradeLedger(t *testing.T) {
 		ClientID: "close-1", Status: contracts.OrderStatusFilled,
 		FilledBase: contracts.MustDecimal("1"), AvgPrice: decimal("90"), FeeQuote: contracts.MustDecimal("1"),
 	}
-	if err := tracker.RecordClose(ctx, "manual", position, closeResult, contracts.MustDecimal("8985")); err != nil {
+	if _, err := tracker.RecordClose(ctx, "manual", position, closeResult, contracts.MustDecimal("8985")); err != nil {
 		t.Fatal(err)
 	}
 

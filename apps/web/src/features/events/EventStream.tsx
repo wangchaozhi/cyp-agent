@@ -79,7 +79,9 @@ export function summarizeEvent(event: DashboardEvent): string {
   }
 
   if (event.type === "reviewed" && event.review) {
-    return event.review.lessons.join(" / ") || "复盘完成";
+    const prefix = event.review.kind === "close" ? `平仓复盘 PnL=${event.review.pnl_quote}` : "入场检查";
+    const lessons = event.review.lessons.join(" / ");
+    return lessons ? `${prefix} ${lessons}` : prefix;
   }
 
   if (event.type === "awaiting_approval" && event.proposal) {

@@ -309,6 +309,7 @@ export interface ApprovalDecision {
 export interface TradeReview {
   symbol: string;
   proposal_ref: string;
+  kind: "entry" | "close";
   score: number;
   pnl_quote: Numeric;
   slippage_bps?: Numeric | null;
