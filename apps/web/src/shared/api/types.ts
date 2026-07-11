@@ -233,6 +233,10 @@ export interface BacktestRequest {
   vol: number;
   data?: "synthetic" | "cex";
   timeframe?: string;
+  fee_rate: number;
+  slippage_bps: number;
+  spread_bps: number;
+  funding_rate: number;
 }
 
 export interface BacktestMetrics {
@@ -244,6 +248,7 @@ export interface BacktestMetrics {
   n_trades: number;
   win_rate: number;
   profit_factor: number | null;
+  total_costs: number;
 }
 
 export interface BacktestTrade {
@@ -253,6 +258,7 @@ export interface BacktestTrade {
   pnl: number;
   bar_in: number;
   bar_out: number;
+  costs: number;
 }
 
 export interface BacktestReport {

@@ -69,6 +69,7 @@ func runBacktest(arguments []string) error {
 	params := backtest.Params{
 		Symbol: *symbol, Bars: *bars, Window: *window, Seed: *seed,
 		Drift: *drift, Vol: *volatility, Data: "synthetic", Timeframe: "1h",
+		FeeRate: 0.0004, SlippageBPS: 5, SpreadBPS: 2,
 	}
 	report, err := backtest.Run(params)
 	if err != nil {
@@ -91,6 +92,7 @@ func runBacktest(arguments []string) error {
 	fmt.Printf("  最大回撤   %.2f%%\n", metrics.MaxDrawdown*100)
 	fmt.Printf("  夏普       %.4f\n", metrics.Sharpe)
 	fmt.Printf("  交易数     %d   胜率 %.1f%%\n", metrics.NTrades, metrics.WinRate*100)
+	fmt.Printf("  总成本     %.2f\n", metrics.TotalCosts)
 	return nil
 }
 
@@ -114,6 +116,7 @@ func runSweep(arguments []string) error {
 	params := backtest.Params{
 		Symbol: *symbol, Bars: *bars, Window: *window, Seed: *seed,
 		Drift: *drift, Vol: *volatility, Data: "synthetic", Timeframe: "1h",
+		FeeRate: 0.0004, SlippageBPS: 5, SpreadBPS: 2,
 	}
 	configs := backtest.Grid(values, []float64{1.5, 2, 3}, []float64{2, 3, 4})
 	results, err := backtest.Sweep(params, configs, nil)

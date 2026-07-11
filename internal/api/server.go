@@ -300,7 +300,8 @@ func (s *Server) killSwitchSet(w http.ResponseWriter, request *http.Request) {
 func (s *Server) backtest(w http.ResponseWriter, request *http.Request) {
 	payload := contracts.BacktestRequest{
 		Bars: 300, Window: 60, Seed: 7, Drift: 0.001, Vol: 0.01,
-		Data: "synthetic", Timeframe: "1h",
+		Data: "synthetic", Timeframe: "1h", FeeRate: 0.0004,
+		SlippageBPS: 5, SpreadBPS: 2, FundingRate: 0,
 	}
 	if err := decodeJSON(request, &payload); err != nil {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
@@ -313,6 +314,8 @@ func (s *Server) backtest(w http.ResponseWriter, request *http.Request) {
 	params := backtestengine.Params{
 		Symbol: symbol, Bars: payload.Bars, Window: payload.Window, Seed: int64(payload.Seed),
 		Drift: payload.Drift, Vol: payload.Vol, Data: payload.Data, Timeframe: payload.Timeframe,
+		FeeRate: payload.FeeRate, SlippageBPS: payload.SlippageBPS,
+		SpreadBPS: payload.SpreadBPS, FundingRate: payload.FundingRate,
 	}
 	if err := params.Validate(); err != nil {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())

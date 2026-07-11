@@ -1256,7 +1256,7 @@ components:
     BacktestRequest:
       type: object
       additionalProperties: false
-      required: [bars, window, seed, drift, vol, data, timeframe]
+      required: [bars, window, seed, drift, vol, data, timeframe, fee_rate, slippage_bps, spread_bps, funding_rate]
       properties:
         symbol:
           type: string
@@ -1293,6 +1293,26 @@ components:
         timeframe:
           type: string
           default: 1h
+        fee_rate:
+          type: number
+          minimum: 0
+          maximum: 0.01
+          default: 0.0004
+        slippage_bps:
+          type: number
+          minimum: 0
+          maximum: 1000
+          default: 5
+        spread_bps:
+          type: number
+          minimum: 0
+          maximum: 1000
+          default: 2
+        funding_rate:
+          type: number
+          minimum: -0.01
+          maximum: 0.01
+          default: 0
 
     BacktestMetrics:
       type: object
@@ -1306,6 +1326,7 @@ components:
         - n_trades
         - win_rate
         - profit_factor
+        - total_costs
       properties:
         initial_equity: { type: number }
         final_equity: { type: number }
@@ -1316,11 +1337,12 @@ components:
         win_rate: { type: number, minimum: 0, maximum: 1 }
         profit_factor:
           type: [number, "null"]
+        total_costs: { type: number }
 
     BacktestTrade:
       type: object
       additionalProperties: false
-      required: [side, entry, exit, pnl, bar_in, bar_out]
+      required: [side, entry, exit, pnl, bar_in, bar_out, costs]
       properties:
         side:
           type: string
@@ -1330,6 +1352,7 @@ components:
         pnl: { type: number }
         bar_in: { type: integer, minimum: 0 }
         bar_out: { type: integer, minimum: 0 }
+        costs: { type: number }
 
     BacktestParams:
       allOf:

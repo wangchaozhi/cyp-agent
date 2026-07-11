@@ -44,6 +44,9 @@ func TestValidateMatchesHTTPBounds(t *testing.T) {
 		{"negative seed", func(p *Params) { p.Seed = -1 }},
 		{"zero vol", func(p *Params) { p.Vol = 0 }},
 		{"unknown data", func(p *Params) { p.Data = "file" }},
+		{"fee too high", func(p *Params) { p.FeeRate = 0.02 }},
+		{"negative slippage", func(p *Params) { p.SlippageBPS = -1 }},
+		{"funding too high", func(p *Params) { p.FundingRate = 0.02 }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -53,5 +56,34 @@ func TestValidateMatchesHTTPBounds(t *testing.T) {
 				t.Fatal("Validate() unexpectedly succeeded")
 			}
 		})
+	}
+}
+
+func TestExecutionCostsReduceBacktestEquity(t *testing.T) {
+	base := Params{
+		Symbol: "BTC/USDT", Bars: 180, Window: 30, Seed: 11,
+		Drift: 0.002, Vol: 0.01, Data: "synthetic", Timeframe: "1h",
+	}
+	withoutCosts, err := Run(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withCostsParams := base
+	withCostsParams.FeeRate = 0.0004
+	withCostsParams.SlippageBPS = 5
+	withCostsParams.SpreadBPS = 2
+	withCostsParams.FundingRate = 0.0001
+	withCosts, err := Run(withCostsParams)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(withCosts.Trades) == 0 || withCosts.Metrics.TotalCosts <= 0 {
+		t.Fatalf("expected costed trades, got %+v", withCosts.Metrics)
+	}
+	if withCosts.Metrics.FinalEquity >= withoutCosts.Metrics.FinalEquity {
+		t.Fatalf("costs did not reduce equity: costed=%f raw=%f", withCosts.Metrics.FinalEquity, withoutCosts.Metrics.FinalEquity)
+	}
+	if withCosts.Trades[0].Costs <= 0 {
+		t.Fatalf("trade omitted execution costs: %+v", withCosts.Trades[0])
 	}
 }
