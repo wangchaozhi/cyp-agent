@@ -84,13 +84,7 @@ go run ./cmd/cyp-server -web-dir apps/web/dist
 
 ## 使用闭环
 
-默认审批模式为 `cli`，服务端没有交互式终端审批器，因此 Web/API 使用时建议在 `.env` 中设置：
-
-```dotenv
-CYP_APPROVAL=dashboard
-```
-
-随后可通过仪表盘操作，或直接调用 API：
+默认审批模式为 `dashboard`（历史值 `cli` 已废弃，作为其别名继续兼容）。提案会阻塞在待审批队列，直到通过仪表盘或 API 批准/拒绝/改单。可通过仪表盘操作，或直接调用 API：
 
 ```bash
 # 发起一轮分析

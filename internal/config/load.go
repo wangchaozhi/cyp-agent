@@ -123,6 +123,12 @@ func LoadWithOptions(options LoadOptions) (Settings, error) {
 
 	setString("CYP_MODE", &settings.Mode)
 	setString("CYP_APPROVAL", &settings.Approval)
+	// "cli" never had a terminal approver; it always blocked on the same
+	// pending gate the dashboard resolves. Keep it as a deprecated alias so
+	// existing .env files continue to work.
+	if settings.Approval == "cli" {
+		settings.Approval = "dashboard"
+	}
 	setString("CYP_AUTO_SYMBOLS", &settings.AutoSymbols)
 	setString("CYP_EXECUTION_VENUE", &settings.ExecutionVenue)
 	setString("CYP_DATA_SOURCE", &settings.DataSource)

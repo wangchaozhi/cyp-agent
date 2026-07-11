@@ -145,7 +145,7 @@ func DefaultRiskConfig() RiskConfig {
 func DefaultSettings() Settings {
 	return Settings{
 		Mode:             "paper",
-		Approval:         "cli",
+		Approval:         "dashboard",
 		AutoMaxRiskScore: 0.5,
 		AutoMaxQuote:     contracts.MustDecimal("200"),
 		ExecutionVenue:   "paper",

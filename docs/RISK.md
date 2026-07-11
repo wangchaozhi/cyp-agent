@@ -95,7 +95,7 @@
 | 配置 | 值 | 说明 |
 | --- | --- | --- |
 | `CYP_MODE` | `paper`（默认）/ `live` | `live` 需满足前置校验（Key 权限正确、Kill Switch 未触发、风控配置已审阅） |
-| `CYP_APPROVAL` | `cli` / `dashboard` / `auto` | `auto` 仅 M6，且受策略白名单 + 低 risk_score + 小额三重约束 |
+| `CYP_APPROVAL` | `dashboard`（默认）/ `auto`（`cli` 为废弃别名） | `auto` 仅 M6，且受策略白名单 + 低 risk_score + 小额三重约束 |
 | `RiskConfig.*` | 见 §2/§3 | 实盘阈值应显式设置且比默认更保守 |
 
 尾部风险相关新增：

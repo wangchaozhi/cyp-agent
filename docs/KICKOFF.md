@@ -92,7 +92,7 @@ Copy-Item .env.example .env
 go run ./cmd/cyp-server -host 127.0.0.1 -port 8000
 ```
 
-服务端 Web 审批建议把 `.env` 中的 `CYP_APPROVAL` 改成 `dashboard`。默认 `CYP_PERSISTENCE=file`，无需数据库；需要 PostgreSQL 时：
+默认审批模式即 `dashboard`（Web/API 审批，`cli` 为废弃别名）。默认 `CYP_PERSISTENCE=file`，无需数据库；需要 PostgreSQL 时：
 
 ```powershell
 docker compose up -d db
