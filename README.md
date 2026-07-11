@@ -153,6 +153,7 @@ go run ./cmd/cyp sweep --symbol BTC/USDT --bars 300 --top 5
 | `CYP_DB_URL` | 本地 `5433/cyp` | PostgreSQL DSN，仅 `postgres` 模式使用 |
 | `CYP_LLM_PROVIDER` | `anthropic` | `anthropic` 或 `deepseek`；缺 key 时走规则降级 |
 | `CYP_API_TOKEN` | 空 | 非回环监听必填；认证所有写请求 |
+| `CYP_CORS_ORIGINS` | `http://127.0.0.1:5173,http://localhost:5173` | 允许跨域访问的前端来源，多个来源用逗号分隔 |
 
 所有密钥在配置快照和结构化日志中脱敏。`CYP_LLM_BASE_URL` 只能在启动时修改，HTTP 设置接口不能把已加载密钥重定向到其他主机。交易所 key 即使仅用于只读验证，也必须禁用提现并配置 IP 白名单。
 
