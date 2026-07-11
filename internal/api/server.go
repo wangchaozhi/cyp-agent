@@ -51,6 +51,7 @@ type Server struct {
 	webDir          string
 	logger          *slog.Logger
 	authToken       string
+	corsOrigins     map[string]struct{}
 	handler         http.Handler
 }
 
@@ -87,6 +88,7 @@ func New(dependencies Dependencies) (*Server, error) {
 		registry: dependencies.Registry, marketData: dependencies.Market, safety: dependencies.Safety,
 		historicalVenue: dependencies.HistoricalVenue,
 		webDir:          dependencies.WebDir, logger: logger, authToken: strings.TrimSpace(dependencies.APIToken),
+		corsOrigins: configuredCORSOrigins(),
 	}
 	server.handler = server.routes()
 	return server, nil
@@ -424,6 +426,19 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 		w.Header().Set("X-Request-ID", requestID)
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
+		if origin := strings.TrimSpace(request.Header.Get("Origin")); origin != "" {
+			if _, allowed := s.corsOrigins[origin]; allowed {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+				w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, POST, OPTIONS")
+				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-CYP-API-Token, X-Request-ID")
+				w.Header().Set("Access-Control-Max-Age", "600")
+				w.Header().Add("Vary", "Origin")
+				if request.Method == http.MethodOptions {
+					w.WriteHeader(http.StatusNoContent)
+					return
+				}
+			}
+		}
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				s.logger.Error("http_panic", "request_id", requestID, "panic", fmt.Sprint(recovered))
@@ -433,7 +448,7 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 				"path", request.URL.Path, "duration_ms", time.Since(started).Milliseconds())
 		}()
 		if isMutation(request.Method) {
-			if !sameOriginOrNonBrowser(request) {
+			if !s.sameOriginOrNonBrowser(request) {
 				writeError(w, http.StatusForbidden, "cross-origin mutation is not allowed")
 				return
 			}
@@ -455,7 +470,7 @@ func isMutation(method string) bool {
 	return method != http.MethodGet && method != http.MethodHead && method != http.MethodOptions
 }
 
-func sameOriginOrNonBrowser(request *http.Request) bool {
+func (s *Server) sameOriginOrNonBrowser(request *http.Request) bool {
 	origin := strings.TrimSpace(request.Header.Get("Origin"))
 	if origin == "" {
 		return true
@@ -464,7 +479,25 @@ func sameOriginOrNonBrowser(request *http.Request) bool {
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
 		return false
 	}
-	return strings.EqualFold(parsed.Host, request.Host)
+	if strings.EqualFold(parsed.Host, request.Host) {
+		return true
+	}
+	_, allowed := s.corsOrigins[origin]
+	return allowed
+}
+
+func configuredCORSOrigins() map[string]struct{} {
+	origins := make(map[string]struct{})
+	value := strings.TrimSpace(os.Getenv("CYP_CORS_ORIGINS"))
+	if value == "" {
+		value = "http://127.0.0.1:5173,http://localhost:5173"
+	}
+	for _, origin := range strings.Split(value, ",") {
+		if origin = strings.TrimRight(strings.TrimSpace(origin), "/"); origin != "" {
+			origins[origin] = struct{}{}
+		}
+	}
+	return origins
 }
 
 func (s *Server) authorized(request *http.Request) bool {

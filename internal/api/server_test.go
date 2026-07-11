@@ -131,6 +131,22 @@ func TestMutationAuthenticationAndBrowserOriginGuard(t *testing.T) {
 	})
 	client := server.Client()
 
+	preflight, err := http.NewRequest(http.MethodOptions, server.URL+"/api/killswitch", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preflight.Header.Set("Origin", "http://localhost:5173")
+	preflight.Header.Set("Access-Control-Request-Method", http.MethodPost)
+	preflight.Header.Set("Access-Control-Request-Headers", "authorization, content-type")
+	response, err := client.Do(preflight)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusNoContent || response.Header.Get("Access-Control-Allow-Origin") != "http://localhost:5173" {
+		t.Fatalf("CORS preflight = %d, headers = %#v", response.StatusCode, response.Header)
+	}
+	response.Body.Close()
+
 	response, body := requestJSON(t, client, http.MethodPost, server.URL+"/api/killswitch", map[string]any{"on": true})
 	if response.StatusCode != http.StatusUnauthorized || !strings.Contains(string(body), "token") {
 		t.Fatalf("unauthenticated mutation = %d %s", response.StatusCode, body)
