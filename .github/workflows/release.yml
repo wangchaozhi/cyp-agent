@@ -40,14 +40,14 @@ jobs:
           fi
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
           echo "version=${tag#v}" >> "${GITHUB_OUTPUT}"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ steps.release.outputs.tag }}
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: "20.19.0"
           cache: npm
@@ -100,9 +100,9 @@ jobs:
           tar -czf "../../release-assets/cyp-agent-web-${VERSION}.tar.gz" dist
       - name: Checksums
         working-directory: release-assets
-        run: sha256sum * > SHA256SUMS
+        run: sha256sum ./* > SHA256SUMS
       - name: Publish GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.release.outputs.tag }}
           name: cyp-agent ${{ steps.release.outputs.tag }}
