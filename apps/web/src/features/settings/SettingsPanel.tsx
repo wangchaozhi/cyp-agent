@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { KeyRound, ServerCog, Settings as SettingsIcon, ShieldCheck, SlidersHorizontal } from "lucide-react";
 
 import type { RuntimeSettings, RuntimeSettingsUpdate, VenueInfo } from "../../shared/api/types";
+import { setApiToken } from "../../shared/api/client";
 import { formatAmount, formatCompact, formatPercent } from "../../shared/lib/format";
 import { EmptyState } from "../../shared/ui/EmptyState";
 import { MetricRow } from "../../shared/ui/MetricRow";
@@ -45,6 +46,7 @@ interface SettingsFormState {
   llm_base_url: string;
   anthropic_api_key: string;
   deepseek_api_key: string;
+  api_token: string;
 }
 
 function formFromSettings(settings: RuntimeSettings): SettingsFormState {
@@ -55,6 +57,7 @@ function formFromSettings(settings: RuntimeSettings): SettingsFormState {
     llm_base_url: settings.llm_base_url ?? "",
     anthropic_api_key: "",
     deepseek_api_key: "",
+    api_token: "",
   };
 }
 
@@ -90,11 +93,11 @@ export function SettingsPanel({ settings, venues, onSave }: SettingsPanelProps) 
     setSaving(true);
     setError(null);
     try {
+      setApiToken(currentForm.api_token);
       await onSave({
         llm_provider: currentForm.llm_provider,
         llm_model: currentForm.llm_model,
         llm_model_fast: currentForm.llm_model_fast,
-        llm_base_url: currentForm.llm_base_url,
         anthropic_api_key: currentForm.anthropic_api_key,
         deepseek_api_key: currentForm.deepseek_api_key,
       });
@@ -163,7 +166,7 @@ export function SettingsPanel({ settings, venues, onSave }: SettingsPanelProps) 
               <input
                 value={currentForm.llm_base_url}
                 placeholder={currentForm.llm_provider === "deepseek" ? "https://api.deepseek.com" : "默认"}
-                onChange={(event) => updateField("llm_base_url", event.target.value)}
+                disabled
               />
             </label>
             <label>
@@ -184,10 +187,19 @@ export function SettingsPanel({ settings, venues, onSave }: SettingsPanelProps) 
                 onChange={(event) => updateField("deepseek_api_key", event.target.value)}
               />
             </label>
+            <label>
+              <span>API 写操作令牌</span>
+              <input
+                type="password"
+                value={currentForm.api_token}
+                placeholder={settings.api_auth_enabled ? "输入 CYP_API_TOKEN" : "本机回环访问可留空"}
+                onChange={(event) => updateField("api_token", event.target.value)}
+              />
+            </label>
             <button className="command-button command-button--primary" type="button" onClick={save} disabled={saving}>
               {saving ? "保存中" : "保存设置"}
             </button>
-            <p className="muted-line">保存只对当前后端进程生效，密钥不会在页面回显。</p>
+            <p className="muted-line">Base URL 仅可通过启动配置修改；模型密钥不会回显，API 令牌只保存在当前浏览器。</p>
           </div>
         </div>
 

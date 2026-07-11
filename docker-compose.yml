@@ -8,16 +8,43 @@ services:
       POSTGRES_PASSWORD: cyp
       POSTGRES_DB: cyp
     ports:
-      - "5433:5432"   # 宿主机 5432 常被其它项目占用，cyp 统一走 5433
+      - "5433:5432"
     volumes:
       - cyp-pgdata:/var/lib/postgresql/data
-      # 首次建卷时执行的初始化 SQL（timescaledb 扩展 + 建表 + hypertable）
       - ./docker/initdb:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U cyp -d cyp"]
       interval: 5s
       timeout: 3s
       retries: 12
+
+  backend:
+    build:
+      context: .
+    image: cyp-agent:local
+    container_name: cyp-agent
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      CYP_MODE: paper
+      CYP_EXECUTION_VENUE: paper
+      CYP_DATA_SOURCE: synthetic
+      CYP_PERSISTENCE: postgres
+      CYP_DB_URL: postgresql://cyp:cyp@db:5432/cyp
+      CYP_APPROVAL: dashboard
+      CYP_RUNTIME_AUTOSTART: "false"
+      CYP_API_TOKEN: "${CYP_API_TOKEN:-}"
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      BINANCE_API_KEY: ${BINANCE_API_KEY:-}
+      BINANCE_API_SECRET: ${BINANCE_API_SECRET:-}
+      OKX_API_KEY: ${OKX_API_KEY:-}
+      OKX_API_SECRET: ${OKX_API_SECRET:-}
+      OKX_PASSWORD: ${OKX_PASSWORD:-}
+    ports:
+      - "127.0.0.1:8000:8000"
 
 volumes:
   cyp-pgdata:

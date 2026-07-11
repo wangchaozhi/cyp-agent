@@ -1,0 +1,444 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cyp-agent.local/schemas/dashboard-event.schema.json",
+  "title": "cyp-agent DashboardEvent",
+  "description": "JSON carried by the data field of a default SSE message event. Collections and nested objects are never null, optional objects are omitted, and trading decimals are strings.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "run_id", "ts"],
+  "properties": {
+    "type": {
+      "type": "string",
+      "enum": [
+        "run_started",
+        "snapshot_ready",
+        "reports_ready",
+        "proposal_ready",
+        "risk_assessed",
+        "awaiting_approval",
+        "approval_decided",
+        "executed",
+        "reviewed",
+        "run_done",
+        "run_failed",
+        "killswitch",
+        "position_monitor",
+        "reconciled"
+      ]
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "ts": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "symbol": {
+      "type": "string"
+    },
+    "bars": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "reports": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/AnalystReport"
+      }
+    },
+    "proposal": {
+      "$ref": "#/$defs/TradeProposal"
+    },
+    "assessment": {
+      "$ref": "#/$defs/RiskAssessment"
+    },
+    "decision": {
+      "$ref": "#/$defs/ApprovalDecision"
+    },
+    "execution": {
+      "$ref": "#/$defs/ExecutionResult"
+    },
+    "review": {
+      "$ref": "#/$defs/TradeReview"
+    },
+    "error": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "no_trade",
+        "rejected",
+        "not_approved",
+        "executed",
+        "execution_failed",
+        "error"
+      ]
+    },
+    "on": {
+      "type": "boolean"
+    },
+    "positions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Position"
+      }
+    },
+    "alerts": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "protective_gaps": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "trace": {
+      "type": "object"
+    }
+  },
+  "oneOf": [
+    {
+      "properties": { "type": { "const": "run_started" } },
+      "required": ["symbol"]
+    },
+    {
+      "properties": { "type": { "const": "snapshot_ready" } },
+      "required": ["symbol", "bars"]
+    },
+    {
+      "properties": { "type": { "const": "reports_ready" } },
+      "required": ["symbol", "reports"]
+    },
+    {
+      "properties": { "type": { "const": "proposal_ready" } },
+      "required": ["symbol", "proposal"]
+    },
+    {
+      "properties": { "type": { "const": "risk_assessed" } },
+      "required": ["symbol", "assessment"]
+    },
+    {
+      "properties": { "type": { "const": "awaiting_approval" } },
+      "required": ["symbol", "proposal", "assessment"]
+    },
+    {
+      "properties": { "type": { "const": "approval_decided" } },
+      "required": ["symbol", "decision"]
+    },
+    {
+      "properties": { "type": { "const": "executed" } },
+      "required": ["symbol", "execution"]
+    },
+    {
+      "properties": { "type": { "const": "reviewed" } },
+      "required": ["symbol", "review"]
+    },
+    {
+      "properties": { "type": { "const": "run_done" } },
+      "required": ["symbol", "status"]
+    },
+    {
+      "properties": { "type": { "const": "run_failed" } },
+      "required": ["symbol", "error"]
+    },
+    {
+      "properties": { "type": { "const": "killswitch" } },
+      "required": ["on"]
+    },
+    {
+      "properties": { "type": { "const": "position_monitor" } },
+      "required": ["positions", "alerts"]
+    },
+    {
+      "properties": { "type": { "const": "reconciled" } },
+      "required": ["positions", "protective_gaps"]
+    }
+  ],
+  "$defs": {
+    "DecimalString": {
+      "type": "string",
+      "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$"
+    },
+    "NullableDecimalString": {
+      "oneOf": [
+        { "$ref": "#/$defs/DecimalString" },
+        { "type": "null" }
+      ]
+    },
+    "Signal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "value", "note"],
+      "properties": {
+        "name": { "type": "string" },
+        "value": { "type": "string" },
+        "note": { "type": "string" }
+      }
+    },
+    "AnalystReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agent", "stance", "confidence", "signals", "rationale", "degraded"],
+      "properties": {
+        "agent": { "type": "string" },
+        "stance": {
+          "type": "string",
+          "enum": ["bullish", "bearish", "neutral"]
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "signals": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Signal" }
+        },
+        "rationale": { "type": "string" },
+        "degraded": { "type": "boolean" }
+      }
+    },
+    "PricePlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["market", "limit", "range"]
+        },
+        "price": { "$ref": "#/$defs/NullableDecimalString" },
+        "low": { "$ref": "#/$defs/NullableDecimalString" },
+        "high": { "$ref": "#/$defs/NullableDecimalString" }
+      }
+    },
+    "TradeProposal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "symbol",
+        "venue",
+        "side",
+        "instrument",
+        "size_quote",
+        "leverage",
+        "margin_mode",
+        "entry",
+        "take_profit",
+        "confidence",
+        "thesis",
+        "supporting_reports"
+      ],
+      "properties": {
+        "symbol": { "type": "string" },
+        "venue": { "type": "string" },
+        "side": {
+          "type": "string",
+          "enum": ["long", "short", "flat"]
+        },
+        "instrument": {
+          "type": "string",
+          "enum": ["spot", "perp"]
+        },
+        "size_quote": { "$ref": "#/$defs/DecimalString" },
+        "leverage": {
+          "type": "number",
+          "minimum": 1
+        },
+        "margin_mode": {
+          "type": "string",
+          "enum": ["isolated", "cross"]
+        },
+        "entry": { "$ref": "#/$defs/PricePlan" },
+        "stop_loss": { "$ref": "#/$defs/NullableDecimalString" },
+        "take_profit": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/DecimalString" }
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "thesis": { "type": "string" },
+        "supporting_reports": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "RiskAssessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verdict", "hard_violations", "llm_notes", "risk_score", "llm_reviewed"],
+      "properties": {
+        "verdict": {
+          "type": "string",
+          "enum": ["approved", "downsized", "rejected"]
+        },
+        "hard_violations": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "adjusted_size_quote": { "$ref": "#/$defs/NullableDecimalString" },
+        "llm_notes": { "type": "string" },
+        "risk_score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "llm_reviewed": { "type": "boolean" }
+      }
+    },
+    "ApprovalDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["decision", "operator", "ts", "note"],
+      "properties": {
+        "decision": {
+          "type": "string",
+          "enum": ["approve", "reject", "modify"]
+        },
+        "modified": { "$ref": "#/$defs/TradeProposal" },
+        "operator": { "type": "string" },
+        "ts": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "note": { "type": "string" }
+      }
+    },
+    "ProtectiveOrder": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "order_id", "trigger_price", "reduce_only"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["stop_loss", "take_profit"]
+        },
+        "order_id": { "type": "string" },
+        "trigger_price": { "$ref": "#/$defs/DecimalString" },
+        "reduce_only": { "type": "boolean" }
+      }
+    },
+    "ExecutionResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["client_id", "status", "filled_base", "fee_quote", "protective_orders"],
+      "properties": {
+        "client_id": { "type": "string" },
+        "order_id": {
+          "type": ["string", "null"]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "new",
+            "preflight",
+            "submitting",
+            "acknowledged",
+            "partially_filled",
+            "filled",
+            "protective_placed",
+            "closed",
+            "canceled",
+            "rejected",
+            "failed",
+            "unknown",
+            "protective_failed",
+            "flattening"
+          ]
+        },
+        "filled_base": { "$ref": "#/$defs/DecimalString" },
+        "avg_price": { "$ref": "#/$defs/NullableDecimalString" },
+        "fee_quote": { "$ref": "#/$defs/DecimalString" },
+        "slippage_bps": { "$ref": "#/$defs/NullableDecimalString" },
+        "protective_orders": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ProtectiveOrder" }
+        },
+        "error": {
+          "type": ["string", "null"]
+        },
+        "chain": {
+          "type": ["string", "null"]
+        },
+        "tx_hash": {
+          "type": ["string", "null"]
+        },
+        "gas_used": { "$ref": "#/$defs/NullableDecimalString" }
+      }
+    },
+    "TradeReview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["symbol", "proposal_ref", "score", "pnl_quote", "lessons", "notes", "ts"],
+      "properties": {
+        "symbol": { "type": "string" },
+        "proposal_ref": { "type": "string" },
+        "score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "pnl_quote": { "$ref": "#/$defs/DecimalString" },
+        "slippage_bps": { "$ref": "#/$defs/NullableDecimalString" },
+        "lessons": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "notes": { "type": "string" },
+        "ts": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "Position": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["symbol", "venue", "side", "instrument", "size_base", "entry_price", "leverage"],
+      "properties": {
+        "symbol": { "type": "string" },
+        "venue": { "type": "string" },
+        "side": {
+          "type": "string",
+          "enum": ["long", "short"]
+        },
+        "instrument": {
+          "type": "string",
+          "enum": ["spot", "perp"]
+        },
+        "size_base": { "$ref": "#/$defs/DecimalString" },
+        "entry_price": { "$ref": "#/$defs/DecimalString" },
+        "leverage": {
+          "type": "number",
+          "minimum": 1
+        },
+        "liq_price": { "$ref": "#/$defs/NullableDecimalString" },
+        "margin_mode": {
+          "type": ["string", "null"],
+          "enum": ["isolated", "cross", null]
+        },
+        "chain": {
+          "type": ["string", "null"]
+        },
+        "tx_hash": {
+          "type": ["string", "null"]
+        },
+        "mark_price": { "$ref": "#/$defs/DecimalString" },
+        "notional": { "$ref": "#/$defs/DecimalString" },
+        "unrealized_pnl": { "$ref": "#/$defs/DecimalString" },
+        "unrealized_pnl_pct": { "$ref": "#/$defs/DecimalString" },
+        "margin_used": { "$ref": "#/$defs/NullableDecimalString" },
+        "funding_rate": { "$ref": "#/$defs/NullableDecimalString" }
+      }
+    }
+  }
+}

@@ -1,221 +1,158 @@
-# 架构设计 · cyp-agent
+# 架构设计
 
-## 设计目标
+本文描述 `main` 当前实现。后端、运行时、智能体、风控、回测和命令行均为 Go；前端为 React/Vite。旧实现只存在于历史归档分支，不参与主分支构建或运行。
 
-1. **风控优先于智能**：确定性硬护栏（`risk/`）先于任何 LLM 决策执行并拥有一票否决权，LLM 只能在护栏内建议。
-2. **场所可插拔**：CEX（现货+合约）与链上 DeFi 统一到一个 `Venue` 接口，新增交易所/链只实现接口 + 注册一行。
-3. **无密钥可降级**：没有交易所 Key、没有 LLM Key，也能用 `PaperVenue` + 规则模板信号端到端跑通。
-4. **契约单一来源**：`contracts/` 的 pydantic 模型是前后端唯一真相，React 类型由其生成。
-5. **生产级韧性**：重试/熔断/检查点/任务租约/幂等下单/可观测/成本护栏内建（复用 prod-agent 四大支柱）。
+## 设计原则
+
+- **安全优先**：确定性风控、审批、Kill Switch、启动对账和执行场所检查均在下单前生效。
+- **默认可运行**：零密钥时使用合成行情、规则/Mock LLM 和 Paper 撮合，仍可跑通完整闭环。
+- **实盘默认拒绝**：当前版本只允许 `mode=paper` 且 `execution_venue=paper` 开仓；CEX 和链上真实下单为代码级硬禁用。
+- **契约明确**：Go DTO 位于 `internal/contracts`；外部 HTTP/SSE 契约分别位于 `api/openapi.yaml` 和 `api/jsonschema/`。
+- **状态可恢复**：检查点和复盘经验可存入内存、原子 JSON 文件或 PostgreSQL。
+- **边界可替换**：行情、LLM、Venue 和持久化均通过 Go 接口注入。
 
 ## 总览
 
-```
-┌───────────────────────────── apps/web (React + Vite) ──────────────────────────────┐
-│  信号流   待审批卡片   持仓/PnL   风控看板   系统状态   Kill Switch                  │
-└───────────────────────────────┬─────────────────────────────────────────────────────┘
-                                 │ REST + SSE（契约类型来自 packages/shared，由 pydantic 生成）
-┌────────────────────────────────▼──────────────── apps/server (FastAPI) ─────────────┐
-│  routes/  snapshots · proposals · approvals · positions · events(SSE) · killswitch   │
-└────────────────────────────────┬─────────────────────────────────────────────────────┘
-                                 │
-┌────────────────────────────────▼──────────────── core/cyp ──────────────────────────┐
-│  orchestrator.py  ── 编排 7 步闭环，逐步落检查点、发事件                              │
-│                                                                                       │
-│  agents/     ┌──────────────────────────────────────────────────────────────────┐   │
-│              │ ① 分析师团（并行）  技术面 · 衍生品 · 情绪 · 链上                   │   │
-│              │ ② 首席策略官        合成 TradeProposal                            │   │
-│              │ ③ 风控官            LLM 软评审（在硬护栏之上）                     │   │
-│              │ ④ 交易员            审批后执行编排                                 │   │
-│              │ ⑤ 复盘官            归因 + 经验沉淀（反馈闭环）                     │   │
-│              └──────────────────────────────────────────────────────────────────┘   │
-│                                                                                       │
-│  risk/       确定性风控引擎（★非 LLM，一票否决）：仓位/回撤/杠杆/敞口/授权/冷静期     │
-│  approval/   人工审批门：pending 队列 · 超时策略 · 全审计                            │
-│  venue/      统一场所抽象   CexVenue(ccxt) │ OnchainVenue(web3+DEX) │ PaperVenue     │
-│  data/       数据管线   行情/K线/订单簿 · 资金费/OI · 链上流向 · 情绪                │
-│  llm/        ResilientLLM   anthropic │ mock（缺 Key 降级）                          │
-│  execution/  订单生命周期 + 幂等 + 链上签名器（隔离，永不落盘）                       │
-│  portfolio/  持仓/账本/盈亏     memory/  检查点(PostgreSQL)                           │
-│  observability/  trace · metrics · JSON 日志（脱敏）    events.py  事件总线→SSE       │
-│  contracts/  ★ pydantic 模型（前后端契约单一来源）                                   │
-└───────────────────────────────────────────────────────────────────────────────────────┘
+```text
+apps/web (React/Vite)
+        │ REST + SSE
+        ▼
+cmd/cyp-server → internal/api (net/http)
+        │
+        ├─ control/config ── 运行配置、Kill Switch、脱敏快照
+        ├─ orchestrator ──── 一轮交易工作流
+        │    ├─ data ─────── 合成行情或 CEX 公共行情
+        │    ├─ agents/llm ─ 分析、策略、软风控、复盘
+        │    ├─ risk ─────── 确定性硬风控
+        │    ├─ approval ─── 人工或受限自动审批
+        │    └─ venue ────── Paper 执行
+        ├─ runtime ───────── 启动对账、扫描、持仓监控
+        ├─ persistence ───── memory / atomic JSON / PostgreSQL
+        └─ events/metrics ── SSE 事件、运行指标、JSON 日志
+
+cmd/cyp ── backtest / sweep / config / version
 ```
 
-## 分层职责
+## 启动与装配
 
-| 层 | 目录 | 职责 | 关键约束 |
+`cmd/cyp-server` 是唯一服务入口：
+
+1. `internal/config.Load` 读取默认值、`.env` 和进程环境变量；进程环境变量优先。
+2. `internal/app.New` 创建控制状态、事件总线、PaperVenue、Binance/OKX 只读适配器、行情源、Repository、LLM、智能体、编排器和 RuntimeEngine。
+3. RuntimeEngine 必须先完成 Paper 启动对账。对账失败时应用构建失败，新开仓保持冻结。
+4. `CYP_RUNTIME_AUTOSTART=true` 时，对账后再启动机会扫描和持仓监控；否则只完成一次启动对账。
+5. API 使用 Go 标准库 `net/http` 提供 REST、SSE 和已构建前端静态文件。
+6. 收到 `SIGINT`/`SIGTERM` 后停止运行时、审批等待与事件流，再执行 HTTP 优雅关闭。
+
+## 包职责
+
+| 目录 | 职责 |
+| --- | --- |
+| `cmd/cyp-server` | HTTP 服务入口、信号处理、结构化日志 |
+| `cmd/cyp` | 回测、扫参、脱敏配置和版本命令 |
+| `internal/app` | 依赖装配与资源生命周期 |
+| `internal/contracts` | DTO、枚举、事件和精确 Decimal |
+| `internal/config` | `.env`/环境变量解析、校验、密钥脱敏、实盘硬门禁 |
+| `internal/api` | REST、SSE、静态前端、请求限制和 request ID |
+| `internal/orchestrator` | 异步 run 生命周期与检查点 |
+| `internal/agents` | 并行分析师、策略官、风险官和复盘官 |
+| `internal/llm` | Anthropic、DeepSeek、Mock、重试/熔断/预算 |
+| `internal/risk` | 仓位、敞口、滑点、杠杆、回撤等确定性规则 |
+| `internal/approval` | pending 队列、approve/reject/modify、超时 |
+| `internal/venue` | 统一 Venue、Paper、Binance/OKX 只读和链上安全适配 |
+| `internal/data` | 合成/CEX 行情、指标、波动率和跨场所聚合 |
+| `internal/runtime` | 启动对账、安全冻结、扫描、持仓监控和 symbol 锁 |
+| `internal/persistence` | 内存、原子 JSON 文件和 PostgreSQL Repository |
+| `internal/backtest` | 回测、扫参、walk-forward、PBO/DSR 和归档 |
+| `internal/events` | 有界发布订阅总线，供 SSE 消费 |
+| `internal/metrics`、`internal/observability` | 运行指标、日志、轻量 trace |
+| `internal/portfolio`、`internal/alerts` | 组合视图和告警输出 |
+
+## 一轮交易的数据流
+
+`POST /api/run` 快速返回 `run_id`，实际工作流在后台执行：
+
+```text
+采集 MarketSnapshot
+  → 四类分析师并行分析（单维失败局部降级）
+  → Strategist 生成 TradeProposal
+  → Venue.Preflight
+  → 确定性 Risk + RiskOfficer 评审
+  → 人工审批或满足白名单/额度/风险阈值的 auto 审批
+  → 对修改后的提案重新执行确定性风控
+  → SafetyState 检查 Paper 模式、Kill Switch 和对账状态
+  → 保存 OrderIntent
+  → PaperVenue.Place（client_id 幂等）
+  → Reviewer 复盘并保存 lessons
+  → 发布 SSE 事件并保存最终结果
+```
+
+持久化检查点包括 `proposal`、`risk`、`approval`、`order_intent`、`execution` 和 `result`。敏感字段在写入 Repository 前递归脱敏。
+
+所有金额类契约使用 `internal/contracts.Decimal`。JSON 输出为十进制字符串，请勿在前端或集成层把金额先转为二进制浮点数再回传。
+
+## 执行安全边界
+
+当前执行能力如下：
+
+| 场所 | 行情 | 账户只读 | 下单/撤单 |
 | --- | --- | --- | --- |
-| 契约 | `contracts/` | 定义所有跨层数据结构 | 唯一真相；改动需同步 TS |
-| 编排 | `orchestrator.py` | 串联 7 步、落检查点、发事件、驱动反馈闭环 | 不含业务判断，只调度 |
-| 智能体 | `agents/` | LLM 驱动的分析/决策/评审/复盘 | 纯模块、依赖注入、必带降级 |
-| 风控 | `risk/` | 确定性硬护栏 + 否决 | **非 LLM**、纯函数、全单测 |
-| 审批 | `approval/` | 人在环关卡 | 每笔真实下单必经；全审计 |
-| 场所 | `venue/` | 统一 CEX/链上/模拟接口 | 可插拔；下单幂等 |
-| 数据 | `data/` | 行情/衍生品/链上/情绪采集与指标 | 缺源降级不阻断 |
-| 执行 | `execution/` | 订单生命周期、签名 | 幂等；私钥隔离 |
-| 平台 | `llm/ memory/ observability/ events.py` | 韧性/持久/可观测/事件 | 复用 prod-agent 支柱 |
+| Paper | 支持 | 支持 | 支持 |
+| Binance | 公共行情支持 | 配置凭据后支持签名只读请求 | 硬禁用 |
+| OKX | 公共行情支持 | 配置凭据后支持签名只读请求 | 硬禁用 |
+| Onchain | 适配器能力存在，未接入应用默认注册表 | 不作为当前运行路径 | 默认硬禁用 |
 
-## 契约单一来源
+实盘拒绝不是一个可由环境变量打开的功能：
 
-`contracts/models.py`（pydantic v2）定义 7 步之间流动的全部数据结构：
+- `config.LiveExecutionSupported` 为 `false`，`LiveExecutionAllowed` 始终返回 `false`；
+- Runtime 只允许 `paper/paper` 新开仓；
+- Orchestrator 在执行前再次校验运行模式；
+- CEX `Place`/`Cancel` 明确返回禁用结果；
+- API 的执行依赖固定为 PaperVenue。
 
-```python
-class MarketSnapshot(BaseModel):      # 采集产物：某标的的多维快照
-    symbol: str
-    venue: str
-    ts: datetime
-    ohlcv: list[Candle]
-    orderbook: OrderBook | None
-    derivatives: DerivativesData | None   # 资金费/OI/爆仓/基差（合约）
-    onchain: OnchainData | None           # 聪明钱流向/DEX 流动性/持有分布
-    sentiment: SentimentData | None       # 恐贪/新闻情绪/社媒热度
+因此，设置 API Key、`CYP_LIVE_ACK=1` 或关闭 Kill Switch 都不会授权真实下单。
 
-class AnalystReport(BaseModel):       # 每位分析师产物
-    agent: str                         # technical / derivatives / sentiment / onchain
-    stance: Literal["bullish","bearish","neutral"]
-    confidence: float                  # 0..1
-    signals: list[Signal]              # 结构化信号
-    rationale: str                     # 中文说明
-    degraded: bool                     # 是否因缺数据降级
+## 行情与 LLM 降级
 
-class TradeProposal(BaseModel):       # 首席策略官产物
-    symbol: str; venue: str
-    side: Literal["long","short","flat"]
-    instrument: Literal["spot","perp"]
-    size_quote: Decimal                # 计价币规模
-    leverage: float                    # 现货=1
-    entry: PricePlan                   # 市价/限价/区间
-    stop_loss: Decimal                 # ★ 必填，无止损直接被风控否决
-    take_profit: list[Decimal]
-    confidence: float
-    thesis: str; supporting_reports: list[str]
+- `CYP_DATA_SOURCE=synthetic`：默认使用确定性合成历史和实时 tick。
+- `CYP_DATA_SOURCE=cex`：使用 `CYP_CEX_ID` 选择 Binance 或 OKX 公共行情；跨场所摘要由 MarketAggregator 聚合。
+- 无有效 LLM Key：`llm.FromSettings` 使用 Mock provider，智能体执行规则化降级。
+- 有 Key：支持 Anthropic，或使用 OpenAI-compatible 接口的 DeepSeek；调用受次数、token、成本和墙钟预算限制。
+- 单个分析师失败只把对应报告标为降级，保持报告顺序；父 context 取消会终止整组任务。
 
-class RiskAssessment(BaseModel):      # 风控引擎 + 风控官产物
-    verdict: Literal["approved","downsized","rejected"]
-    hard_violations: list[str]         # 触发的确定性规则（否决原因）
-    adjusted_size_quote: Decimal | None
-    llm_notes: str
-    risk_score: float                  # 0..1
+## 状态、对账与运行时
 
-class ApprovalDecision(BaseModel):    # 人工审批门产物
-    decision: Literal["approve","reject","modify"]
-    modified: TradeProposal | None
-    operator: str; ts: datetime; note: str
+SafetyState 初始为冻结状态，只有成功的 `StartupReconcile` 可以解除冻结。当前对账目标固定为 PaperVenue，会核验持仓及止损保护；发现未解决差异或保护缺口时服务拒绝启动。
 
-class OrderIntent(BaseModel): ...     # 交易员 → Venue 的下单意图（含幂等 client_id）
-class ExecutionResult(BaseModel): ... # 成交结果（成交价/量/手续费/滑点/订单状态）
-class TradeReview(BaseModel): ...     # 复盘官产物（归因/评分/经验条目）
-```
+RuntimeEngine 包含两条可选常驻循环：
 
-TS 类型生成：`pydantic → JSON Schema → quicktype/datamodel` 产出 `packages/shared/`，仪表盘只 import 这里。
+- Scanner 按 `CYP_SCAN_INTERVAL` 扫描 `CYP_WATCHLIST` 并触发 run；
+- PositionMonitor 按 `CYP_MONITOR_INTERVAL` 检查 Paper 持仓、保护条件和告警。
 
-## Venue 统一抽象（本架构最关键的设计）
+同一 symbol 通过锁避免并发扫描冲突。Kill Switch 阻止新开仓，但平仓接口仍可用于降低风险。
 
-CEX 与链上的执行语义差异极大，但对上层「交易员」必须长得一样。统一接口：
+## 持久化
 
-```python
-class Venue(Protocol):
-    id: str
-    kind: Literal["cex", "onchain", "paper"]
-    capabilities: VenueCaps            # 支持现货?合约?限价?保证金模式?
-    def is_configured(self) -> bool: ...
-    async def fetch_market(self, symbol) -> MarketSnapshotPart: ...
-    async def positions(self) -> list[Position]: ...
-    async def balances(self) -> Balances: ...
-    async def place(self, intent: OrderIntent) -> ExecutionResult: ...   # 幂等
-    async def cancel(self, order_id) -> None: ...
-    async def preflight(self, intent) -> PreflightReport: ...            # 下单前估算
-```
-
-| 实现 | 底座 | 现货 | 合约 | 特有关注点 |
-| --- | --- | --- | --- | --- |
-| `CexVenue` | ccxt | ✅ | ✅ 永续 | **原生保护单**、**持仓/保证金模式**、资金费、精度/最小下单量、限频 |
-| `OnchainVenue` | web3.py + DEX 路由(1inch/Jupiter) | ✅ swap | — | gas、滑点/价格冲击、token 授权、nonce、MEV、私有内存池 |
-| `PaperVenue` | 内存撮合 | ✅ | ✅ | 零密钥；用真实行情喂价、确定性滑点模型；M0 默认 |
-
-`preflight()` 是统一的「下单前体检」：CEX 检查精度/余额/限频，链上估算 gas + 价格冲击 + 检查授权额度。风控引擎消费 preflight 结果做最终硬校验。
-
-**新增一个场所**：实现 `Venue` → `registry.register(...)` 一行 → 仪表盘的场所选择、配置状态、能力展示全部自动生效（数据来自 `GET /api/venues`）。对标 game-asset-forge 的 provider 注册表。
-
-### CEX 适配点（每家交易所必做，参考实现 = Binance）
-
-ccxt 统一了行情/下单，但下列细节各家不同、**统一不了**，必须按交易所写小适配器并单独测试。它们直接决定 [RUNTIME.md](RUNTIME.md) 的「有仓必有保护」能否落地：
-
-| 适配点 | 说明 | ccxt 能否抹平 |
+| `CYP_PERSISTENCE` | 行为 | 适用场景 |
 | --- | --- | --- |
-| **原生保护单** | 止损/OCO/reduce-only/bracket 的参数与附带止盈止损方式各家不同 | ❌ 需 per-venue 适配 |
-| **持仓模式** | 单向 vs 双向（Binance `dualSidePosition` / OKX position mode） | ❌ |
-| **保证金模式** | 全仓 vs 逐仓切换方式 | ❌ |
-| 精度/最小下单量/手续费 | 数值与规则各异，影响 preflight | ⚠️ 部分 |
-| 限频 | 权重与窗口各异 | ⚠️ 部分 |
-| WebSocket 流 | 行情/成交推送格式与限制 | ⚠️ 部分 |
-| testnet/demo | Binance Futures/Spot Testnet；OKX Demo Trading | — |
+| `memory` | 仅进程内保存 | 单元测试、短时验证 |
+| `file` | 原子写入 `CYP_STATE_FILE`，默认 `data/cyp-state.json` | 本地开发、单实例 |
+| `postgres` | pgx 连接池，保存 `checkpoints` 和 `lessons` | Docker Compose、持久部署 |
 
-> **参考实现选定 Binance**：ccxt 对其最成熟、Testnet 齐全，最适合先把「实盘下单 + 原生保护单 + 对账」这套硬骨头啃透。设计上 `CexVenue` 以 ccxt id 参数化 + 一个按交易所分派的「保护单/持仓模式适配层」；第二家（OKX 等）在 M4「多所」基本是「填适配层 + 一轮针对性测试」，不是重写。
+文件模式通过临时文件、原子替换和 `.bak` 恢复降低中断写入风险；不支持多进程共享。PostgreSQL 模式会在启动时确保所需表和字段存在，初始化 SQL 同时位于 `db/migrations/` 与 `docker/initdb/`。
 
-## 多智能体编排与反馈闭环
+## HTTP 与事件契约
 
-编排在 `orchestrator.py`，每个 Agent 是**显式注入依赖的纯模块**（便于单测/替换）。核心闭环见 [KICKOFF.md §5](KICKOFF.md)。两条反馈闭环：
+核心接口包括健康/就绪、场所、设置、行情、持仓、组合、风控、指标、回测、run、审批、Kill Switch 和 SSE。公开业务契约与 Schema 见 [`api/openapi.yaml`](../api/openapi.yaml)，运行时另提供 `GET /api/ready` 作为安全就绪检查；Dashboard 事件见 [`api/jsonschema/dashboard-event.schema.json`](../api/jsonschema/dashboard-event.schema.json)。
 
-- **风控否决闭环**：`风控引擎/风控官 verdict=rejected` → 否决理由注入首席策略官 → 重议（≤ `maxRetries`）。对标 game-asset-forge 的「审查官打回提示词工程师」。
-- **复盘经验闭环**：`复盘官` 产出的 `TradeReview.lessons` 写入 `memory/`，下一轮作为上下文注入分析师/策略官（轻量长期记忆）。
+SSE 使用 `text/event-stream`，连接建立后发送 retry 指令，每 15 秒发送 keepalive。事件来自进程内有界总线；它不是持久化事件日志，客户端断线后应重新拉取 REST 快照。
 
-关键决策（沿用两参照项目的工程哲学）：
-- **失败隔离**：单个分析师失败只记日志、标 `degraded=true`，不阻断其它维度；全部失败才判该轮失败。
-- **静默降级**：任一 Agent 的 LLM 调用异常 → 回退规则模板；数据源缺失 → 该维度跳过。系统永不因 LLM/单一数据源阻断。
-- **人工兜底**：审批门是最终防线，即便前面全对，人仍可一票拒绝。
+写请求必须使用 JSON，并经过浏览器同源检查。配置 `CYP_API_TOKEN` 后还必须携带 Bearer token；非回环监听缺少 token 时进程拒绝启动。开发环境默认监听 `127.0.0.1`，对外部署仍须在可信反向代理后增加 TLS、访问控制和审计。
 
-## 降级矩阵
+## 变更规则
 
-| 缺失 | 降级行为 | 仍可跑通? |
-| --- | --- | --- |
-| 交易所 API Key | 用 `PaperVenue` + CEX 只读公共行情 | ✅ |
-| `ANTHROPIC_API_KEY` | 所有 Agent 回退规则模板信号 | ✅ |
-| 情绪数据源 | 情绪分析师标 degraded、权重降为 0 | ✅ |
-| 链上 RPC | 链上分析师跳过；`OnchainVenue` 不可用但不影响 CEX | ✅ |
-| 数据库不可写 | 内存态运行 + 告警（失去断点续跑能力） | ✅（有损） |
-
-> 铁律：**任何单点失效都降级而非崩溃**，且降级路径是 CI 门禁（无密钥端到端测试必过）。
-
-## 生产四大支柱（复用 prod-agent）
-
-**可靠性** — `ResilientLLM` 仅重试瞬态错误（429/5xx/超时），指数退避+抖动，熔断器；LLM `stop_reason` 全语义处理。每步落检查点，`resume(run_id)` 断点续跑。**任务租约**防多进程重复下单（同一 `run_id` 互斥）。**下单幂等**：`OrderIntent.client_id` 作为交易所 `clientOrderId` / 链上 nonce 去重键，崩溃重放不重复成交。
-
-**可观测性** — 每轮一个 `trace_id`，每次 LLM/下单/preflight 一个 span；JSON 结构化日志可直接进 ELK/Loki；`metrics.snapshot()` 导出信号数、审批通过率、成交/滑点、PnL、token 用量与延迟分布；日志自动脱敏 `api_key/private_key/token`。
-
-**成本控制** — 迭代次数、总 token、美元成本、墙钟四重硬上限，触发即优雅终止；默认开启提示词缓存（system/tools/最新消息打断点）；分析师团的只读 LLM 调用批量并行降延迟。
-
-**安全** — 工具白名单（未注册即拒）；READ/WRITE/EXECUTE 三级权限，**下单属 EXECUTE 必经审批门**；参数下单前 JSON Schema 校验；交易所 Key 只从 env 读、禁提现权限；**链上私钥走隔离签名器**（本地 keystore/KMS/硬件），永不落盘、永不进 LLM 上下文、永不出现在日志。详见 [RISK.md](RISK.md)。
-
-## 数据流时序（一次完整交易）
-
-```
-web ──POST /run(symbol)──▶ server ──▶ orchestrator
-  orchestrator: ① data.* 并发拉取 → MarketSnapshot        │ span: collect
-              → ② agents 并行 → [AnalystReport...]         │ spans: analyze.*
-              → ③ strategist → TradeProposal               │ span: strategize
-              → ④ risk.engine 硬校验 →(pass)→ risk_officer  │ span: risk
-                   └─(reject)→ 反馈→重议  ↺
-              → 发事件 proposal_ready ──SSE──▶ web 弹出待审批卡片
-  operator ──POST /approvals/{id}(approve)──▶ approval.gate → ApprovalDecision
-  orchestrator: ⑥ trader → venue.preflight → venue.place    │ span: execute
-              → ExecutionResult ──SSE──▶ web 更新持仓/PnL
-  (持仓平仓后) ⑦ reviewer → TradeReview → memory.lessons     │ span: review
-  每步 memory.checkpoint(run_id)  ·  全程 events → SSE
-```
-
-## 运行时驱动与恢复（三条循环 + 保护 + 对账）
-
-上面的时序是「一次 run」的内部流程；但 7×24 市场里**谁驱动 run、持仓怎么被保护、崩溃后怎么恢复**同样是架构的一部分。详见 [RUNTIME.md](RUNTIME.md)，要点：
-
-- **三条循环**：`机会扫描`（找新仓）+ `持仓监控`（常驻高频，盯已有仓，可触发防御性减仓/平仓）+ `Watchdog`（心跳/对账/告警）。触发（定时+事件）产出 `RunRequest` → 受控并发队列（同 symbol 租约互斥）→ orchestrator。
-- **止损独立于进程存活**：CEX 入场成交后**立即挂交易所侧原生保护单**（bracket/OCO/reduce-only），下保护失败则立即平掉裸仓；链上无原生止损，改为监控循环 + 更严护栏（更小仓位/更大缓冲）。**有仓必有保护**。
-- **对账优先于决策**：启动/恢复/周期性都与交易所/链上真实状态对账（真相在远端），**对账未完成冻结新开仓**（`state=RECONCILING`），仅允许减仓/平仓/补保护。
-- **方向相反的 fail-safe**：开仓审批超时=拒绝；护仓动作超时=自动保护（平仓/补挂），因为此处「不动」才是危险。
-
-## 与两个参照项目的关系
-
-- 借鉴 **game-asset-forge**：多智能体流水线 + 反馈闭环、Provider/Venue 注册表、SSE 实时、契约单一来源、无密钥可跑（mock 引擎 ↔ PaperVenue）。
-- 借鉴 **prod-agent**：ResilientLLM、检查点/续跑、任务租约、四大支柱、三级权限与审批。
-- 新增本项目独有：**统一 CEX+链上 Venue 抽象**、**确定性风控引擎（一票否决）**、**人工审批门**——这三者是「加密货币 + 半自动 + 真金白银」场景的核心。
+- 修改外部字段或事件时，同时更新 Go contracts、OpenAPI/JSON Schema、前端类型与契约测试。
+- 修改风控、审批、对账或 Venue 时，必须补充失败路径和边界测试。
+- 不得新增绕过 SafetyState、Risk、Approval 或 Paper-only 门禁的执行入口。
+- 新持久化实现只通过 `persistence.Repository` 接入，不在 API handler 中直接访问数据库。
+- 后台 goroutine 必须由 Application/Runtime/Orchestrator 持有，并有 context 取消与关闭路径。

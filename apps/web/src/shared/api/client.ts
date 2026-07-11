@@ -15,10 +15,36 @@ import type {
   VenueInfo,
 } from "./types";
 
+const apiTokenStorageKey = "cyp-agent.api-token";
+
+function storedApiToken(): string {
+  try {
+    return window.localStorage.getItem(apiTokenStorageKey)?.trim() ?? "";
+  } catch {
+    return "";
+  }
+}
+
+export function setApiToken(value: string): void {
+  try {
+    const token = value.trim();
+    if (token) window.localStorage.setItem(apiTokenStorageKey, token);
+    else window.localStorage.removeItem(apiTokenStorageKey);
+  } catch {
+    // Storage can be unavailable in hardened/private browser contexts. The
+    // request will fail closed when the server requires authentication.
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   if (init?.body && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
+  }
+  const method = (init?.method ?? "GET").toUpperCase();
+  if (!["GET", "HEAD", "OPTIONS"].includes(method) && !headers.has("Authorization")) {
+    const token = storedApiToken();
+    if (token) headers.set("Authorization", `Bearer ${token}`);
   }
 
   const response = await fetch(path, { ...init, headers });

@@ -1,126 +1,133 @@
-# 运行时手册 · cyp-agent
+# Go 运行时：对账、扫描与持仓监控
 
-> 本文补齐三块「架构级、上代码前必须定清楚」的内容：**① 谁在什么时候驱动系统（触发/调度）、② 止损如何真正落地（保护独立于进程存活）、③ 崩溃后如何对账恢复**。
-> 一句话总纲：**保护必须独立于 Agent 存活；对账未完成不开新仓；有仓必有保护。**
+`internal/runtime` 协调三件事：启动对账、机会扫描和 Paper 持仓监控。v0.2.0 的 Runtime 只允许连接 `PaperVenue`；`ValidatePaperVenue` 会拒绝把非 Paper 场所接入对账或监控。
 
----
+## 安全状态机
 
-## 1. 触发与调度模型
+`SafetyState` 启动即冻结，且没有通用 `Unfreeze` 方法：
 
-7×24 市场里 `orchestrator` 不能只靠 `POST /run` 手动驱动。系统由**三条独立循环**组成，经统一队列进入编排器（对标 game-asset-forge 的受控并发队列 + prod-agent 的 Worker/租约）。
-
-```
-   触发源                        RunRequest 队列(受控并发)         编排器
-┌──────────────────┐          ┌───────────────────────┐
-│ 机会扫描循环      │─┐        │  FIFO + 优先级          │
-│ (Opportunity)    │ │        │  监控 > 扫描            │        每个 run:
-│  定时/事件        │ ├───────▶│  同 symbol 互斥(租约)   │───────▶ 7 步闭环
-├──────────────────┤ │        └───────────────────────┘        (含检查点)
-│ 持仓监控循环      │ │
-│ (Position Monitor)│─┤        Watchdog(心跳/对账/告警) 常驻
-├──────────────────┤ │
-│ 手动 / API 触发   │─┘
-└──────────────────┘
+```text
+进程启动
+  → frozen: startup reconciliation required
+  → BeginReconcile
+  → frozen: reconciliation in progress
+  ├─ 成功且 report.OK=true → 可开 Paper 新仓
+  └─ 错误/差异/保护单缺口 → 保持 frozen
 ```
 
-### 1.1 机会扫描循环 `Opportunity Scanner`
-- **职责**：对 watchlist 找新机会，产出 `TradeProposal` → 风控 → 审批 → 执行（完整 7 步）。
-- **节奏**：按周期（如每根 K 线收盘 / 每 N 分钟）+ **事件触发**（价格突破阈值、资金费极值、链上巨鲸告警、突发新闻）。
-- **优先级**：低于监控循环。市场剧变时可被降频/暂停，优先保住已有持仓。
+只有 `CompleteReconcile` 的成功路径可以解除冻结。每次新仓前，编排器和扫描器都会调用 `CheckNewPosition`，同时校验：
 
-### 1.2 持仓监控循环 `Position Monitor` —— 常驻、高频、最高优先级
-- **职责**：只盯**已有持仓**，不找新机会。校验：止损/止盈跟踪、trailing stop、爆仓缓冲、保证金健康、保护单是否还在、异常行情。
-- **可触发防御性动作**：减仓/平仓/补挂保护单。这类**降低风险**的动作可走「快速审批」或「预授权」通道（见 §2.4），因为拖延本身就是风险。
-- **不变量**：任一持仓在任一时刻都必须被监控循环覆盖；它是止损落地（链上）与保护单校验（CEX）的执行者。
+- `CYP_MODE=paper`；
+- `CYP_EXECUTION_VENUE=paper`；
+- Kill Switch 未开启；
+- 对账不在进行且 SafetyState 未冻结。
 
-### 1.3 Watchdog（常驻守护）
-- 心跳、周期性对账触发（§3）、异常率监控、熔断/Kill Switch 联动、告警派发。
+任何一项不满足都 fail closed。`GET /api/ready` 返回 `ready`、`execution_ready`、`reconciling`、`safety` 和具体原因；`GET /api/health` 只表示进程存活，不能替代 readiness。
 
-### 1.4 并发与互斥
-- 每个 `RunRequest` 是租约保护的任务，**同一 symbol 互斥**（防同标的并发决策/重复下单，复用 prod-agent 任务租约）。
-- 队列受控并发（可配 worker 数），监控类请求优先出队。
-- 崩溃遗留任务由 Watchdog 认领（租约 TTL 过期后可被接管）。
+## 启动行为
 
-### 1.5 配置
-| 配置 | 说明 |
-| --- | --- |
-| `CYP_SCAN_INTERVAL` | 扫描循环基础周期 |
-| `CYP_MONITOR_INTERVAL` | 监控循环周期（应远小于扫描周期） |
-| `CYP_WATCHLIST` | 扫描标的清单 |
-| `CYP_MAX_CONCURRENCY` | 队列并发 worker 数 |
+应用组装位于 `internal/app/application.go`：
 
----
+1. 加载并校验 `.env`/进程环境变量。
+2. 创建 Paper、Binance、OKX 场所注册表；CEX 保持只读。
+3. 创建数据源、仓储、事件总线、审批门和 Orchestrator。
+4. 创建 `VenueReconciler`、`Scanner`、`PositionMonitor` 和 `Engine`。
+5. 若 `CYP_RUNTIME_AUTOSTART=true`，`Engine.Start` 先对账再启动双循环。
+6. 若为 `false`，仍调用一次 `StartupReconcile`，只是不会启动循环。
+7. 对账失败时服务构建失败，不会进入可接收请求的状态。
 
-## 2. 止损与持仓保护的落地
+当前对账读取 Paper 持仓，并验证每个有仓 symbol 是否存在有效的 reduce-only 止损保护单。报告包含 `positions`、`discrepancies`、`protective_gaps` 和 `ok`。
 
-> **核心原则：保护必须独立于 Agent 进程存活。** 若「到价了 Agent 才发市价单」，进程一崩持仓就裸奔——这是不可接受的。
+## 扫描循环
 
-### 2.1 CEX：入场成交后立即挂交易所侧原生保护单
-- **现货**：OCO（止损 + 止盈）或 stop-limit。
-- **合约**：`reduce-only` 的 stop-market / stop-limit；优先使用交易所的 **bracket / attached order**（下入场单时一次性附带止损止盈）。
-- **原子性 / fail-safe**：入场成交回报后**立即**下保护单；若保护单下单失败 → **立刻市价平掉入场仓**。系统**绝不允许存在无保护的裸仓**。
-- **关联**：入场单与保护单通过 `client_id` 关联，便于对账与生命周期管理。
+`Scanner` 按 `CYP_WATCHLIST` 顺序扫描，间隔由 `CYP_SCAN_INTERVAL`（秒）控制：
 
-### 2.2 链上 DEX：无原生止损，改为监控 + 更严护栏
-- DEX 无交易所侧止损单。方案分层：
-  1. 优先用**支持链上限价/止损的协议或聚合器**（若可用）。
-  2. 否则由 `Position Monitor` 高频盯价，到价发保护性 swap（**走私有内存池/防夹路由**）。
-- 因保护依赖进程存活，链上仓位必须：**更小的名义上限、更大的止损缓冲、更保守的杠杆**（在 `RiskConfig` 对链上单列更严阈值），并在提案与仪表盘**显式标注「链上仓位保护依赖监控存活」**。
+```text
+每个 symbol
+  → 检查 context
+  → CheckNewPosition 安全门
+  → SymbolLocks 防止同 symbol 重入
+  → Orchestrator.Start(symbol)
+  → 汇总错误并记录 scan 指标
+```
 
-### 2.3 保护单生命周期（避免孤儿单/裸仓）
-- 入场**部分成交** → 保护单数量按实际成交量同步调整。
-- 止盈/止损**成交或平仓** → 撤销对应保护单，避免遗留孤儿单。
-- `Position Monitor` 每周期校验 **「持仓 ↔ 保护单」配对**：缺失即补挂（CEX）或告警 + 收紧（链上）。
+watchlist 会去空白、去重并保留顺序。单个 symbol 失败不会阻止其他 symbol；一轮结束后用 `errors.Join` 汇总。当前应用为单进程内锁，多实例部署不能依靠它实现全局互斥。
 
-### 2.4 防御性动作的审批通道
-- 半自动默认所有下单过人工审批。但**降低风险的动作**（补挂止损、按既定止损平仓）可配置为：
-  - `预授权`：入场审批时同时授权其对应的止损/止盈执行（人已知晓该保护计划）。
-  - `快速审批`：监控触发的减仓/平仓走独立高优队列，超时策略更激进（如超时**自动执行平仓**而非拒绝——因为此处「不动」才是危险）。
-- 这与开新仓的审批（超时=拒绝）方向相反：**开仓 fail-safe = 不做；护仓 fail-safe = 保护。**
+配置示例：
 
-### 2.5 不变量
-- 有持仓 ⇒ 必有生效的保护（CEX 强制交易所侧保护单；链上强制监控覆盖 + 更严护栏）。
-- 保护单下单失败 ⇒ 立即平掉裸仓。
-- 入场与保护通过 `client_id` 可追溯配对。
+```dotenv
+CYP_RUNTIME_AUTOSTART=true
+CYP_WATCHLIST=BTC/USDT,ETH/USDT
+CYP_SCAN_INTERVAL=300
+CYP_MAX_CONCURRENCY=2
+```
 
----
+`CYP_MAX_CONCURRENCY` 限制 Orchestrator 同时执行的 run 数。API 会先返回已接受，超过上限的 goroutine 等待信号量；当前没有持久任务队列，因此部署层仍应限制请求速率和排队规模。
 
-## 3. 对账与崩溃恢复
+## 持仓监控
 
-> **真相在交易所/链上，不在本地账本。** 启动、崩溃恢复、以及周期性运行时，都必须对账。**对账未完成前冻结新开仓（只读/只减仓）。**
+`PositionMonitor` 每 `CYP_MONITOR_INTERVAL` 秒读取 Paper 持仓、报价、余额和保护单，检查：
 
-### 3.1 触发时机
-- **启动 / `resume(run_id)` 时**（必做）。
-- **Watchdog 周期性**（捕捉运行期漂移：手动干预、交易所强平、外部转账、被夹/滑点）。
-- 下单前的 `preflight` 也会做轻量一致性检查。
+- 场所是否提供原生保护单，当前持仓是否缺止损；
+- mark price 是否有效；
+- 相邻监控周期价格变动是否超过阈值；
+- 当前价格是否逼近止损触发价；
+- 永续价格是否逼近爆仓价；
+- 永续名义仓位对应的保证金率是否逼近下限。
 
-### 3.2 对账流程
-1. 拉取远端真实状态：`positions / open_orders / balances / recent_fills`（CEX 用 ccxt；链上读合约与链上 nonce）。
-2. 与本地账本 diff，按「远端为准」修正：
-   | 情况 | 处理 |
-   | --- | --- |
-   | 本地有挂单、远端已无 | 判定已成交/已撤，回补成交、更新账本 |
-   | 远端有持仓/挂单、本地无 | 采纳远端真相，写入账本，**告警** |
-   | 宕机期间的 fills | 补记入账、触发对应复盘 |
-   | 持仓无配对保护单 | **立即补挂**（CEX）/ 纳入监控并收紧（链上） |
-3. 幂等键（`client_id` / 链上 nonce）用于判断「这单是不是我发的」，避免把外部/重复订单误纳入。
-4. 对账完成前：`state = RECONCILING`，**拒绝一切新开仓请求**，仅允许减仓/平仓/补保护。
+警报写结构化日志，发布 `position_monitor` SSE 事件，并可发送到 `CYP_ALERT_WEBHOOK`。Webhook 失败被隔离并计入指标，不会让监控 goroutine panic。
 
-### 3.3 链上特有
-- **nonce 对齐**：读链上 nonce 与本地对齐，避免 nonce 冲突/卡单。
-- **pending tx 跟踪**：宕机前广播的 tx 状态归位（`confirmed / dropped / replaced`）；`replaced` 需处理重放去重。
-- **revert 处理**：失败 tx 不改本地持仓状态，记录并告警。
+监控是告警层，不是止损执行器。Paper 原生保护单由 `PaperVenue` 模拟；未来真实场所必须依赖交易所原生保护单，不能把进程存活当成唯一保护。
 
-### 3.4 不变量
-- 对账未完成 ⇒ 不开新仓。
-- 账本与远端冲突 ⇒ 以远端为准并告警。
-- 每个本地订单/持仓可追溯到一个 `client_id` / nonce；无法归属的远端订单一律告警而非静默采纳。
+## 检查点与恢复
 
----
+Orchestrator 在 `proposal`、`risk`、`approval`、`order_intent`、`execution` 和最终 `result` 等阶段保存 JSON 检查点，并将复盘经验写入仓储。可选后端：
 
-## 4. 与其它文档的关系
+| `CYP_PERSISTENCE` | 特性 | 适用场景 |
+| --- | --- | --- |
+| `memory` | 进程退出即丢失 | 单元测试、临时演示 |
+| `file` | 原子替换 `CYP_STATE_FILE`，崩溃时可恢复备份 | 默认单实例开发 |
+| `postgres` | `pgx` 连接池和事务性 upsert | 容器、长时间运行、多读者 |
 
-- 这三块的**硬约束**已进 [RISK.md](RISK.md)（有仓必有保护、对账冻结开仓、护仓 fail-safe）。
-- 队列/租约/检查点的**平台能力**见 [ARCHITECTURE.md 生产四大支柱](ARCHITECTURE.md)。
-- 监控循环触发的防御性动作，其审批走 [AGENTS.md 审批门](AGENTS.md) 的快速/预授权通道。
-- 落地顺序：M0 先实现「入场即挂保护单 + 启动对账 + 双循环最小版」于 PaperVenue；M2/M3 分别硬化 CEX/链上的真实保护与对账。
+所有检查点在写入前递归屏蔽凭据、私钥、token、DSN 等敏感字段。当前代码会加载历史经验，但尚未实现从任意中间 checkpoint 自动继续执行；检查点用于审计和未来恢复状态机，不能宣称已有自动断点续跑。
+
+## 事件与指标
+
+运行阶段通过有界内存总线发布 SSE，包括 `reconciled`、`run_started`、`snapshot_ready`、`reports_ready`、`proposal_ready`、`risk_assessed`、`approval_decided`、`executed`、`reviewed`、`run_done` 和 `position_monitor`。
+
+`GET /api/metrics` 汇总 run 状态、审批时延、滑点、执行成功率，以及扫描/监控/对账/Webhook 计数。事件总线只保存有界历史，不是持久审计日志。
+
+## 停机
+
+`cyp-server` 监听 `SIGINT`/`SIGTERM`：
+
+1. 取消根 context。
+2. 停止 Runtime 循环并等待 goroutine。
+3. 关闭 Orchestrator，唤醒审批等待者。
+4. 关闭事件总线，结束 SSE 客户端。
+5. 关闭 Repository 和所有 CEX HTTP 资源。
+6. 在 10 秒期限内执行 HTTP graceful shutdown，超时则强制关闭。
+
+## 故障响应
+
+| 故障 | 当前行为 | 操作 |
+| --- | --- | --- |
+| 启动对账失败 | 应用启动失败/保持冻结 | 查看结构化日志，修复 Paper 状态或保护单后重启 |
+| 数据源失败 | Orchestrator 尝试合成行情降级 | 检查 `CYP_DATA_SOURCE` 和网络 |
+| 单个 Agent 失败 | 该报告标记 degraded | 查看报告理由，其他维度继续 |
+| 审批超时 | fail-safe 拒绝 | 重新发起 run，不重放旧订单 |
+| 仓储写失败 | 当前 run 失败，不继续执行 | 修复文件权限/数据库后重新分析 |
+| Kill Switch 开启 | 拒绝新仓 | 确认风险事件后人工关闭；平仓仍可用 |
+| 进程崩溃 | 已写检查点保留，未自动续跑 | 核对持仓和检查点后启动新 run |
+
+## 验证
+
+```bash
+go test -race ./internal/runtime ./internal/orchestrator ./internal/persistence
+go run ./cmd/cyp-server
+
+curl http://127.0.0.1:8000/api/ready
+curl http://127.0.0.1:8000/api/metrics
+```
+
+Runtime 改动必须覆盖：对账失败保持冻结、Kill/非 Paper 拒绝新仓、循环取消无泄漏、单 symbol 失败隔离、保护单缺口告警、仓储失败时不执行。

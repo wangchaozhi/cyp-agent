@@ -1,236 +1,135 @@
-# 量化升级规划 · cyp-agent
+# 量化内核
 
-> 本文是「把数学金融内核从入门级升级到专业级」的总蓝图。回答一个诚实的问题：
-> **当前工程强、数学弱**——架构/风控/回测框架到位，但装的量化内核是刻意的占位版本。
-> 本文系统编目所有强工具、映射到现有架构插点、分期落地，并给出**量化特有的验证方法论**。
->
-> 配套：架构 [ARCHITECTURE.md](ARCHITECTURE.md)、风控 [RISK.md](RISK.md)、多智能体 [AGENTS.md](AGENTS.md)、里程碑 [ROADMAP.md](ROADMAP.md)。
+cyp-agent 的量化层服务于两个目标：让回测可复现，以及让风险决策可验证。当前实现全部位于 Go 包中，不依赖重型数值计算库；任何统计结果都只是筛选证据，不能越过确定性风控、审批门或 v0.2.0 的真实执行硬禁令。
 
----
+## 当前实现
 
-## 0. 规格分册
-
-本文保留总蓝图、能力地图和 Q 线排期；公式、阈值、数据要求和验收用例放到分册：
-
-| 分册 | 作用 | 对应代码 |
+| 能力 | Go 路径 | 状态 |
 | --- | --- | --- |
-| [quant/README.md](quant/README.md) | 数学模型规格索引 + 默认通过阈值 | — |
-| [quant/validation.md](quant/validation.md) | walk-forward、purged K-fold、PBO、无前视 | `backtest/validate.py`、`backtest/pbo.py` |
-| [quant/stats.md](quant/stats.md) | Sharpe、PSR、Deflated Sharpe、MinTRL | `backtest/stats.py` |
-| [quant/risk.md](quant/risk.md) | VaR、CVaR、EVT、压力测试 | `risk/measures.py`、`risk/rules.py` |
-| [quant/sizing.md](quant/sizing.md) | EWMA、波动率目标、Kelly、止损自适应 | `data/volatility.py`、`agents/strategist.py` |
-| [quant/portfolio.md](quant/portfolio.md) | 协方差、HRP、ERC、MVO、Black-Litterman | `portfolio/`（待扩展） |
-| [quant/signals_execution.md](quant/signals_execution.md) | regime、协整、Kalman、微观结构、执行模型 | `agents/`、`execution/`（待扩展） |
+| 合成价格、蜡烛回放、权益曲线和交易记录 | `internal/backtest/backtest.go` | ✅ |
+| 策略网格、排序、OOS 与稳健结论 | `internal/backtest/optimize.go` | ✅ |
+| Sharpe、PSR、Expected Max Sharpe、DSR、MinTRL | `internal/backtest/stats.go` | ✅ |
+| Walk-forward、purged K-fold、embargo、PBO | `internal/backtest/validation.go` | ✅ |
+| EWMA 与 realized volatility | `internal/data/volatility.go` | ✅ |
+| 波动率/ATR 止损、波动率目标入口 | `internal/agents/strategist.go` | ✅ |
+| 组合 CVaR 上限护栏 | `internal/risk/engine.go` | ✅ 接受上游 CVaR 值 |
+| PostgreSQL OHLCV 增量归档 | `internal/backtest/archive.go` | ✅ |
+| 真实手续费/点差/冲击/资金费成本 | — | ⏳ |
+| Bootstrap 置信区间 | — | ⏳ |
+| 实测协方差与 HRP/ERC | — | ⏳ |
 
-## 1. 第一性原理
+统计和验证的详细定义见 [quant/stats.md](quant/stats.md) 与 [quant/validation.md](quant/validation.md)。
 
-1. **严谨性优先于花哨 alpha**。加密里头号杀手是**过拟合**，不是"数学不够强"。当前 `sweep` 从 N 组挑最优＝教科书级多重检验陷阱。补的第一件事是「别自欺」的工具（OOS / Deflated Sharpe / PBO），而非更炫的信号。
-2. **插件化，不重写**。架构已为此预留插槽：分析师可插拔（`Agent` 协议）、`StrategyConfig` 参数化、风控规则是可组合纯函数、`PortfolioView` 可扩展。每个量化方法都是**加模块**。
-3. **降级路径恒存**。重型数学走 `[quant]` extra；缺库时回退到现有轻量实现。"无密钥/无重依赖可跑"这条底线不破。
-4. **三档统一**。任何新方法必须能在**回测/模拟/实盘**同一套管线跑（见 [ROADMAP M5](ROADMAP.md)），禁止回测专用的分叉逻辑。
-5. **风控永远是确定性护栏**。再强的模型也只在硬护栏内建议；VaR/CVaR 等作为**新增护栏**收紧，绝不放宽既有护栏（见 [RISK.md](RISK.md)）。
+## 回测入口
 
-## 2. 现状盘点（诚实版）
+```bash
+# 确定性合成数据；相同 seed 和参数应产生相同 JSON
+go run ./cmd/cyp backtest \
+  --symbol BTC/USDT \
+  --bars 300 \
+  --window 60 \
+  --seed 7 \
+  --drift 0.001 \
+  --vol 0.01 \
+  --json
 
-| 环节 | 现在 | 数学水平 | 目标 |
-| --- | --- | --- | --- |
-| 信号 | SMA/EMA/RSI/MACD/ATR/BOLL 固定阈值 + 加权投票 | 入门 TA | + 统计验证 / regime / stat-arb |
-| 波动率 | ATR（历史均值） | 无预测性 | EWMA / GARCH（波动聚集） |
-| 仓位 | 固定分数（风险=账户1%÷止损距离） | 教科书第一章 | 波动率目标 / 分数 Kelly |
-| 止损 | ATR×倍数 | 粗糙 | 波动率自适应 / 分位数 |
-| 相关性 | **静态**聚类（majors/alt 硬编码） | 非实测 | EWMA / DCC-GARCH 动态相关 |
-| 组合 | 簇内同向净敞口上限 | 无协方差 | 均值-方差 / HRP / 风险平价 |
-| 风险度量 | 敞口/回撤/连亏上限 | 无尾部度量 | VaR / CVaR / EVT |
-| 执行 | 固定滑点 + 市价 | 无冲击模型 | Almgren-Chriss / VWAP |
-| 回测 | 单资产单仓 + 网格扫参；已补 PSR/DSR/PBO/walk-forward 基础件 | 反过拟合起步 | walk-forward OOS + DSR/PBO 门禁 + 成本模型 |
-
-## 2.1 当前实现快照
-
-| 模块 | 状态 | 说明 |
-| --- | --- | --- |
-| `backtest/validate.py` | ✅ 已实现 | walk-forward、purged K-fold、embargo；纯 Python 单测 |
-| `backtest/pbo.py` | ✅ 已实现 | CPCV/PBO 基础版；纯 Python 单测 |
-| `backtest/stats.py` | ✅ 已实现 | Sharpe、PSR、Deflated Sharpe、MinTRL；纯 Python 单测 |
-| `data/volatility.py` | ✅ 已实现 | EWMA、realized volatility、candles returns；纯 Python 单测 |
-| `StrategyConfig.vol_target` / `stop_mode="vol"` | ✅ 已实现 | 波动率目标仓位与 EWMA 自适应止损进入策略官 |
-| `backtest/costs.py` / `mc.py` | ⏳ 待做 | 成本压力与 bootstrap |
-| `risk/measures.py` + `rule_cvar_limit` | ✅ 已实现 | Historical VaR / CVaR + 组合 CVaR 确定性护栏 |
-| `portfolio/covariance.py` / `alloc.py` | ⏳ 待做 | 实测协方差、HRP/ERC/MVO |
-
-## 3. 能力地图（方法编目）
-
-优先级：**T1**=最高 ROI（补短板），**T2**=强升级，**T3**=专业/可选。依赖列标注需引入的库。
-
-### 3.1 回测严谨性（★ 最关键）
-
-| 方法 | 数学核心 | 插点 | 依赖 | 优先 |
-| --- | --- | --- | --- | --- |
-| Walk-forward（滚动/锚定） | 时序 OOS，训练→验证滚动前移 | `backtest/validate.py` | — | **T1** |
-| Purged K-Fold + Embargo | 剔除标签重叠泄漏（López de Prado） | `backtest/validate.py` | — | **T1** |
-| Combinatorial Purged CV → PBO | 过拟合概率（Prob. of Backtest Overfitting） | `backtest/pbo.py` | — | **T1** |
-| Deflated Sharpe Ratio | 校正试验次数 + 非正态的夏普显著性 | `backtest/stats.py` | — | **T1** |
-| Monte Carlo / Bootstrap | 交易序列重采样 → 收益/回撤置信区间 | `backtest/mc.py` | numpy | **T1** |
-| 真实成本模型 | 手续费 + 点差 + 冲击(∝√size) + 资金费 | `backtest/costs.py` | — | **T1** |
-| 参数敏感度 / regime 分层绩效 | 稳健性热力图，避免脆弱峰值 | `backtest/robust.py` | numpy | T2 |
-
-### 3.2 波动率与风险度量
-
-| 方法 | 数学核心 | 插点 | 依赖 | 优先 |
-| --- | --- | --- | --- | --- |
-| EWMA 波动率 | RiskMetrics λ 衰减方差 | `data/volatility.py` | — | **T1** |
-| GARCH(1,1)/EGARCH | 条件异方差，波动聚集与杠杆效应 | `data/volatility.py` | arch | T2 |
-| 历史 VaR | 分位数损失 | `risk/measures.py` | — | **T1** |
-| CVaR / Expected Shortfall | 尾部条件期望（相干风险测度）→ 护栏 | `risk/rules.py` | — | **T1** |
-| 参数 VaR | 正态/厚尾参数模型 | `risk/measures.py` | numpy/scipy | T2 |
-| 极值理论(EVT/POT) | 广义帕累托拟合尾部 | `risk/measures.py` | scipy | T3 |
-
-### 3.3 仓位与资金管理
-
-| 方法 | 数学核心 | 插点 | 依赖 | 优先 |
-| --- | --- | --- | --- | --- |
-| 波动率目标 | 仓位∝目标波动/预测波动 | `strategist` + `StrategyConfig` | — | **T1** |
-| 分数 Kelly | f\*=μ/σ²（增长最优），取 ¼–½ Kelly | `strategist` | numpy | T2 |
-| 风险预算 / ERC | 各仓风险贡献均衡 | `portfolio/alloc.py` | numpy | T2 |
-
-### 3.4 组合构建
-
-| 方法 | 数学核心 | 插点 | 依赖 | 优先 |
-| --- | --- | --- | --- | --- |
-| EWMA / Ledoit-Wolf 协方差 | 收缩估计，稳健协方差 | `portfolio/covariance.py` | numpy/sklearn | **T1** |
-| 均值-方差(MVO) | 二次规划最优权重 | `portfolio/alloc.py` | cvxpy | T2 |
-| HRP 层次风险平价 | 层次聚类 + 递归二分（抗病态协方差） | `portfolio/alloc.py` | scipy | T2 |
-| Black-Litterman | 均衡先验 + 观点贝叶斯融合 | `portfolio/alloc.py` | numpy | T3 |
-
-### 3.5 信号 / 统计套利（真 alpha）
-
-| 方法 | 数学核心 | 插点 | 依赖 | 优先 |
-| --- | --- | --- | --- | --- |
-| Regime 检测（HMM / 马尔可夫切换） | 隐状态：牛/熊/震荡，据此开关策略 | `agents/analysts.py`（新分析师） | hmmlearn/numpy | T2 |
-| 协整配对（Engle-Granger/Johansen） | 残差平稳 → 均值回归 stat-arb | `agents/analysts.py` | statsmodels | T2 |
-| 卡尔曼滤波 | 动态对冲比/趋势状态估计 | `data/filters.py` | numpy | T2 |
-| OU 过程 | 均值回归半衰期 → 入场/持有 | `data/features.py` | numpy | T3 |
-| Hurst 指数 | 趋势(>0.5)/回归(<0.5)判别 | `data/features.py` | numpy | T3 |
-| 分数阶差分 | 平稳但保记忆的特征 | `data/features.py` | numpy | T3 |
-
-### 3.6 执行 / 微观结构
-
-| 方法 | 数学核心 | 插点 | 依赖 | 优先 |
-| --- | --- | --- | --- | --- |
-| Almgren-Chriss | 冲击 vs 风险权衡的最优拆单轨迹 | `execution/schedule.py` | numpy | T3 |
-| VWAP / TWAP | 成交量/时间加权拆单 | `execution/schedule.py` | — | T2 |
-| 订单簿失衡 / microprice | 短周期方向/成交价预测 | `agents/analysts.py` | numpy | T3 |
-
-### 3.7 衍生品（我们做永续）
-
-| 方法 | 数学核心 | 插点 | 依赖 | 优先 |
-| --- | --- | --- | --- | --- |
-| 资金费/基差期限结构 | carry 与均值回归建模 | `agents/derivatives.py` | numpy | T2 |
-| 永续资金费套利 | 现货-永续对冲收 carry | `agents/analysts.py` | — | T3 |
-| 期权 Greeks / IV 曲面 | BS/BSM，Δ/Γ/Vega 对冲 | 新模块（仅接期权时） | scipy | T3 |
-
-### 3.8 机器学习（谨慎）
-
-| 方法 | 数学核心 | 插点 | 依赖 | 优先 |
-| --- | --- | --- | --- | --- |
-| 三重障碍标注 + Meta-labeling | López de Prado，标签质量 > 模型 | `backtest/labeling.py` | numpy | T3 |
-| 梯度提升 + 特征重要性 | 非线性、可解释性 | `agents/analysts.py` | lightgbm | T3 |
-
-> ⚠️ ML 在加密极易过拟合：**先把 §3.1 严谨性做扎实再碰 ML**，否则只是更高级的自欺。
-
-## 4. 架构插点（如何接入而不重写）
-
-```
-数据层 data/        → volatility.py(EWMA/GARCH) · features.py(OU/Hurst/分数差分) · filters.py(Kalman)
-分析师 agents/       → 新分析师(regime/statarb/microstructure) 实现 Agent 协议 → AnalystReport
-策略官 strategist    → 仓位法(vol-target/Kelly) 由 StrategyConfig 参数化；数字仍规则确定、LLM 只润色
-风控   risk/         → 新纯函数护栏(CVaR/VaR) 加入 ALL_RULES；RiskContext 加字段；只收紧不放宽
-组合   portfolio/    → covariance.py(收缩协方差) · alloc.py(MVO/HRP/ERC)；PortfolioView 扩展
-执行   execution/    → schedule.py(Almgren-Chriss/VWAP) 供交易员拆单
-回测   backtest/     → validate.py/pbo.py/stats.py/mc.py/costs.py —— 严谨性套件
+# 27 组默认网格，输出前 5 名以及 OOS/PBO/DSR 结论
+go run ./cmd/cyp sweep --symbol BTC/USDT --bars 300 --top 5
 ```
 
-**插件契约**（沿用现有）：
-- 新分析师 = 一个实现 `async run(snapshot, ctx) -> AnalystReport` 的类 + 注册进 `ANALYSTS` + 降级路径 + 单测。
-- 新护栏 = `risk/rules.py` 一个纯函数 `(proposal, ctx, cfg) -> RuleResult` + 加入 `ALL_RULES` + 边界单测。
-- 新仓位法 = `StrategyConfig` 加字段 + 策略官内分支；回测扫参自动覆盖。
-- 新组合优化 = `portfolio/alloc.py` 一个函数，输入协方差/预期收益 → 目标权重；风控引擎仍是最终裁决。
+CLI 的 `backtest` 和 `sweep` 只使用合成数据。服务端 `POST /api/backtest` 可以直接抓取 CEX 历史 K 线；PostgreSQL 增量归档由独立的 `OHLCVArchive` 提供，当前 API handler 未自动接入它。`RunCandles` 本身保持纯计算且不执行交易。
 
-## 5. 分期路线（Q 线，与里程碑并行）
+## 基础回测模型
 
-### Q1 · 反自欺 + 波动率内核（T1）
-**目标**：让回测可信、波动率有预测性、尾部风险入护栏。
-- [x] `backtest/validate.py`：walk-forward（滚动/锚定）+ purged K-fold + embargo
-- [x] `backtest/stats.py`：PSR + Deflated Sharpe Ratio + 最小回测长度
-- [x] `backtest/pbo.py`：CPCV → PBO 过拟合概率
-- [ ] `backtest/mc.py` + `backtest/costs.py`：bootstrap 置信区间 + 真实成本(手续费+点差+冲击√size+资金费)
-- [x] `data/volatility.py`：EWMA 波动率 → 波动率目标仓位 + 波动自适应止损
-- [x] `risk/measures.py` + 护栏：历史 VaR / **CVaR 上限**（新增确定性护栏）
-- [ ] `portfolio/covariance.py`：EWMA/Ledoit-Wolf 协方差 → **实测相关性**替换静态聚类
+当前迁移验收策略是移动均线偏离阈值的单向 Paper 策略：
 
-**验收**：同一策略在 walk-forward OOS 上给出 Deflated Sharpe 与 PBO；扫参择优改为「OOS + PBO 门槛」而非样本内最优；CVaR 超限能否决；相关性护栏用实测协方差。
+\[
+d_t = \frac{P_t}{\operatorname{mean}(P_{t-w:t})} - 1
+\]
 
-### Q2 · 更优仓位 + 状态识别 + 组合优化（T2）
-- [ ] 分数 Kelly 仓位（¼–½，与波动率目标二选一/融合）
-- [ ] GARCH(1,1) 波动率（`arch`）
-- [ ] Regime 分析师（HMM）：震荡市降杠杆/观望
-- [ ] `portfolio/alloc.py`：HRP + 风险平价（ERC）多资产权重
-- [ ] 衍生品分析师升级：资金费/基差期限结构 carry 模型
-- [ ] VWAP/TWAP 拆单
+当 \(d_t > \theta\sigma\) 时持有多仓；信号消失或价格触发波动倍数止损/止盈时退出。它的目的在于验证数据、参数、报告和稳健性管线，不代表推荐策略。
 
-**验收**：多资产组合按 HRP 分配并过组合护栏；regime 分层绩效显示震荡市回撤下降；GARCH 波动率回测优于 ATR。
+报告包含：
 
-### Q3 · 统计套利 + 微观结构（T2/T3）
-- [ ] 协整配对分析师（Engle-Granger/Johansen）+ 卡尔曼动态对冲比
-- [ ] OU 半衰期 / Hurst / 分数阶差分特征
-- [ ] 订单簿失衡 / microprice 短周期信号
-- [ ] Almgren-Chriss 最优执行
+- 期初/期末权益、总收益和最大回撤；
+- 单周期 Sharpe、交易数、胜率和盈亏因子；
+- 逐笔交易、权益曲线、参数和经验说明。
 
-### Q4 · 进阶（T3，视需要）
-- [ ] EVT 尾部风险、Copula 相依
-- [ ] 三重障碍标注 + meta-labeling + GBDT（严格 OOS/PBO 把关下）
-- [ ] Black-Litterman、期权 Greeks（若接期权）
+当前基础引擎尚未计入手续费、点差、资金费和市场冲击，因此不得用其绝对收益作为上线依据。
 
-## 6. 验证方法论（量化的命门 · 强制标准）
+## 扫参与稳健性
 
-任何策略/参数上线前必须过下列关卡，**这是本升级最有价值的部分**：
+`Grid` 对入场阈值、止损波动倍数和止盈波动倍数做笛卡尔积。默认目标函数为：
 
-1. **无前视不变量**：回测只用「截至当前 bar」信息（现 `HistoricalData` 已窗口化，形式化为断言）；特征计算不得引用未来。
-2. **训练/验证/测试三分 + Walk-forward**：滚动或锚定前移，报告**样本外(OOS)**绩效；样本内结果仅供参考。
-3. **Purged K-Fold + Embargo**：标签有重叠/自相关时，剔除训练-测试边界样本，防泄漏（López de Prado《Advances in Financial ML》）。
-4. **过拟合量化**：CPCV → **PBO**（过拟合概率）；扫参择优的入选门槛是「PBO < 阈值 且 OOS 显著」，不是样本内最高分。
-5. **Deflated Sharpe Ratio**：按试验次数 N、偏度、峰度校正夏普显著性；N 越大，达标门槛越高（直接治我们 `sweep` 的多重检验病）。
-6. **Monte Carlo/置换检验**：bootstrap 交易序列 → 收益/最大回撤的置信区间与破产概率；置换检验区分 alpha 与运气。
-7. **真实成本**：手续费 + 点差 + 市场冲击(∝√下单量) + 永续资金费；成本敏感度必测（很多"策略"扣成本即失效）。
-8. **稳健性**：参数敏感度热力图（选平台不选尖峰）+ regime 分层绩效（牛/熊/震荡分别看）。
-9. **实盘-回测对账**：`paper` 影子并行，跟踪实盘滑点/成交与回测假设的偏差（对接 [RUNTIME.md](RUNTIME.md) 监控）。
+\[
+\text{score}=\text{total return}-\text{maximum drawdown}
+\]
 
-## 7. 依赖策略
+`RobustSweep` 的当前流程：
 
-保持核心轻量，重型数学入 extras（`pyproject.toml`）：
+1. 按时间把前 70% 数据作为样本内区间。
+2. 在样本内选择默认目标函数最高的配置。
+3. 计算候选策略收益矩阵的 PBO。
+4. 在独立种子的后 30% 区间评价最佳配置。
+5. 用所有候选的样本内 Sharpe 校正最佳配置的样本外 Sharpe，得到 DSR。
 
-```toml
-[project.optional-dependencies]
-quant = ["numpy>=1.26", "scipy>=1.11", "pandas>=2.2"]      # 基础数值/统计
-quant-full = ["statsmodels>=0.14", "arch>=6.3",            # 协整/GARCH
-              "scikit-learn>=1.4", "cvxpy>=1.4"]           # 收缩协方差/凸优化
-```
+默认通过条件是 `PBO <= 0.5`、样本外收益为正且 `DSR >= 0.5`；否则返回 `REJECT(疑似过拟合)`。这个结论是研究门，不是执行许可。
 
-- 缺 `[quant]` 时：波动率回退 ATR、相关性回退静态聚类、回测回退当前简单版——**功能降级不崩**。
-- 每个方法在导入处惰性检测依赖，给出清晰安装提示（对齐 `ccxt`/`anthropic` 的做法）。
+## 波动率
 
-## 8. 反模式（明确不做）
+`internal/data/volatility.go` 提供简单收益、EWMA 波动率和 realized volatility：
 
-- ❌ **样本内择优即上线**（当前 `sweep` 的隐患）——必须 OOS + PBO 把关。
-- ❌ **数据窥探**：反复在同一测试集调参直到好看。
-- ❌ **忽略非平稳性**：加密结构漂移快，静态模型需滚动重估。
-- ❌ **成本乐观**：不建模冲击/资金费的回测普遍虚高。
-- ❌ **相关性=1 的伪分散**：多个高相关多头当分散（现静态聚类是权宜，Q1 用实测协方差替换）。
-- ❌ **ML 先行**：严谨性未立就上 ML = 更高级的过拟合。
-- ❌ **让模型越过硬护栏**：再强的 alpha 也只能在确定性风控内建议。
+\[
+r_t = \frac{P_t}{P_{t-1}}-1
+\]
 
-## 9. 与现有文档的关系
+\[
+\sigma_t^2 = \lambda\sigma_{t-1}^2 + (1-\lambda)r_t^2
+\]
 
-- 本文是 [ROADMAP.md](ROADMAP.md) 的**量化深化线**（Q1–Q4），与 M 里程碑（工程/市场覆盖）并行推进。
-- 新增护栏（VaR/CVaR）并入 [RISK.md](RISK.md) 硬护栏清单。
-- 新分析师并入 [AGENTS.md](AGENTS.md) 分析师团。
-- 验证方法论（§6）是所有策略进入 `live` 前的强制关卡，纳入 [KICKOFF.md](KICKOFF.md) 的 Definition of Done。
+默认 \(\lambda=0.94\)。策略官可用 EWMA 波动构造止损距离，或以 `VolTarget / EWMA` 缩放仓位；最终仓位仍受 `internal/risk` 的单笔风险、仓位和敞口上限裁剪。
+
+## 风险测度边界
+
+`risk.ruleCVAR` 当前只消费 `RiskContext.PortfolioCVARQuote`：若上游提供的 CVaR 超过 `equity × MaxCVARPct`，新仓被拒绝；为空时不会自行估算。历史 VaR/CVaR 计算、收益窗口质量检查和压力场景尚未进入 Go 主链，不能在文档或界面中声称已有完整尾部风险模型。
+
+## 数据纪律
+
+- 蜡烛必须按时间升序，价格为正，时间戳和 symbol/timeframe 一致。
+- 时间序列切分禁止随机打乱；所有特征只读取当时可见的数据。
+- 任何调参试验数都必须进入 DSR/PBO 解释，不能只展示最佳组合。
+- CEX 原始历史应保留 venue、symbol、timeframe、timestamp 和抓取时间。
+- Decimal 用于资金和契约；统计计算可用 `float64`，但必须拒绝 NaN/Inf 并在返回 API 前有限化。
+- 研究报告必须记录 seed、参数、样本区间、成本假设和代码版本。
+
+## 测试要求
+
+对应测试集中在 `internal/backtest/*_test.go` 和 `internal/data/data_test.go`：
+
+1. 固定 seed 的回测 JSON 可复现且无 NaN/Inf。
+2. 参数边界与 HTTP 请求边界一致。
+3. Walk-forward 与 purged split 不重叠且 embargo 生效。
+4. 正态 CDF/PPF 互逆误差、PSR/DSR/MinTRL 边界可解释。
+5. 构造过拟合策略矩阵时 PBO 明显升高。
+6. 增加真实成本模型后，零成本必须退化为当前结果，成本增加不得改善净收益。
+
+## 后续优先级
+
+### Q2：真实可用的回测
+
+- 手续费、bid/ask、资金费和平方根冲击成本。
+- Block/bootstrap 收益与最大回撤置信区间。
+- 按波动/趋势/流动性 regime 分层报告。
+- OHLCV 缺口、重复、异常值和时区质量报告。
+
+### Q3：组合与执行
+
+- EWMA/收缩协方差与相关性置信度。
+- HRP/ERC 目标权重，并由现有风控作最终裁剪。
+- TWAP/VWAP 调度与成交质量基准。
+
+### Q4：模型治理
+
+- 三重障碍标注、meta-labeling 与可解释特征。
+- 数据版本、试验登记、champion/challenger 和退役规则。
+- 对所有外部数值依赖做许可证、供应链和可复现构建审查。

@@ -1,134 +1,66 @@
 # 更新日志
 
-遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。版本遵循语义化版本。
+格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，版本遵循语义化版本。
 
 ## [未发布]
 
-### 基础设施 · 持久化迁移 PostgreSQL/TimescaleDB + Docker
+暂无。
 
-- **数据库从 SQLite 全面迁移 PostgreSQL**：`MemoryStore`（检查点/经验，psycopg 同步）与
-  `OhlcvArchive`（OHLCV 归档，asyncpg 异步）统一走 `CYP_DB_URL`
-  （默认 `postgresql://cyp:cyp@localhost:5433/cyp`），不再保留 sqlite 后端；
-  依赖 `aiosqlite` → `psycopg[binary]` + `asyncpg`。
-- **TimescaleDB 时序能力**：ohlcv 表建为 hypertable（按 ts 分区，`TIMESTAMPTZ` + NUMERIC），
-  为大规模历史行情存储/查询做准备；建表 SQL 含 `CREATE EXTENSION IF NOT EXISTS timescaledb`。
-- **Docker**：新增 `docker-compose.yml`（`timescale/timescaledb:latest-pg16`，数据卷 +
-  healthcheck）与 `docker/initdb/01-init.sql`（首次建卷自动初始化）；`docker compose up -d` 即可用。
-- **测试基建**：`tests/conftest.py` 自动创建独立 `cyp_test` 库并把 `CYP_DB_URL` 指向它，
-  逐测试清空持久化表；pytest 需本地 docker PG 在跑。
+## [0.2.0] - 2026-07-11
 
-### ROADMAP 补齐 · M1/M3/M4/M5/M6 未完成项 + OKX Demo 联网实测
+### 重大变更 · 后端全量 Go 重构
 
-- **M1 仪表盘合约信息**：`Position` 增 `liq_price/margin_mode`（Paper 由 preflight 估算填充、
-  Cex 取 ccxt `liquidationPrice/marginMode`）；`/api/positions` 补爆仓价/保证金占用/资金费率，
-  `/api/risk` 补 `margin_ratio/perp_notional`；前端持仓表新增爆仓价/保证金/资金费列 +
-  逐仓/全仓标注，风险面板新增保证金健康度。
-- **M4 收尾**：策略官组合感知——同标的同向已有仓 → flat，相关簇同向敞口超 80% 上限 →
-  缩量/flat（`Strategist.run` 接收聚合持仓）；`/api/portfolio` 增 `by_symbol`，前端敞口
-  热力图（纯 CSS）；聚合器 `funding_rates()`/`arb_hints()`（跨所价差 bps/资金费差，仅提示），
-  `/api/market` 扩展 + 新增 MarketPanel。
-- **M5 收尾**：`OhlcvArchive`——ccxt 分页拉取真实 OHLCV 落 SQLite 增量缓存，
-  `cyp.backtest.run/sweep --data cex` 与 `POST /api/backtest data=cex` 均可用；
-  `Backtester` 挂接 `MemoryStore`、`BacktestReport.lessons` 汇总复盘经验；
-  strategist/risk_officer LLM 提示词注入 `ctx.lessons`（规则路径不变）。
-- **M6 进阶自动化**：`PolicyApprovalGate` 策略化自动审批（白名单 + risk_score + 金额上限，
-  否则转人工），`settings.approval=auto` 在 CLI/FastAPI 接线；`MemoryStore` 迁 SQLite +
-  按 symbol/词元相关性检索（旧 JSON 自动迁移）；`PositionMonitor` 增强（止损/爆仓逼近、
-  EWMA 异常波动、保证金率告警走 Alerter），`CYP_RUNTIME=1` 时 FastAPI 启动 RuntimeEngine；
-  审批 `operator` 透传入审计；`RunMetrics` 增审批时延/滑点分布/下单成功率 SLO，
-  `/api/metrics` 暴露 + OverviewStrip 展示。
-- **M3 链上骨架（mock client 离线测）**：`OnchainVenue`——「精确额度 approve → swap」两步
-  执行、nonce 管理、确认跟踪、revert 处理、幂等去重、`reconcile_onchain` 对账；隔离签名器
-  `onchain/signer.py`（keystore，私钥不落日志；KMS/硬件留接口）；风控 §2.3 五条护栏
-  （禁无限授权/合约白名单/最小池 TVL/gas 上限/MEV 私有内存池）+ `est_price_impact` 接入
-  RiskContext；`OnchainDataSource` stub；前端持仓表标注链上仓位。
-- **OKX Demo 联网实测**：新增可重复 smoke 脚本 `python -m cyp.tools.okx_smoke`——
-  配置校验→余额→现货小额下单（带止损/止盈保护单）→幂等重放→撤保护单→平仓清理→增量对账；
-  已联网全绿，作为 M2 真实网络项的 OKX 版验收（Binance Testnet 不采用，以 OKX Demo 替代）。
+- 当前 `main` 后端全部改为 Go 1.25，提供 `cyp-server` REST/SSE 服务和 `cyp` 运维/回测 CLI。
+- 原后端历史快照保存在 `archive/python-backend-20260710` 分支；`main` 不再包含其源码、项目配置或运行入口。
+- React 18 + TypeScript + Vite 8 仪表盘继续使用稳定的 REST/SSE 契约，由 Go 服务托管构建产物。
+- 版本统一为 `0.2.0`，发布流程通过 ldflags 注入两个 Go 二进制。
 
-### 文档 · 数学模型规格完善
-- 新增 `docs/quant/` 规格分册：validation / stats / risk / sizing / portfolio /
-  signals_execution，补齐公式、默认阈值、数据要求、降级路径和测试清单。
-- 同步 Q1 量化状态：`validate.py`、`pbo.py`、`stats.py`、EWMA 波动率、
-  波动率目标仓位、VaR/CVaR 基础件已落地；成本模型、协方差/组合优化仍待实现。
+### Go 领域与应用
 
-### Q1 · 尾部风险护栏
-- 新增 `risk/measures.py`：非负损失序列、Historical VaR、CVaR / Expected Shortfall、
-  `tail_risk_quote` 计价币尾部风险。
-- 新增 `rule_cvar_limit`：`portfolio_cvar_quote > equity * max_cvar_pct` 时拒绝新开仓；
-  默认 `CYP_MAX_CVAR_PCT=0.03`，平仓/减仓仍放行。
+- `internal/contracts` 提供领域/API 契约和精确 Decimal；资金字段通过 JSON 十进制字符串传输。
+- `internal/config` 支持 `.env`、环境变量覆盖、严格校验和脱敏快照。
+- 技术面、衍生品、情绪、链上分析师并行运行；策略官、风控官和复盘官接入完整 Orchestrator 闭环。
+- LLM 层支持 Anthropic 与 DeepSeek，含独立 session 预算、超时、重试、熔断、结构化输出和规则降级。
+- 确定性风控覆盖止损、单笔风险、仓位、敞口、相关簇、杠杆、爆仓缓冲、保证金、滑点、链上预检、CVaR、Kill Switch 和对账冻结。
+- 审批支持 Dashboard 的批准/拒绝/修改和受白名单、风险分、金额共同限制的自动策略；修改后强制重新风控。
 
-### M5（部分）· 策略参数化择优 + 回测引擎
-- **策略参数化**：`StrategyConfig` 打包策略官可调参（分析师权重/入场阈值/ATR 止损止盈
-  倍数/单笔风险），策略官配置驱动；`grid()` 笛卡尔积 + `sweep()` 批量回测按目标函数
-  （默认 收益-回撤）排序择优；`python -m cyp.backtest.sweep`。最优配置可直接注入 Orchestrator。
+### 场所、数据与运行时
 
-- **回测/模拟/实盘三档统一**：`Backtester` 入场复用 Orchestrator 全管线
-  （分析师→策略官→风控→PaperVenue），仅在回测层补按 bar 高低价触发的止损/止盈平仓，
-  完成 round-trip；`HistoricalData` 按游标回放窗口快照。
-- **绩效**：`compute_metrics` 纯函数——总收益/最大回撤/夏普/胜率/盈亏比。
-- **CLI**：`python -m cyp.backtest.run`（合成历史，零密钥离线）。
-- **仪表盘回测报告**：新增 `POST /api/backtest`，React 仪表盘可设置 symbol/bars/window/seed/
-  drift/vol，展示绩效、净值曲线与交易明细。
+- `PaperVenue` 支持现货/永续模拟撮合、幂等订单、保护单、持仓与平仓。
+- Binance/OKX 使用原生 Go HTTP 客户端提供公共行情、历史 K 线、私有读取和签名能力，保持只读。
+- 链上场所与隔离签名器保留安全接口和离线测试，尚未接入应用执行链。
+- 新增跨所 ticker/funding 聚合、确定性合成行情、指标与波动率计算。
+- Runtime 在每次启动时先做 Paper 对账；成功前 SafetyState 冻结新仓。可选启动 watchlist 扫描、持仓监控、Webhook 告警和运行指标。
+- 新增 memory、原子 JSON file、PostgreSQL 三种 Repository；检查点写入前递归屏蔽敏感字段。
 
-### M4（部分）· 组合级风控 + 跨所聚合 + OKX 模拟交易 + 交易所适配层
-- **组合级风控**：跨场所聚合持仓（`aggregate_positions` 失败隔离）→ `PortfolioView`
-  计算总敞口/单标的/相关性簇同向净敞口；新护栏 `correlated_exposure`——相关性簇
-  （majors/alt 聚类）内同向净敞口 ≤ 账户×`max_correlated_exposure`，避免押重相关篮子。
-  编排器按 `risk_venues` 聚合，server/CLI 传入执行场所 + 注册表其它场所。
-- **跨所行情聚合**：`MarketAggregator`——多场所报价、最优买卖场所、跨所价差(bps)
-  （套利/异常线索，仅提示）；`GET /api/market`。
-- **组合仪表盘**：`GET /api/portfolio` + 面板（净值/总敞口/相关性簇同向敞口对上限）。
-- **仪表盘设置面板**：新增脱敏 `GET /api/settings`，React 仪表盘展示运行模式、审批模式、
-  OKX Demo 配置状态、watchlist、LLM/场所凭据布尔状态、风控限制与 LiveGuard 校验结果。
+### 回测与量化
 
-- **交易所适配层** `venue/adapters.py`：把各家 ccxt 抹不平的差异（保护单参数、
-  持仓/保证金模式）收敛到 adapter；CexVenue 通用流程不变，仅委托 configure_perp/
-  entry_params/place_protective。BinanceAdapter（STOP_MARKET/TAKE_PROFIT reduce-only）、
-  OkxAdapter（tdMode、set_leverage 带 mgnMode、stopLossPrice/takeProfitPrice）。
-- **OKX Demo 模拟交易**：`sandbox`(set_sandbox_mode) + API passphrase；注册表注册 OKX venue，
-  有 demo 凭据即可模拟下单否则只读；CLI `--venue okx`。假交易所离线验证参数差异。
-  已完成 OKX Demo smoke test：私有余额接口、`BTC/USDT` 现货小额下单、条件保护单
-  （止损/止盈）创建、查询、取消，以及测试仓位卖回清理。
-- **OKX 接入硬化**：OKX `clientOrderId` 规范化；市价单返回 `filled=None` 时兜底解析；
-  现货保护单不带 `reduceOnly`、永续保护单保留 reduce-only；保护单可按 OKX algo 单取消；
-  CLI / FastAPI 生命周期关闭 ccxt client，减少资源泄漏噪音。
+- 新增确定性合成回测和历史蜡烛回放，输出收益、最大回撤、Sharpe、胜率、盈亏因子、交易和权益曲线。
+- 新增参数网格、目标函数排序、样本外评估与稳健结论。
+- 新增 walk-forward、purged K-fold/embargo、PBO、Probabilistic Sharpe、Deflated Sharpe 和 MinTRL。
+- 新增 EWMA/realized volatility，以及 PostgreSQL OHLCV 增量归档。
+- 明确当前基础回测尚未包含完整手续费、点差、资金费和冲击成本，不能作为上线依据。
 
-### M2 · CEX 实盘接入（离线部分完成，真实网络实操待做）
-- **实盘下单**：`CexVenue` 现货+合约实盘（ccxt），幂等 `clientOrderId`、原生保护单
-  （STOP/TP reduce-only）、perp 自动 `set_leverage`/`set_margin_mode`（逐仓）；
-  **保护单失败即市价平裸仓**（有仓必有保护 fail-safe）。可注入假交易所离线测全覆盖。
-- **实盘护栏**：`LiveGuard`——mode=live 需「有 Key + `CYP_LIVE_ACK=1` + Kill 未开」，
-  否则退回只读（安全默认）；注册表据此决定 CexVenue 可否下单。
-- **熔断真生效**：`PortfolioTracker` 用净值高水位/已实现亏损/下单时间戳驱动
-  回撤·连亏·频率，接入风控引擎（此前这些字段恒为 0，熔断永不触发——已修复）。
-- **告警**：`Alerter` 多 sink（控制台 + 可选 webhook），字段脱敏、sink 失败隔离；
-  下单失败与熔断/Kill 否决触发告警。
-- **风控看板**：`GET /api/risk` + 仪表盘面板（净值/回撤 meter/频率/连亏/实盘校验）。
+### API、前端与交付
 
-### M1 · 合约永续（模拟盘）
-- **风控**：合约专项硬护栏——逐仓强制（`force_isolated`）、维持保证金率下限（`min_margin_ratio`）；
-  杠杆上限与爆仓缓冲复用既有规则。契约新增 `margin_mode`（默认 isolated）。
-- **执行**：`PaperVenue` 合约按保证金记账（名义/杠杆），平仓结算浮盈 + 退保证金。
-- **决策**：策略官支持 `instrument=perp`，杠杆由置信度决定（封顶 `max_leverage`）；`allow_perp` 开关（默认关）。
-- **编排**：按现有永续名义计算维持保证金率喂给风控引擎。
+- Go API 覆盖 health/ready、venues、settings、market、run、events、pending/approvals、positions、risk、portfolio、backtest、metrics 和 Kill Switch。
+- 更新 OpenAPI、Dashboard event JSON Schema、React API 类型及开发代理配置。
+- Windows 开发脚本改为直接启动 Go 服务和 Vite，不依赖额外运行环境。
+- Docker 使用 Node/Go 多阶段构建，运行镜像只包含静态资源和 Go 二进制；Compose 可启动应用与 TimescaleDB。
+- CI 更新为 workflow lint、gofmt、vet、race test、Go 构建、OpenAPI lint、Web 依赖审计/类型检查/构建和容器构建。
+- Release workflow 在 `v*` tag 上交叉构建 Go 二进制、打包 Web 资源、生成校验和并创建 GitHub Release。
+- 全面更新 README、架构、运行时、Agent、量化、运维、回退和路线图文档。
 
-### M0 · 骨架闭环（完全体）
-- **契约**：`contracts/` pydantic 模型，7 步闭环全部数据结构，Decimal 计价，前后端单一真相。
-- **风控引擎**：14 条确定性硬护栏（止损必填/单笔风险/单仓/总敞口/集中度/杠杆/爆仓缓冲/
-  滑点/价格冲击/频率/连亏/回撤熔断/Kill Switch/对账冻结），一票否决 + 自动缩仓。
-- **Venue 抽象**：`PaperVenue`（确定性撮合 + 幂等 + 入场挂保护单）、`CexVenue` 只读行情（Binance 参考）、注册表。
-- **数据管线**：纯 Python 指标（SMA/EMA/RSI/MACD/ATR/BOLL）+ 合成/真实两种行情源（无密钥可跑）。
-- **多智能体**：技术/衍生品/情绪/链上分析师 → 首席策略官 → 风控官 → 交易员 → 复盘官；
-  规则为主、LLM 增强、失败隔离、静默降级。
-- **LLM 层**：`ResilientLLM`（重试/退避/熔断/超时）+ 结构化输出（tool-use → pydantic 校验），异常统一降级。
-- **编排 + 运行时**：7 步闭环 + 事件总线 + 检查点；启动对账（对账门冻结开仓）+ 机会扫描/持仓监控双循环。
-- **审批门**：CLI + 仪表盘按钮 + 挂起-解决（Web 人在环），超时=拒绝（fail-safe）。
-- **服务 + 仪表盘**：FastAPI REST + SSE + Kill Switch；自包含仪表盘（事件流/待审批/持仓，零构建）。
-- **可观测**：结构化 JSON 日志（自动脱敏）+ trace/span + RunMetrics。
+### 安全
 
-### 工程
-- 无密钥、离线、确定性可端到端跑通；当前测试 180 passed。
-- 参考交易所锁定 Binance；OKX 等推到 M4「多所」。
+- `config.LiveExecutionSupported=false` 在编译期硬禁真实下单；API key 与 `CYP_LIVE_ACK=1` 都不能解除。
+- 非 `paper` mode/venue、Kill Switch、对账冻结和未解决保护单缺口均拒绝新仓。
+- Agent 包不依赖场所或审批包，LLM 无法直接调用执行能力。
+- 配置、日志、LLM 上下文和检查点对 API key、token、私钥及 DSN 做脱敏。
+- 非回环监听强制配置 `CYP_API_TOKEN`；写请求经过 Bearer token、同源与 JSON Content-Type 校验。
+- LLM Base URL 改为启动期配置，运行中的 HTTP 请求不能把已加载密钥重定向到其他主机。
 
-[未发布]: https://example.com/cyp-agent
+## [0.1.x] - 历史版本
+
+- 建立多智能体交易助手的最初闭环、风控规则、CEX/链上实验、回测研究和 React 仪表盘。
+- 该系列的最终源码状态已固定在 `archive/python-backend-20260710`，仅用于审计和历史参考；当前 `main` 不使用该实现。

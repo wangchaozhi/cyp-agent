@@ -1,0 +1,1413 @@
+openapi: 3.1.0
+info:
+  title: cyp-agent HTTP API
+  version: 0.2.0
+  description: |
+    React 仪表盘使用的 REST 与 SSE 契约。
+
+    Go 首版仅支持 Paper 模式。`live` 模式以及任何非 `paper` 执行场所均为
+    hard-disabled；实现必须在启动或执行入口拒绝，而不是降级后继续真实下单。
+
+    交易金额、价格、数量、PnL、费率和风险阈值在响应 JSON 中使用十进制字符串，
+    避免经过二进制浮点。回测研究指标和运行计数仍使用 JSON number。集合与嵌套
+    对象不返回 null；可选对象在不存在时省略。
+
+    所有写请求必须使用 `application/json`。服务监听非回环地址时必须配置
+    `CYP_API_TOKEN`，并通过 Bearer token（或 `X-CYP-API-Token`）认证。
+servers:
+  - url: /
+    description: 与仪表盘同源
+tags:
+  - name: System
+  - name: Settings
+  - name: Trading
+  - name: Portfolio
+  - name: Research
+  - name: Events
+security: []
+paths:
+  /api/health:
+    get:
+      tags: [System]
+      operationId: getHealth
+      summary: 获取进程与运行模式状态
+      responses:
+        "200":
+          description: 健康快照
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/ready:
+    get:
+      tags: [System]
+      operationId: getReadiness
+      summary: 获取执行就绪、启动对账和安全冻结状态
+      responses:
+        "200":
+          description: 就绪状态；进程存活但被安全门冻结时 HTTP 仍为 200，`ready=false`。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadinessStatus"
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/venues:
+    get:
+      tags: [System]
+      operationId: listVenues
+      summary: 获取场所能力与配置状态
+      responses:
+        "200":
+          description: 场所列表；没有场所时返回空数组
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/VenueInfo"
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/settings:
+    get:
+      tags: [Settings]
+      operationId: getRuntimeSettings
+      summary: 获取脱敏运行配置
+      description: 原始 API key、secret、passphrase 永远不得出现在响应中。
+      responses:
+        "200":
+          description: 脱敏配置快照
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuntimeSettings"
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+    post:
+      tags: [Settings]
+      security:
+        - WriteToken: []
+      operationId: updateRuntimeSettings
+      summary: 更新当前进程的 LLM 配置
+      description: 空密钥表示保持现值；Base URL 只能通过 `CYP_LLM_BASE_URL` 在启动时设置。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RuntimeSettingsUpdate"
+      responses:
+        "200":
+          description: 更新后的脱敏配置快照
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuntimeSettings"
+        "422":
+          $ref: "#/components/responses/ErrorResponse"
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/market:
+    get:
+      tags: [Portfolio]
+      operationId: getMarket
+      summary: 获取跨场所行情摘要
+      description: 可读取 Binance/OKX 公共行情，但不会发出真实订单；无可用行情时返回空 maps/array 的 200 响应。
+      parameters:
+        - name: symbol
+          in: query
+          required: false
+          description: 省略时使用 watchlist 首个标的。
+          schema:
+            type: string
+          example: BTC/USDT
+      responses:
+        "200":
+          description: 行情摘要
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MarketSnapshotInfo"
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/positions:
+    get:
+      tags: [Portfolio]
+      operationId: listPositions
+      summary: 获取当前 Paper 持仓
+      responses:
+        "200":
+          description: 持仓列表；无持仓时返回空数组
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Position"
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/positions/close:
+    post:
+      tags: [Trading]
+      security:
+        - WriteToken: []
+      operationId: closePosition
+      summary: 按当前 Paper 价格平仓
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ClosePositionRequest"
+      responses:
+        "200":
+          description: 平仓执行结果
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExecutionResult"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+        "422":
+          $ref: "#/components/responses/ErrorResponse"
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/metrics:
+    get:
+      tags: [System]
+      operationId: getMetrics
+      summary: 获取运行与 LLM 指标快照
+      responses:
+        "200":
+          description: 指标快照
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MetricsSnapshot"
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/risk:
+    get:
+      tags: [Portfolio]
+      operationId: getRisk
+      summary: 获取风控看板快照
+      responses:
+        "200":
+          description: 风控快照
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RiskSnapshot"
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/pending:
+    get:
+      tags: [Trading]
+      operationId: listPendingApprovals
+      summary: 获取待人工审批项
+      responses:
+        "200":
+          description: 待审批列表；没有待审批时返回空数组
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PendingApproval"
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/portfolio:
+    get:
+      tags: [Portfolio]
+      operationId: getPortfolio
+      summary: 获取组合敞口快照
+      responses:
+        "200":
+          description: 组合敞口
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PortfolioSnapshot"
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/backtest:
+    post:
+      tags: [Research]
+      security:
+        - WriteToken: []
+      operationId: runBacktest
+      summary: 运行回测
+      description: 支持确定性合成数据；配置只读历史场所时也可使用 `data=cex`。回测永不下单。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BacktestRequest"
+      responses:
+        "200":
+          description: 回测报告
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BacktestReport"
+        "422":
+          $ref: "#/components/responses/ErrorResponse"
+        "502":
+          $ref: "#/components/responses/ErrorResponse"
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/run:
+    post:
+      tags: [Trading]
+      security:
+        - WriteToken: []
+      operationId: startRun
+      summary: 异步触发一轮 Paper 闭环
+      description: 立即返回 run_id；工作流通过 SSE 和轮询继续观察。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RunRequest"
+            examples:
+              defaultSymbol:
+                value: {}
+              explicitSymbol:
+                value:
+                  symbol: BTC/USDT
+      responses:
+        "200":
+          description: 已接受并创建后台任务
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunAccepted"
+        "409":
+          description: Kill Switch、非 Paper 模式或运行状态禁止触发
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          $ref: "#/components/responses/ErrorResponse"
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/runs/{run_id}:
+    get:
+      tags: [Trading]
+      operationId: getRun
+      summary: 查询一轮闭环的当前或最终结果
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: Run 结果；尚未到达的阶段字段为 null。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunResult"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/approvals/{run_id}:
+    post:
+      tags: [Trading]
+      security:
+        - WriteToken: []
+      operationId: decideApproval
+      summary: 批准、拒绝或修改待审批规模
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApprovalRequest"
+      responses:
+        "200":
+          description: 审批已提交
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OKResponse"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+        "422":
+          $ref: "#/components/responses/ErrorResponse"
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/killswitch:
+    get:
+      tags: [Trading]
+      operationId: getKillSwitch
+      summary: 获取 Kill Switch 状态
+      responses:
+        "200":
+          description: Kill Switch 状态
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KillStatus"
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+    post:
+      tags: [Trading]
+      security:
+        - WriteToken: []
+      operationId: setKillSwitch
+      summary: 切换 Kill Switch
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/KillRequest"
+      responses:
+        "200":
+          description: 更新后的 Kill Switch 状态
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KillStatus"
+        "422":
+          $ref: "#/components/responses/ErrorResponse"
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/events:
+    get:
+      tags: [Events]
+      operationId: streamDashboardEvents
+      summary: 订阅实时 DashboardEvent
+      description: |
+        返回默认 SSE `message` 事件。每个业务帧为
+        `data: <dashboard-event-json>\n\n`，不得改为命名 `event:`，因为现有前端只监听
+        `EventSource.onmessage`。建议首帧发送 `retry: 3000`，空闲约 15 秒发送注释 keepalive。
+
+        data JSON 必须符合 `api/jsonschema/dashboard-event.schema.json`。
+      responses:
+        "200":
+          description: 持续的 SSE 字节流
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+              example: no-cache
+          content:
+            text/event-stream:
+              schema:
+                type: string
+              examples:
+                runStarted:
+                  value: |
+                    retry: 3000
+
+                    data: {"type":"run_started","run_id":"abc123","ts":"2026-07-10T10:00:00Z","symbol":"BTC/USDT"}
+
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+
+components:
+  securitySchemes:
+    WriteToken:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+      description: "`CYP_API_TOKEN`。回环监听且未配置 token 时，服务允许本机写请求。"
+
+  responses:
+    ErrorResponse:
+      description: 请求失败
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+    Error:
+      type: object
+      additionalProperties: false
+      required: [detail]
+      properties:
+        detail:
+          type: string
+        code:
+          type: string
+
+    DecimalString:
+      type: string
+      description: 有限十进制；允许普通或指数记法，输出不使用 NaN/Infinity。
+      pattern: "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$"
+      examples: ["1000.00"]
+
+    DecimalInput:
+      description: 请求兼容旧前端的 JSON number；服务内部必须直接解析为十进制，禁止先转 float64。
+      oneOf:
+        - $ref: "#/components/schemas/DecimalString"
+        - type: number
+
+    NullableDecimalString:
+      oneOf:
+        - $ref: "#/components/schemas/DecimalString"
+        - type: "null"
+
+    HealthStatus:
+      type: object
+      additionalProperties: false
+      required: [ok, mode, llm, kill]
+      properties:
+        ok:
+          type: boolean
+        mode:
+          type: string
+        display_mode:
+          type: string
+        execution_venue:
+          type: string
+        llm:
+          type: boolean
+        kill:
+          type: boolean
+
+    ReadinessStatus:
+      type: object
+      additionalProperties: false
+      required: [ok, ready, execution_ready, reconciling, safety, reasons]
+      properties:
+        ok: { type: boolean }
+        ready: { type: boolean }
+        execution_ready: { type: boolean }
+        reconciling: { type: boolean }
+        safety:
+          type: object
+          additionalProperties: true
+        reasons:
+          type: array
+          items: { type: string }
+
+    VenueInfo:
+      type: object
+      additionalProperties: false
+      required: [id, kind, configured, spot, perp, native_protective_orders, read_only]
+      properties:
+        id:
+          type: string
+        kind:
+          type: string
+          enum: [paper, cex, onchain]
+        configured:
+          type: boolean
+        spot:
+          type: boolean
+        perp:
+          type: boolean
+        native_protective_orders:
+          type: boolean
+        read_only:
+          type: boolean
+
+    LiveGuard:
+      type: object
+      additionalProperties: false
+      required: [ok, reasons]
+      properties:
+        ok:
+          type: boolean
+        reasons:
+          type: array
+          items:
+            type: string
+
+    RuntimeSettings:
+      type: object
+      additionalProperties: false
+      required:
+        - mode
+        - approval
+        - kill
+        - allow_perp
+        - execution_venue
+        - data_source
+        - llm_enabled
+        - llm_provider
+        - llm_model
+        - llm_model_fast
+        - llm_base_url
+        - api_auth_enabled
+        - cex_id
+        - cex_trading_configured
+        - okx
+        - watchlist
+        - intervals
+        - runtime
+        - risk
+        - budget
+        - live_guard
+      properties:
+        mode:
+          type: string
+        approval:
+          type: string
+        kill:
+          type: boolean
+        allow_perp:
+          type: boolean
+        execution_venue:
+          type: string
+        data_source:
+          type: string
+        llm_enabled:
+          type: boolean
+        llm_provider:
+          type: string
+        llm_model:
+          type: string
+        llm_model_fast:
+          type: string
+        llm_base_url:
+          type: [string, "null"]
+        api_auth_enabled:
+          type: boolean
+        cex_id:
+          type: string
+        cex_trading_configured:
+          type: boolean
+        okx:
+          type: object
+          additionalProperties: false
+          required: [configured, demo]
+          properties:
+            configured:
+              type: boolean
+            demo:
+              type: boolean
+        watchlist:
+          type: array
+          items:
+            type: string
+        intervals:
+          type: object
+          additionalProperties: false
+          required: [scan, monitor]
+          properties:
+            scan:
+              type: number
+              minimum: 0
+            monitor:
+              type: number
+              minimum: 0
+        runtime:
+          type: object
+          additionalProperties: false
+          required: [max_concurrency, log_level, autostart, persistence]
+          properties:
+            max_concurrency:
+              type: integer
+              minimum: 1
+            log_level:
+              type: string
+            autostart:
+              type: boolean
+            persistence:
+              type: string
+              enum: [memory, file, postgres]
+        risk:
+          $ref: "#/components/schemas/RiskLimitsSettings"
+        budget:
+          type: object
+          additionalProperties: false
+          required: [max_iterations, max_tokens, max_cost_usd, max_wall_seconds]
+          properties:
+            max_iterations:
+              type: integer
+              minimum: 0
+            max_tokens:
+              type: integer
+              minimum: 0
+            max_cost_usd:
+              type: number
+              minimum: 0
+            max_wall_seconds:
+              type: number
+              minimum: 0
+        live_guard:
+          $ref: "#/components/schemas/LiveGuard"
+
+    RiskLimitsSettings:
+      type: object
+      additionalProperties: false
+      required:
+        - max_risk_per_trade
+        - max_position_pct
+        - max_gross_exposure
+        - max_symbol_concentration
+        - max_correlated_exposure
+        - max_cvar_pct
+        - max_orders_per_hour
+        - max_slippage_bps
+        - max_leverage
+        - min_liq_buffer
+        - force_isolated
+        - min_margin_ratio
+        - daily_drawdown_limit
+        - weekly_drawdown_limit
+        - max_drawdown_limit
+        - max_consecutive_losses
+        - approval_timeout_seconds
+      properties:
+        max_risk_per_trade: { $ref: "#/components/schemas/DecimalString" }
+        max_position_pct: { $ref: "#/components/schemas/DecimalString" }
+        max_gross_exposure: { $ref: "#/components/schemas/DecimalString" }
+        max_symbol_concentration: { $ref: "#/components/schemas/DecimalString" }
+        max_correlated_exposure: { $ref: "#/components/schemas/DecimalString" }
+        max_cvar_pct: { $ref: "#/components/schemas/DecimalString" }
+        max_orders_per_hour:
+          type: integer
+          minimum: 0
+        max_slippage_bps: { $ref: "#/components/schemas/DecimalString" }
+        max_leverage: { $ref: "#/components/schemas/DecimalString" }
+        min_liq_buffer: { $ref: "#/components/schemas/DecimalString" }
+        force_isolated:
+          type: boolean
+        min_margin_ratio: { $ref: "#/components/schemas/DecimalString" }
+        daily_drawdown_limit: { $ref: "#/components/schemas/DecimalString" }
+        weekly_drawdown_limit: { $ref: "#/components/schemas/DecimalString" }
+        max_drawdown_limit: { $ref: "#/components/schemas/DecimalString" }
+        max_consecutive_losses:
+          type: integer
+          minimum: 0
+        approval_timeout_seconds:
+          type: number
+          minimum: 0
+
+    RuntimeSettingsUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        llm_provider:
+          type: string
+          enum: [anthropic, deepseek]
+        llm_model:
+          type: string
+        llm_model_fast:
+          type: string
+        anthropic_api_key:
+          type: string
+          writeOnly: true
+        deepseek_api_key:
+          type: string
+          writeOnly: true
+
+    PricePlan:
+      type: object
+      additionalProperties: false
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [market, limit, range]
+        price:
+          $ref: "#/components/schemas/NullableDecimalString"
+        low:
+          $ref: "#/components/schemas/NullableDecimalString"
+        high:
+          $ref: "#/components/schemas/NullableDecimalString"
+
+    TradeProposal:
+      type: object
+      additionalProperties: false
+      required:
+        - symbol
+        - venue
+        - side
+        - instrument
+        - size_quote
+        - leverage
+        - margin_mode
+        - entry
+        - take_profit
+        - confidence
+        - thesis
+        - supporting_reports
+      properties:
+        symbol:
+          type: string
+        venue:
+          type: string
+        side:
+          type: string
+          enum: [long, short, flat]
+        instrument:
+          type: string
+          enum: [spot, perp]
+        size_quote:
+          $ref: "#/components/schemas/DecimalString"
+        leverage:
+          type: number
+          minimum: 1
+        margin_mode:
+          type: string
+          enum: [isolated, cross]
+        entry:
+          $ref: "#/components/schemas/PricePlan"
+        stop_loss:
+          $ref: "#/components/schemas/NullableDecimalString"
+        take_profit:
+          type: array
+          items:
+            $ref: "#/components/schemas/DecimalString"
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+        thesis:
+          type: string
+        supporting_reports:
+          type: array
+          items:
+            type: string
+
+    RiskAssessment:
+      type: object
+      additionalProperties: false
+      required: [verdict, hard_violations, llm_notes, risk_score, llm_reviewed]
+      properties:
+        verdict:
+          type: string
+          enum: [approved, downsized, rejected]
+        hard_violations:
+          type: array
+          items:
+            type: string
+        adjusted_size_quote:
+          $ref: "#/components/schemas/NullableDecimalString"
+        llm_notes:
+          type: string
+        risk_score:
+          type: number
+          minimum: 0
+          maximum: 1
+        llm_reviewed:
+          type: boolean
+
+    AnalystReport:
+      type: object
+      additionalProperties: false
+      required: [agent, stance, confidence, signals, rationale, degraded]
+      properties:
+        agent:
+          type: string
+          enum: [technical, derivatives, sentiment, onchain]
+        stance:
+          type: string
+          enum: [bullish, bearish, neutral]
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+        signals:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [name, value, note]
+            properties:
+              name: { type: string }
+              value: { type: string }
+              note: { type: string }
+        rationale: { type: string }
+        degraded: { type: boolean }
+
+    ApprovalDecision:
+      type: object
+      additionalProperties: false
+      required: [decision, modified, operator, ts, note]
+      properties:
+        decision:
+          type: string
+          enum: [approve, reject, modify]
+        modified:
+          oneOf:
+            - $ref: "#/components/schemas/TradeProposal"
+            - type: "null"
+        operator: { type: string }
+        ts: { type: string, format: date-time }
+        note: { type: string }
+
+    TradeReview:
+      type: object
+      additionalProperties: false
+      required: [symbol, proposal_ref, score, pnl_quote, slippage_bps, lessons, notes, ts]
+      properties:
+        symbol: { type: string }
+        proposal_ref: { type: string }
+        score: { type: number }
+        pnl_quote: { $ref: "#/components/schemas/DecimalString" }
+        slippage_bps: { $ref: "#/components/schemas/NullableDecimalString" }
+        lessons:
+          type: array
+          items: { type: string }
+        notes: { type: string }
+        ts: { type: string, format: date-time }
+
+    RunResult:
+      type: object
+      additionalProperties: false
+      required: [run_id, symbol, status, reports, proposal, assessment, decision, execution, review, error]
+      properties:
+        run_id: { type: string }
+        symbol: { type: string }
+        status:
+          type: string
+          enum: [no_trade, rejected, not_approved, executed, execution_failed, error]
+        reports:
+          type: array
+          items:
+            $ref: "#/components/schemas/AnalystReport"
+        proposal:
+          oneOf:
+            - $ref: "#/components/schemas/TradeProposal"
+            - type: "null"
+        assessment:
+          oneOf:
+            - $ref: "#/components/schemas/RiskAssessment"
+            - type: "null"
+        decision:
+          oneOf:
+            - $ref: "#/components/schemas/ApprovalDecision"
+            - type: "null"
+        execution:
+          oneOf:
+            - $ref: "#/components/schemas/ExecutionResult"
+            - type: "null"
+        review:
+          oneOf:
+            - $ref: "#/components/schemas/TradeReview"
+            - type: "null"
+        error:
+          type: [string, "null"]
+
+    PendingApproval:
+      type: object
+      additionalProperties: false
+      required: [run_id, proposal, assessment]
+      properties:
+        run_id:
+          type: string
+        proposal:
+          $ref: "#/components/schemas/TradeProposal"
+        assessment:
+          $ref: "#/components/schemas/RiskAssessment"
+
+    Position:
+      type: object
+      additionalProperties: false
+      required: [symbol, venue, side, instrument, size_base, entry_price, leverage]
+      properties:
+        symbol:
+          type: string
+        venue:
+          type: string
+        side:
+          type: string
+          enum: [long, short]
+        instrument:
+          type: string
+          enum: [spot, perp]
+        size_base: { $ref: "#/components/schemas/DecimalString" }
+        entry_price: { $ref: "#/components/schemas/DecimalString" }
+        leverage:
+          type: number
+          minimum: 1
+        liq_price: { $ref: "#/components/schemas/NullableDecimalString" }
+        margin_mode:
+          type: [string, "null"]
+          enum: [isolated, cross, null]
+        chain:
+          type: [string, "null"]
+        tx_hash:
+          type: [string, "null"]
+        mark_price: { $ref: "#/components/schemas/DecimalString" }
+        notional: { $ref: "#/components/schemas/DecimalString" }
+        unrealized_pnl: { $ref: "#/components/schemas/DecimalString" }
+        unrealized_pnl_pct: { $ref: "#/components/schemas/DecimalString" }
+        margin_used: { $ref: "#/components/schemas/NullableDecimalString" }
+        funding_rate: { $ref: "#/components/schemas/NullableDecimalString" }
+
+    ProtectiveOrder:
+      type: object
+      additionalProperties: false
+      required: [kind, order_id, trigger_price, reduce_only]
+      properties:
+        kind:
+          type: string
+          enum: [stop_loss, take_profit]
+        order_id:
+          type: string
+        trigger_price: { $ref: "#/components/schemas/DecimalString" }
+        reduce_only:
+          type: boolean
+
+    ExecutionResult:
+      type: object
+      additionalProperties: false
+      required: [client_id, status, filled_base, fee_quote, protective_orders]
+      properties:
+        client_id:
+          type: string
+        order_id:
+          type: [string, "null"]
+        status:
+          type: string
+          enum:
+            - new
+            - preflight
+            - submitting
+            - acknowledged
+            - partially_filled
+            - filled
+            - protective_placed
+            - closed
+            - canceled
+            - rejected
+            - failed
+            - unknown
+            - protective_failed
+            - flattening
+        filled_base: { $ref: "#/components/schemas/DecimalString" }
+        avg_price: { $ref: "#/components/schemas/NullableDecimalString" }
+        fee_quote: { $ref: "#/components/schemas/DecimalString" }
+        slippage_bps: { $ref: "#/components/schemas/NullableDecimalString" }
+        protective_orders:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProtectiveOrder"
+        error:
+          type: [string, "null"]
+        chain:
+          type: [string, "null"]
+        tx_hash:
+          type: [string, "null"]
+        gas_used: { $ref: "#/components/schemas/NullableDecimalString" }
+
+    RiskSnapshot:
+      type: object
+      additionalProperties: false
+      required:
+        - mode
+        - kill
+        - equity
+        - drawdown
+        - orders_last_hour
+        - consecutive_losses
+        - limits
+        - live_guard
+      properties:
+        mode:
+          type: string
+        kill:
+          type: boolean
+        equity: { $ref: "#/components/schemas/DecimalString" }
+        drawdown:
+          type: object
+          additionalProperties: false
+          required: [daily, weekly, total]
+          properties:
+            daily: { $ref: "#/components/schemas/DecimalString" }
+            weekly: { $ref: "#/components/schemas/DecimalString" }
+            total: { $ref: "#/components/schemas/DecimalString" }
+        orders_last_hour:
+          type: integer
+          minimum: 0
+        consecutive_losses:
+          type: integer
+          minimum: 0
+        margin_ratio: { $ref: "#/components/schemas/NullableDecimalString" }
+        perp_notional: { $ref: "#/components/schemas/DecimalString" }
+        limits:
+          type: object
+          additionalProperties: false
+          required:
+            - daily_dd
+            - weekly_dd
+            - total_dd
+            - max_leverage
+            - max_orders_per_hour
+            - max_consecutive_losses
+          properties:
+            daily_dd: { $ref: "#/components/schemas/DecimalString" }
+            weekly_dd: { $ref: "#/components/schemas/DecimalString" }
+            total_dd: { $ref: "#/components/schemas/DecimalString" }
+            max_leverage: { $ref: "#/components/schemas/DecimalString" }
+            max_orders_per_hour:
+              type: integer
+              minimum: 0
+            max_consecutive_losses:
+              type: integer
+              minimum: 0
+            min_margin_ratio: { $ref: "#/components/schemas/DecimalString" }
+        live_guard:
+          $ref: "#/components/schemas/LiveGuard"
+
+    SymbolExposure:
+      type: object
+      additionalProperties: false
+      required: [symbol, cluster, long, short]
+      properties:
+        symbol:
+          type: string
+        cluster:
+          type: string
+          enum: [major, alt]
+        long: { $ref: "#/components/schemas/DecimalString" }
+        short: { $ref: "#/components/schemas/DecimalString" }
+
+    PortfolioSnapshot:
+      type: object
+      additionalProperties: false
+      required: [equity, n_positions, gross, clusters, by_symbol, correlated_limit]
+      properties:
+        equity: { $ref: "#/components/schemas/DecimalString" }
+        n_positions:
+          type: integer
+          minimum: 0
+        gross: { $ref: "#/components/schemas/DecimalString" }
+        clusters:
+          type: object
+          additionalProperties: false
+          required: [major, alt]
+          properties:
+            major:
+              $ref: "#/components/schemas/DirectionalExposure"
+            alt:
+              $ref: "#/components/schemas/DirectionalExposure"
+        by_symbol:
+          type: array
+          items:
+            $ref: "#/components/schemas/SymbolExposure"
+        correlated_limit: { $ref: "#/components/schemas/DecimalString" }
+
+    DirectionalExposure:
+      type: object
+      additionalProperties: false
+      required: [long, short]
+      properties:
+        long: { $ref: "#/components/schemas/DecimalString" }
+        short: { $ref: "#/components/schemas/DecimalString" }
+
+    VenuePrice:
+      type: object
+      additionalProperties: false
+      required: [venue, price]
+      properties:
+        venue:
+          type: [string, "null"]
+        price:
+          $ref: "#/components/schemas/NullableDecimalString"
+
+    MarketSnapshotInfo:
+      type: object
+      additionalProperties: false
+      required: [symbol, tickers, best_buy, best_sell, spread_bps, funding_rates, arb_hints]
+      properties:
+        symbol:
+          type: string
+        tickers:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/DecimalString"
+        best_buy:
+          $ref: "#/components/schemas/VenuePrice"
+        best_sell:
+          $ref: "#/components/schemas/VenuePrice"
+        spread_bps:
+          $ref: "#/components/schemas/NullableDecimalString"
+        funding_rates:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/DecimalString"
+        arb_hints:
+          type: array
+          items:
+            type: string
+
+    MetricsSnapshot:
+      type: object
+      additionalProperties: false
+      required: [runs, llm]
+      properties:
+        runs:
+          type: object
+          additionalProperties: false
+          required:
+            - runs
+            - executed
+            - rejected
+            - not_approved
+            - no_trade
+            - errors
+            - avg_slippage_bps
+            - approval_rate
+            - order_success_rate
+            - slippage_hist_bps
+            - approval_latency
+          properties:
+            runs: { type: integer, minimum: 0 }
+            executed: { type: integer, minimum: 0 }
+            rejected: { type: integer, minimum: 0 }
+            not_approved: { type: integer, minimum: 0 }
+            no_trade: { type: integer, minimum: 0 }
+            errors: { type: integer, minimum: 0 }
+            avg_slippage_bps: { type: number }
+            approval_rate: { type: number, minimum: 0, maximum: 1 }
+            order_success_rate: { type: number, minimum: 0, maximum: 1 }
+            slippage_hist_bps:
+              type: object
+              additionalProperties:
+                type: integer
+                minimum: 0
+            approval_latency:
+              type: object
+              additionalProperties: false
+              required: [avg_s, max_s, n]
+              properties:
+                avg_s: { type: number, minimum: 0 }
+                max_s: { type: number, minimum: 0 }
+                n: { type: integer, minimum: 0 }
+        llm:
+          type: object
+          additionalProperties: true
+
+    BacktestRequest:
+      type: object
+      additionalProperties: false
+      required: [bars, window, seed, drift, vol, data, timeframe]
+      properties:
+        symbol:
+          type: string
+        bars:
+          type: integer
+          minimum: 80
+          maximum: 5000
+          default: 300
+        window:
+          type: integer
+          minimum: 20
+          maximum: 1000
+          default: 60
+          description: 还必须严格小于 bars。
+        seed:
+          type: integer
+          minimum: 0
+          maximum: 1000000
+          default: 7
+        drift:
+          type: number
+          minimum: -0.05
+          maximum: 0.05
+          default: 0.001
+        vol:
+          type: number
+          exclusiveMinimum: 0
+          maximum: 0.2
+          default: 0.01
+        data:
+          type: string
+          enum: [synthetic, cex]
+          default: synthetic
+        timeframe:
+          type: string
+          default: 1h
+
+    BacktestMetrics:
+      type: object
+      additionalProperties: false
+      required:
+        - initial_equity
+        - final_equity
+        - total_return
+        - max_drawdown
+        - sharpe
+        - n_trades
+        - win_rate
+        - profit_factor
+      properties:
+        initial_equity: { type: number }
+        final_equity: { type: number }
+        total_return: { type: number }
+        max_drawdown: { type: number }
+        sharpe: { type: number }
+        n_trades: { type: integer, minimum: 0 }
+        win_rate: { type: number, minimum: 0, maximum: 1 }
+        profit_factor:
+          type: [number, "null"]
+
+    BacktestTrade:
+      type: object
+      additionalProperties: false
+      required: [side, entry, exit, pnl, bar_in, bar_out]
+      properties:
+        side:
+          type: string
+          enum: [long, short]
+        entry: { type: number }
+        exit: { type: number }
+        pnl: { type: number }
+        bar_in: { type: integer, minimum: 0 }
+        bar_out: { type: integer, minimum: 0 }
+
+    BacktestParams:
+      allOf:
+        - $ref: "#/components/schemas/BacktestRequest"
+        - type: object
+          required: [symbol]
+
+    BacktestReport:
+      type: object
+      additionalProperties: false
+      required: [symbol, n_bars, metrics, trades, equity_curve, lessons, params]
+      properties:
+        symbol:
+          type: string
+        n_bars:
+          type: integer
+          minimum: 0
+        metrics:
+          $ref: "#/components/schemas/BacktestMetrics"
+        trades:
+          type: array
+          items:
+            $ref: "#/components/schemas/BacktestTrade"
+        equity_curve:
+          type: array
+          items:
+            type: number
+        lessons:
+          type: array
+          items:
+            type: string
+        params:
+          $ref: "#/components/schemas/BacktestParams"
+
+    RunRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        symbol:
+          type: string
+
+    RunAccepted:
+      type: object
+      additionalProperties: false
+      required: [run_id, symbol]
+      properties:
+        run_id:
+          type: string
+        symbol:
+          type: string
+
+    ApprovalRequest:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [decision]
+          properties:
+            decision:
+              const: approve
+            note:
+              type: string
+            operator:
+              type: string
+        - type: object
+          additionalProperties: false
+          required: [decision]
+          properties:
+            decision:
+              const: reject
+            note:
+              type: string
+            operator:
+              type: string
+        - type: object
+          additionalProperties: false
+          required: [decision, size]
+          properties:
+            decision:
+              const: modify
+            size:
+              $ref: "#/components/schemas/DecimalInput"
+            note:
+              type: string
+            operator:
+              type: string
+
+    ClosePositionRequest:
+      type: object
+      additionalProperties: false
+      required: [symbol, instrument]
+      properties:
+        symbol:
+          type: string
+        instrument:
+          type: string
+          enum: [spot, perp]
+
+    KillRequest:
+      type: object
+      additionalProperties: false
+      required: ["on"]
+      properties:
+        "on":
+          type: boolean
+
+    KillStatus:
+      type: object
+      additionalProperties: false
+      required: [kill]
+      properties:
+        kill:
+          type: boolean
+
+    OKResponse:
+      type: object
+      additionalProperties: false
+      required: [ok]
+      properties:
+        ok:
+          type: boolean
+
+    DashboardEvent:
+      $ref: "./jsonschema/dashboard-event.schema.json"

@@ -5,18 +5,11 @@
 keystore/
 *.keystore
 
-# ---- Python ----
-__pycache__/
-*.py[cod]
-*.egg-info/
-.eggs/
-build/
-dist/
-.venv/
-venv/
-.pytest_cache/
-.ruff_cache/
-.mypy_cache/
+# ---- Go ----
+/bin/
+*.exe
+*.test
+coverage.out
 
 # ---- 数据/运行态 ----
 /data/
@@ -28,7 +21,6 @@ venv/
 # ---- 前端 ----
 node_modules/
 apps/web/dist/
-packages/shared/generated/
 
 # ---- 编辑器/系统 ----
 .vscode/

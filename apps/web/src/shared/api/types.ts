@@ -123,6 +123,7 @@ export interface RuntimeSettings {
   llm_model: string;
   llm_model_fast: string;
   llm_base_url: string | null;
+  api_auth_enabled: boolean;
   cex_id: string;
   cex_trading_configured: boolean;
   okx: {
@@ -137,6 +138,8 @@ export interface RuntimeSettings {
   runtime: {
     max_concurrency: number;
     log_level: string;
+    autostart: boolean;
+    persistence: "memory" | "file" | "postgres";
   };
   risk: {
     max_risk_per_trade: Numeric;

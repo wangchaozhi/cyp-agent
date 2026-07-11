@@ -1,0 +1,13 @@
+.git
+.github
+.env
+.logs
+*.log
+bin
+data
+node_modules
+apps/web/node_modules
+apps/web/dist
+coverage.out
+*.test
+*.exe

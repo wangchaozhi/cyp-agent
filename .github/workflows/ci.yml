@@ -9,57 +9,43 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
-  lint:
-    name: Ruff lint
+  go:
+    name: Go test, vet & build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-go@v5
         with:
-          python-version: "3.11"
-      - name: Install
+          go-version-file: go.mod
+          cache: true
+      - name: Lint workflows
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+      - name: Verify formatting
+        shell: bash
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
-      - name: Ruff
-        run: python -m ruff check .
-
-  typecheck:
-    name: Mypy (advisory)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - name: Install
+          unformatted="$(gofmt -l cmd internal)"
+          if [[ -n "${unformatted}" ]]; then
+            echo "The following Go files need gofmt:" >&2
+            echo "${unformatted}" >&2
+            exit 1
+          fi
+      - name: Vet
+        run: go vet ./...
+      - name: Test with race detector
+        run: go test -race -count=1 ./...
+      - name: Build commands
+        shell: bash
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
-      - name: Mypy
-        # 渐进式类型收敛期间不作硬门禁：报告问题但不阻塞合并。
-        continue-on-error: true
-        run: python -m mypy
-
-  test:
-    name: Pytest (py${{ matrix.python-version }})
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.10", "3.11", "3.12"]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-      - name: Install
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
-      - name: Pytest
-        run: python -m pytest
+          mkdir -p bin
+          version="$(tr -d '\r\n' < VERSION)"
+          go build -trimpath -ldflags "-s -w -X main.version=${version}" -o bin/cyp-server ./cmd/cyp-server
+          go build -trimpath -ldflags "-s -w -X main.version=${version}" -o bin/cyp ./cmd/cyp
+          ./bin/cyp-server -version
+          ./bin/cyp version
 
   web:
     name: Web typecheck & build
@@ -68,15 +54,36 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "20.19.0"
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
       - name: Install
         working-directory: apps/web
         run: npm ci
+      - name: Audit dependencies
+        working-directory: apps/web
+        run: npm audit --audit-level=high
+      - name: Lint OpenAPI
+        run: npx --yes @redocly/cli@2.38.0 lint api/openapi.yaml
       - name: Typecheck
         working-directory: apps/web
         run: npm run typecheck
       - name: Build
         working-directory: apps/web
         run: npm run build
+
+  docker:
+    name: Container build
+    runs-on: ubuntu-latest
+    needs: [go, web]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: cyp-agent:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
