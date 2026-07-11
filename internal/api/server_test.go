@@ -230,7 +230,7 @@ func TestFullHTTPApprovalAndCloseLoop(t *testing.T) {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		response, body = requestJSON(t, client, http.MethodGet, server.URL+"/api/pending", nil)
+		_, body = requestJSON(t, client, http.MethodGet, server.URL+"/api/pending", nil)
 		if strings.Contains(string(body), accepted.RunID) {
 			break
 		}
@@ -249,7 +249,7 @@ func TestFullHTTPApprovalAndCloseLoop(t *testing.T) {
 	deadline = time.Now().Add(2 * time.Second)
 	var positions []map[string]any
 	for {
-		response, body = requestJSON(t, client, http.MethodGet, server.URL+"/api/positions", nil)
+		_, body = requestJSON(t, client, http.MethodGet, server.URL+"/api/positions", nil)
 		if err := json.Unmarshal(body, &positions); err != nil {
 			t.Fatalf("decode positions: %v: %s", err, body)
 		}
@@ -267,7 +267,7 @@ func TestFullHTTPApprovalAndCloseLoop(t *testing.T) {
 		}
 	}
 	for {
-		response, body = requestJSON(t, client, http.MethodGet, server.URL+"/api/risk", nil)
+		_, body = requestJSON(t, client, http.MethodGet, server.URL+"/api/risk", nil)
 		var riskSnapshot struct {
 			OrdersLastHour int    `json:"orders_last_hour"`
 			RealizedPNL    string `json:"realized_pnl"`
@@ -292,7 +292,7 @@ func TestFullHTTPApprovalAndCloseLoop(t *testing.T) {
 	if response.StatusCode != http.StatusOK || strings.TrimSpace(string(body)) != "[]" {
 		t.Fatalf("positions after close = %d %s", response.StatusCode, body)
 	}
-	response, body = requestJSON(t, client, http.MethodGet, server.URL+"/api/risk", nil)
+	_, body = requestJSON(t, client, http.MethodGet, server.URL+"/api/risk", nil)
 	var riskSnapshot struct {
 		OrdersLastHour int    `json:"orders_last_hour"`
 		RealizedPNL    string `json:"realized_pnl"`
@@ -303,7 +303,7 @@ func TestFullHTTPApprovalAndCloseLoop(t *testing.T) {
 	if riskSnapshot.OrdersLastHour != 2 || !strings.HasPrefix(riskSnapshot.RealizedPNL, "-") {
 		t.Fatalf("risk state did not record closed trade: %s", body)
 	}
-	response, body = requestJSON(t, client, http.MethodGet, server.URL+"/api/trades", nil)
+	_, body = requestJSON(t, client, http.MethodGet, server.URL+"/api/trades", nil)
 	var trades []map[string]any
 	if err := json.Unmarshal(body, &trades); err != nil || len(trades) != 2 {
 		t.Fatalf("trade ledger response is incomplete: %v %s", err, body)

@@ -22,7 +22,7 @@ const (
 )
 
 var (
-	ErrCEXTradingDisabled = errors.New("Go 首版 CEX 真实下单硬禁用")
+	ErrCEXTradingDisabled = errors.New("首版 Go 硬禁用 CEX 真实下单")
 	ErrCEXUnsupported     = errors.New("exchange operation is unsupported")
 )
 
@@ -98,12 +98,4 @@ func parseRetryAfter(value string) time.Duration {
 		}
 	}
 	return 0
-}
-
-func cexErrorKind(err error) CEXErrorKind {
-	var classified *CEXError
-	if errors.As(err, &classified) {
-		return classified.Kind
-	}
-	return ""
 }

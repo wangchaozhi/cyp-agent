@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"strings"
 
@@ -269,8 +268,4 @@ func (s *Server) portfolioSnapshot(w http.ResponseWriter, request *http.Request)
 	writeJSON(w, http.StatusOK, portfolio.Build(
 		positions, marks, equity, settings.Risk.MaxCorrelatedExposure,
 	))
-}
-
-func positionKey(position contracts.Position) string {
-	return fmt.Sprintf("%s:%s", position.Symbol, position.Instrument)
 }
