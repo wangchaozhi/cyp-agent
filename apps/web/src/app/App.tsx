@@ -71,7 +71,10 @@ export default function App() {
   );
 
   const streamStatus = useEventStream(handleEvent);
-  const runDisabledReason = health.data?.llm ? null : "LLM 未开启或模型 Key 未配置";
+  // The backend has a deterministic rules path and intentionally supports
+  // running without an LLM. Only block while the backend health state is not
+  // available; an unconfigured model is an informational status, not a gate.
+  const runDisabledReason = health.data ? null : "等待后端状态";
 
   useEffect(() => {
     if (!settingsOpen) return;

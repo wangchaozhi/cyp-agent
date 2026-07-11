@@ -64,7 +64,7 @@ export function SystemHeader({
           SSE <b>{streamLabel(streamStatus)}</b>
         </span>
         <span className="status-pill">
-          LLM <b>{health?.llm ? "on" : "off"}</b>
+          分析 <b>{health?.llm ? "规则 + LLM" : "规则模式"}</b>
         </span>
         <span className="status-pill">
           场所 <b>{configuredVenues}/{totalVenues}</b>
@@ -95,7 +95,7 @@ export function SystemHeader({
           title={runDisabledReason ?? "触发一轮闭环"}
         >
           <Play size={17} />
-          <span>{running ? "触发中" : runDisabledReason ? "未接模型" : "触发一轮"}</span>
+          <span>{running ? "触发中" : runDisabledReason ? "暂不可用" : "触发一轮"}</span>
         </button>
         <button
           className={`command-button command-button--danger ${killOn ? "is-on" : ""}`}

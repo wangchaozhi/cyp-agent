@@ -21,7 +21,7 @@ const LABELS: Record<string, string> = {
   run_started: "开始",
   snapshot_ready: "采集",
   reports_ready: "分析",
-  proposal_ready: "决策",
+  proposal_ready: "提案",
   risk_assessed: "风控",
   awaiting_approval: "待审批",
   approval_decided: "审批",
@@ -34,13 +34,24 @@ const LABELS: Record<string, string> = {
   reconciled: "对账",
 };
 
-function summarize(event: DashboardEvent): string {
+const RUN_STATUS_LABELS: Record<string, string> = {
+  executed: "成交完成",
+  rejected: "风控拒绝",
+  not_approved: "未获审批",
+  no_trade: "观望完成",
+  execution_failed: "执行失败",
+  error: "运行错误",
+};
+
+export function summarizeEvent(event: DashboardEvent): string {
   if (event.type === "reports_ready") {
     return (
       event.reports
         ?.map((report) => {
-          const flag = report.degraded ? "*" : "";
-          return `${report.agent}:${report.stance}(${formatConfidence(report.confidence)})${flag}`;
+          if (report.degraded) {
+            return `${report.agent}:无数据`;
+          }
+          return `${report.agent}:${report.stance}(强度=${formatConfidence(report.confidence)})`;
         })
         .join("  ") || "分析完成"
     );
@@ -48,7 +59,10 @@ function summarize(event: DashboardEvent): string {
 
   if (event.type === "proposal_ready" && event.proposal) {
     const proposal = event.proposal;
-    return `${sideLabel(proposal.side)} ${proposal.symbol} 规模=${formatAmount(proposal.size_quote)} 止损=${proposal.stop_loss ?? "-"} 置信=${formatConfidence(proposal.confidence)}`;
+    if (proposal.side === "flat") {
+      return `观望 ${proposal.symbol} 强度=${formatConfidence(proposal.confidence)} 原因=${proposal.thesis}`;
+    }
+    return `${sideLabel(proposal.side)} ${proposal.symbol} 规模=${formatAmount(proposal.size_quote)} 止损=${proposal.stop_loss ?? "-"} 强度=${formatConfidence(proposal.confidence)}`;
   }
 
   if (event.type === "risk_assessed" && event.assessment) {
@@ -81,7 +95,8 @@ function summarize(event: DashboardEvent): string {
   }
 
   if (event.type === "run_done") {
-    return `${event.symbol ?? "-"} ${event.status ?? "done"}`;
+    const status = event.status ?? "done";
+    return `${event.symbol ?? "-"} ${RUN_STATUS_LABELS[status] ?? status}`;
   }
 
   if (event.type === "run_failed") {
@@ -107,10 +122,15 @@ function summarize(event: DashboardEvent): string {
   return event.symbol ?? "";
 }
 
-function eventTone(type: string): string {
-  if (["run_failed"].includes(type)) return "event-row--bad";
-  if (["risk_assessed", "awaiting_approval", "killswitch"].includes(type)) return "event-row--warn";
-  if (["executed", "reviewed", "run_done"].includes(type)) return "event-row--ok";
+export function eventTone(event: DashboardEvent): string {
+  if (event.type === "run_done") {
+    if (["error", "execution_failed"].includes(event.status ?? "")) return "event-row--bad";
+    if (["rejected", "not_approved", "no_trade"].includes(event.status ?? "")) return "event-row--warn";
+    return event.status === "executed" ? "event-row--ok" : "";
+  }
+  if (event.type === "run_failed") return "event-row--bad";
+  if (["risk_assessed", "awaiting_approval", "killswitch"].includes(event.type)) return "event-row--warn";
+  if (["executed", "reviewed"].includes(event.type)) return "event-row--ok";
   return "";
 }
 
@@ -135,10 +155,10 @@ export function EventStream({ events, status }: EventStreamProps) {
       {events.length ? (
         <div className="event-list">
           {events.map((event, index) => (
-            <article className={`event-row ${eventTone(event.type)}`} key={`${event.ts}-${event.type}-${index}`}>
+            <article className={`event-row ${eventTone(event)}`} key={`${event.ts}-${event.type}-${index}`}>
               <time>{formatClock(event.ts)}</time>
               <span className="event-row__label">{LABELS[event.type] ?? event.type}</span>
-              <span className="event-row__summary">{summarize(event)}</span>
+              <span className="event-row__summary">{summarizeEvent(event)}</span>
             </article>
           ))}
         </div>
