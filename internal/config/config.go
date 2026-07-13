@@ -212,25 +212,55 @@ type LiveGuardReport struct {
 }
 
 func (s Settings) LiveGuard() LiveGuardReport {
-	if s.Mode != "live" {
+	reasons := make([]string, 0, 4)
+	if s.Mode == "live" {
+		if !s.CEXTradingConfigured() {
+			reasons = append(reasons, "缺少交易所 API Key，无法实盘（保持只读）")
+		}
+		if !s.LiveAck {
+			reasons = append(reasons, "未确认实盘：请设置 CYP_LIVE_ACK=1")
+		}
+		if s.Kill {
+			reasons = append(reasons, "Kill Switch 开启，禁止实盘")
+		}
+		// This reason remains unconditional: production execution is not
+		// unlocked by credentials or acknowledgement.
+		reasons = append(reasons, "Go 首版硬禁实盘执行；仅允许 Paper 或 OKX Demo")
+		return LiveGuardReport{OK: false, Reasons: reasons}
+	}
+	if s.ExecutionVenue == "paper" {
 		return LiveGuardReport{OK: true, Reasons: []string{}}
 	}
-	reasons := make([]string, 0, 4)
-	if !s.CEXTradingConfigured() {
-		reasons = append(reasons, "缺少交易所 API Key，无法实盘（保持只读）")
+	if s.ExecutionVenue == "okx" {
+		if !s.OKXDemo {
+			reasons = append(reasons, "OKX 执行仅允许 Demo；请设置 CYP_OKX_DEMO=true")
+		}
+		if !s.OKXConfigured() {
+			reasons = append(reasons, "OKX Demo 缺少 Demo API Key、Secret 或 Passphrase")
+		}
+		return LiveGuardReport{OK: len(reasons) == 0, Reasons: reasons}
 	}
-	if !s.LiveAck {
-		reasons = append(reasons, "未确认实盘：请设置 CYP_LIVE_ACK=1")
-	}
-	if s.Kill {
-		reasons = append(reasons, "Kill Switch 开启，禁止实盘")
-	}
-	// This reason is unconditional in mode=live for the first Go release.
-	reasons = append(reasons, "Go 首版硬禁实盘执行；仅允许 Paper/只读模式")
+	reasons = append(reasons, "当前仅允许 Paper 或 OKX Demo 执行")
 	return LiveGuardReport{OK: false, Reasons: reasons}
 }
 
 func (s Settings) LiveExecutionAllowed() bool { return false }
+
+// OKXDemoExecutionConfigured proves the selected execution path is the
+// simulated OKX environment and has the complete Demo credential tuple.
+func (s Settings) OKXDemoExecutionConfigured() bool {
+	return s.Mode == "paper" && s.ExecutionVenue == "okx" && s.OKXDemo && s.OKXConfigured()
+}
+
+// NewExecutionConfigured deliberately excludes the Kill Switch so readiness
+// can report configuration and operational permission independently.
+func (s Settings) NewExecutionConfigured() bool {
+	return s.Mode == "paper" && (s.ExecutionVenue == "paper" || s.OKXDemoExecutionConfigured())
+}
+
+// NewPositionAllowed applies the Kill Switch to the supported execution
+// paths. Reduce-only and close paths must not use this helper.
+func (s Settings) NewPositionAllowed() bool { return s.NewExecutionConfigured() && !s.Kill }
 
 // NewPaperPositionAllowed describes only the first Go slice. Kill Switch does
 // not disable reduce-only/close paths, so callers must not use this for exits.

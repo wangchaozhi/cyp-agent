@@ -21,9 +21,15 @@ func TestSafetyStateRequiresSuccessfulReconcileAndRejectsLive(t *testing.T) {
 	if err := safety.CheckNewPosition(paper); err != nil {
 		t.Fatalf("paper position rejected after reconcile: %v", err)
 	}
+	if err := safety.CheckNewPosition(RuntimeState{
+		Mode: "paper", ExecutionVenue: "okx", ExecutionDemo: true,
+	}); err != nil {
+		t.Fatalf("OKX Demo position rejected after reconcile: %v", err)
+	}
 	for _, state := range []RuntimeState{
 		{Mode: "live", ExecutionVenue: "paper"},
 		{Mode: "paper", ExecutionVenue: "binance"},
+		{Mode: "paper", ExecutionVenue: "okx"},
 	} {
 		if err := safety.CheckNewPosition(state); !errors.Is(err, ErrLiveExecutionDisabled) {
 			t.Fatalf("unsafe state %#v error = %v", state, err)

@@ -133,7 +133,9 @@ func (s *Server) routes() http.Handler {
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	settings := s.control.Settings()
 	displayMode := settings.Mode
-	if settings.ExecutionVenue == "okx" && settings.OKXDemo {
+	if settings.Mode == "live" {
+		displayMode = "Live 只读"
+	} else if settings.ExecutionVenue == "okx" && settings.OKXDemo {
 		displayMode = "OKX Demo"
 	} else if settings.ExecutionVenue != "paper" {
 		displayMode = strings.ToUpper(settings.ExecutionVenue)
@@ -147,16 +149,13 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) ready(w http.ResponseWriter, _ *http.Request) {
 	settings := s.control.Settings()
 	guard := settings.LiveGuard()
-	ready := settings.Mode == "paper" && settings.ExecutionVenue == "paper"
+	ready := settings.NewExecutionConfigured()
 	safety := runtimecore.SafetySnapshot{Frozen: false}
 	if s.safety != nil {
 		safety = s.safety.Snapshot()
 		ready = ready && !safety.Frozen
 	}
 	reasons := append([]string{}, guard.Reasons...)
-	if settings.Mode == "paper" && settings.ExecutionVenue != "paper" {
-		reasons = append(reasons, "Go 首版不执行非 Paper 场所")
-	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok": true, "ready": ready, "execution_ready": ready && !settings.Kill,
 		"reconciling": safety.ReconcileActive, "safety": safety, "reasons": reasons,
@@ -172,7 +171,7 @@ func (s *Server) venues(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, []contracts.VenueInfo{
 		{ID: "paper", Kind: "paper", Configured: true, Spot: true, Perp: true, NativeProtectiveOrders: true, ReadOnly: false},
 		{ID: "binance", Kind: "cex", Configured: settings.CEXID == "binance" && settings.CEXTradingConfigured(), Spot: true, Perp: true, NativeProtectiveOrders: true, ReadOnly: true},
-		{ID: "okx", Kind: "cex", Configured: settings.OKXConfigured(), Spot: true, Perp: true, NativeProtectiveOrders: true, ReadOnly: true},
+		{ID: "okx", Kind: "cex", Configured: settings.OKXConfigured(), Spot: true, Perp: true, NativeProtectiveOrders: true, ReadOnly: !settings.OKXDemoExecutionConfigured()},
 	})
 }
 

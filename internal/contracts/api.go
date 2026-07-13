@@ -21,6 +21,7 @@ type ClosePositionRequest struct {
 }
 
 type SettingsUpdateRequest struct {
+	Mode            *string `json:"mode,omitempty"`
 	LLMProvider     *string `json:"llm_provider,omitempty"`
 	LLMModel        *string `json:"llm_model,omitempty"`
 	LLMModelFast    *string `json:"llm_model_fast,omitempty"`

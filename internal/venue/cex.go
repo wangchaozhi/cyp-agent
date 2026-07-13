@@ -35,6 +35,7 @@ type CEXConfig struct {
 	APISecret            string
 	Passphrase           string
 	Demo                 bool
+	EnableDemoTrading    bool
 	QuoteCurrency        string
 	EstimatedSlippageBPS contracts.Decimal
 	Clock                func() time.Time
@@ -46,8 +47,9 @@ type MarketPrecision struct {
 	MinNotional contracts.Decimal
 }
 
-// CEXVenue exposes public and signed read-only exchange APIs. Trading methods
-// remain hard-disabled regardless of credentials or demo mode.
+// CEXVenue exposes public and signed exchange APIs. Order mutation is enabled
+// only for an explicitly selected, fully configured OKX Demo account. Real CEX
+// trading remains unavailable even when production credentials are present.
 type CEXVenue struct {
 	id             string
 	baseURL        string
@@ -57,13 +59,17 @@ type CEXVenue struct {
 	apiSecret      string
 	passphrase     string
 	demo           bool
+	demoTrading    bool
 	quoteCurrency  string
 	slippageBPS    contracts.Decimal
 	now            func() time.Time
 
-	mu        sync.RWMutex
-	precision map[string]MarketPrecision
-	fills     map[string]contracts.ExecutionResult
+	placeMu     sync.Mutex
+	mu          sync.RWMutex
+	precision   map[string]MarketPrecision
+	instruments map[string]okxInstrumentSpec
+	fills       map[string]contracts.ExecutionResult
+	orderRefs   map[string]okxOrderRef
 }
 
 var _ Venue = (*CEXVenue)(nil)
@@ -114,13 +120,28 @@ func NewCEXVenue(config CEXConfig) (*CEXVenue, error) {
 	if config.Clock == nil {
 		config.Clock = time.Now
 	}
+	if config.EnableDemoTrading {
+		if exchange != "okx" || !config.Demo {
+			return nil, &CEXError{
+				Kind: CEXErrorValidation, Exchange: exchange, Operation: "construct",
+				Message: "CEX order execution is allowed only for OKX Demo",
+			}
+		}
+		if strings.TrimSpace(config.APIKey) == "" || strings.TrimSpace(config.APISecret) == "" || strings.TrimSpace(config.Passphrase) == "" {
+			return nil, &CEXError{
+				Kind: CEXErrorAuth, Exchange: exchange, Operation: "construct",
+				Message: "OKX Demo trading requires API key, secret, and passphrase",
+			}
+		}
+	}
 	return &CEXVenue{
 		id: exchange, baseURL: strings.TrimRight(config.BaseURL, "/"),
 		futuresBaseURL: strings.TrimRight(config.FuturesBaseURL, "/"), httpClient: config.HTTPClient,
 		apiKey: config.APIKey, apiSecret: config.APISecret, passphrase: config.Passphrase,
-		demo: config.Demo, quoteCurrency: config.QuoteCurrency,
+		demo: config.Demo, demoTrading: config.EnableDemoTrading, quoteCurrency: config.QuoteCurrency,
 		slippageBPS: config.EstimatedSlippageBPS, now: config.Clock,
-		precision: make(map[string]MarketPrecision), fills: make(map[string]contracts.ExecutionResult),
+		precision: make(map[string]MarketPrecision), instruments: make(map[string]okxInstrumentSpec),
+		fills: make(map[string]contracts.ExecutionResult), orderRefs: make(map[string]okxOrderRef),
 	}, nil
 }
 
@@ -136,8 +157,8 @@ func NewOKXVenue(config CEXConfig) (*CEXVenue, error) {
 
 func (venue *CEXVenue) ID() string { return venue.id }
 func (*CEXVenue) Kind() Kind       { return KindCEX }
-func (*CEXVenue) Caps() Caps {
-	return Caps{Spot: true, Perp: true, NativeProtectiveOrders: true, ReadOnly: true}
+func (venue *CEXVenue) Caps() Caps {
+	return Caps{Spot: true, Perp: true, NativeProtectiveOrders: true, ReadOnly: !venue.DemoTradingEnabled()}
 }
 
 // IsConfigured reports public/read-only availability. PrivateConfigured is the
@@ -153,9 +174,16 @@ func (venue *CEXVenue) PrivateConfigured() bool {
 
 func (venue *CEXVenue) Demo() bool { return venue.demo }
 
+// DemoTradingEnabled is deliberately narrower than Demo: it proves that the
+// adapter was constructed for order mutation, points at OKX's simulated
+// environment, and has the complete private credential tuple.
+func (venue *CEXVenue) DemoTradingEnabled() bool {
+	return venue != nil && venue.id == "okx" && venue.demo && venue.demoTrading && venue.PrivateConfigured()
+}
+
 func (venue *CEXVenue) String() string {
-	return fmt.Sprintf("CEXVenue(id=%s,demo=%t,private_configured=%t,trading=disabled)",
-		venue.id, venue.demo, venue.PrivateConfigured())
+	return fmt.Sprintf("CEXVenue(id=%s,demo=%t,private_configured=%t,demo_trading=%t)",
+		venue.id, venue.demo, venue.PrivateConfigured(), venue.DemoTradingEnabled())
 }
 
 func (venue *CEXVenue) GoString() string { return venue.String() }
@@ -225,25 +253,58 @@ func (venue *CEXVenue) Preflight(ctx context.Context, intent contracts.OrderInte
 	return report, nil
 }
 
-func (venue *CEXVenue) Place(_ context.Context, intent contracts.OrderIntent) (contracts.ExecutionResult, error) {
-	venue.mu.Lock()
-	defer venue.mu.Unlock()
-	if existing, ok := venue.fills[intent.ClientID]; ok {
+func (venue *CEXVenue) Place(ctx context.Context, intent contracts.OrderIntent) (contracts.ExecutionResult, error) {
+	if strings.TrimSpace(intent.ClientID) == "" {
+		return contracts.ExecutionResult{}, ErrClientIDRequired
+	}
+	venue.placeMu.Lock()
+	defer venue.placeMu.Unlock()
+	venue.mu.RLock()
+	existing, ok := venue.fills[intent.ClientID]
+	venue.mu.RUnlock()
+	if ok {
 		return cloneExecution(existing), nil
 	}
-	message := ErrCEXTradingDisabled.Error()
-	result := contracts.ExecutionResult{
-		ClientID: intent.ClientID, Status: contracts.OrderStatusRejected, Error: stringPointer(message),
+	if !venue.DemoTradingEnabled() {
+		message := ErrCEXTradingDisabled.Error()
+		result := contracts.ExecutionResult{
+			ClientID: intent.ClientID, Status: contracts.OrderStatusRejected,
+			ProtectiveOrders: contracts.List[contracts.ProtectiveOrder]{}, Error: stringPointer(message),
+		}
+		venue.rememberCEXResult(intent.ClientID, result, okxOrderRef{})
+		return cloneExecution(result), nil
 	}
-	venue.fills[intent.ClientID] = result
+	result, reference, err := venue.placeOKXDemo(ctx, intent)
+	if err != nil {
+		return contracts.ExecutionResult{}, err
+	}
+	venue.rememberCEXResult(intent.ClientID, result, reference)
 	return cloneExecution(result), nil
 }
 
-func (venue *CEXVenue) Cancel(context.Context, string) error {
-	return &CEXError{
-		Kind: CEXErrorDisabled, Exchange: venue.id, Operation: "cancel",
-		Message: ErrCEXTradingDisabled.Error(), Err: ErrCEXTradingDisabled,
+func (venue *CEXVenue) Cancel(ctx context.Context, clientID string) error {
+	if !venue.DemoTradingEnabled() {
+		return &CEXError{
+			Kind: CEXErrorDisabled, Exchange: venue.id, Operation: "cancel",
+			Message: ErrCEXTradingDisabled.Error(), Err: ErrCEXTradingDisabled,
+		}
 	}
+	venue.mu.RLock()
+	reference, ok := venue.orderRefs[clientID]
+	venue.mu.RUnlock()
+	if !ok || reference.OrderID == "" || reference.InstrumentID == "" {
+		return &CEXError{Kind: CEXErrorValidation, Exchange: venue.id, Operation: "cancel", Message: "unknown client order id"}
+	}
+	return venue.cancelOKXDemo(ctx, reference)
+}
+
+func (venue *CEXVenue) rememberCEXResult(clientID string, result contracts.ExecutionResult, reference okxOrderRef) {
+	venue.mu.Lock()
+	venue.fills[clientID] = cloneExecution(result)
+	if reference.OrderID != "" {
+		venue.orderRefs[clientID] = reference
+	}
+	venue.mu.Unlock()
 }
 
 func (venue *CEXVenue) Close() error {
@@ -379,7 +440,29 @@ func (venue *CEXVenue) doJSONAt(
 	private bool,
 	target any,
 ) error {
-	request, err := venue.newHTTPRequestAt(ctx, baseURL, method, path, query, nil, private)
+	return venue.doJSONBodyAt(ctx, baseURL, method, path, query, nil, private, target)
+}
+
+func (venue *CEXVenue) doJSONBody(
+	ctx context.Context,
+	method, path string,
+	query url.Values,
+	body []byte,
+	private bool,
+	target any,
+) error {
+	return venue.doJSONBodyAt(ctx, venue.baseURL, method, path, query, body, private, target)
+}
+
+func (venue *CEXVenue) doJSONBodyAt(
+	ctx context.Context,
+	baseURL, method, path string,
+	query url.Values,
+	body []byte,
+	private bool,
+	target any,
+) error {
+	request, err := venue.newHTTPRequestAt(ctx, baseURL, method, path, query, body, private)
 	if err != nil {
 		return err
 	}

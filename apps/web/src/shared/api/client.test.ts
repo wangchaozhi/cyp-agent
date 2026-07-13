@@ -92,4 +92,26 @@ describe("api client error handling", () => {
     expect(parsed.searchParams.get("timeframe")).toBe("4h");
     expect(parsed.searchParams.get("limit")).toBe("42");
   });
+
+  it("sends the selected symbol when starting an analysis run", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ run_id: "run-1", symbol: "ETH/USDT" }));
+
+    await cypApi.runOnce("ETH/USDT");
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/run");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(String(init.body))).toEqual({ symbol: "ETH/USDT" });
+  });
+
+  it("sends runtime mode changes through the settings endpoint", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ mode: "live" }));
+
+    await cypApi.updateSettings({ mode: "live" });
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/settings");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(String(init.body))).toEqual({ mode: "live" });
+  });
 });

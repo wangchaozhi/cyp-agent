@@ -62,3 +62,26 @@ func TestInvalidProviderDoesNotPartiallyMutate(t *testing.T) {
 		t.Fatal("invalid request partially mutated state")
 	}
 }
+
+func TestRuntimeModeUpdateKeepsLiveExecutionReadOnly(t *testing.T) {
+	state := New(config.DefaultSettings())
+	live := " LIVE "
+	if err := state.UpdateSettings(contracts.SettingsUpdateRequest{Mode: &live}); err != nil {
+		t.Fatalf("UpdateSettings() error = %v", err)
+	}
+	settings := state.Settings()
+	if settings.Mode != "live" {
+		t.Fatalf("mode = %q, want live", settings.Mode)
+	}
+	if settings.LiveGuard().OK || settings.LiveExecutionAllowed() {
+		t.Fatal("runtime mode update bypassed the live execution safety rail")
+	}
+
+	invalid := "production"
+	if err := state.UpdateSettings(contracts.SettingsUpdateRequest{Mode: &invalid}); !errors.Is(err, ErrInvalidRuntimeMode) {
+		t.Fatalf("invalid mode error = %v", err)
+	}
+	if state.Settings().Mode != "live" {
+		t.Fatal("invalid mode partially mutated settings")
+	}
+}

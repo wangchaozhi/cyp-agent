@@ -2,8 +2,10 @@ package venue
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -191,6 +193,135 @@ func TestOKXPublicMarketAndDemoSignature(t *testing.T) {
 	if err != nil || balances.TotalQuote.Cmp(contracts.MustDecimal("100")) != 0 {
 		t.Fatalf("balances=%#v err=%v", balances, err)
 	}
+}
+
+func TestOKXDemoPlacesPerpetualWithNativeProtection(t *testing.T) {
+	const secret = "okx-demo-secret"
+	var placed atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		if strings.HasPrefix(request.URL.Path, "/api/v5/account/") || strings.HasPrefix(request.URL.Path, "/api/v5/trade/") {
+			if request.Header.Get("x-simulated-trading") != "1" {
+				t.Error("private Demo request is missing x-simulated-trading=1")
+			}
+			if request.Header.Get("OK-ACCESS-KEY") != "okx-demo-key" {
+				t.Error("private Demo request is missing API key")
+			}
+		}
+		switch request.URL.Path {
+		case "/api/v5/public/instruments":
+			if request.URL.Query().Get("instId") != "ETH-USDT-SWAP" {
+				t.Errorf("instrument instId=%q", request.URL.Query().Get("instId"))
+			}
+			_, _ = response.Write([]byte(`{"code":"0","data":[{"instId":"ETH-USDT-SWAP","baseCcy":"","quoteCcy":"","settleCcy":"USDT","ctType":"linear","ctValCcy":"ETH","ctVal":"0.1","lotSz":"1","minSz":"1","tickSz":"0.01","state":"live"}]}`))
+		case "/api/v5/market/ticker":
+			_, _ = response.Write([]byte(`{"code":"0","data":[{"last":"2000"}]}`))
+		case "/api/v5/account/config":
+			_, _ = response.Write([]byte(`{"code":"0","data":[{"posMode":"long_short_mode"}]}`))
+		case "/api/v5/account/set-leverage":
+			assertOKXDemoPOSTSignature(t, request, secret)
+			var body map[string]any
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				t.Error(err)
+			}
+			if body["instId"] != "ETH-USDT-SWAP" || body["lever"] != "2" || body["posSide"] != "long" {
+				t.Errorf("set leverage body=%#v", body)
+			}
+			_, _ = response.Write([]byte(`{"code":"0","data":[{}]}`))
+		case "/api/v5/trade/order":
+			if request.Method == http.MethodPost {
+				placed.Add(1)
+				raw := assertOKXDemoPOSTSignature(t, request, secret)
+				var body map[string]any
+				if err := json.Unmarshal(raw, &body); err != nil {
+					t.Error(err)
+				}
+				attached, _ := body["attachAlgoOrds"].([]any)
+				if body["instId"] != "ETH-USDT-SWAP" || body["side"] != "buy" ||
+					body["posSide"] != "long" || body["sz"] != "10" || len(attached) != 1 {
+					t.Errorf("order body=%#v", body)
+				}
+				_, _ = response.Write([]byte(`{"code":"0","data":[{"ordId":"demo-order-1","clOrdId":"runethdemo","sCode":"0","sMsg":""}]}`))
+				return
+			}
+			_, _ = response.Write([]byte(`{"code":"0","data":[{"ordId":"demo-order-1","clOrdId":"runethdemo","state":"filled","avgPx":"2001","accFillSz":"10","fee":"-2","feeCcy":"USDT"}]}`))
+		case "/api/v5/trade/orders-algo-pending":
+			_, _ = response.Write([]byte(`{"code":"0","data":[{"algoId":"protect-1","slTriggerPx":"1800","tpTriggerPx":"2200"}]}`))
+		case "/api/v5/account/positions":
+			_, _ = response.Write([]byte(`{"code":"0","data":[{"instId":"ETH-USDT-SWAP","pos":"10","posSide":"long","avgPx":"2001","lever":"2","liqPx":"1100","mgnMode":"isolated"}]}`))
+		case "/api/v5/trade/cancel-order":
+			_, _ = response.Write([]byte(`{"code":"0","data":[{"ordId":"demo-order-1","sCode":"0","sMsg":""}]}`))
+		default:
+			http.NotFound(response, request)
+		}
+	}))
+	defer server.Close()
+	target := newTestCEX(t, "okx", server.URL, func(config *CEXConfig) {
+		config.APIKey, config.APISecret, config.Passphrase = "okx-demo-key", secret, "pass"
+		config.Demo, config.EnableDemoTrading = true, true
+	})
+	if target.Caps().ReadOnly || !target.DemoTradingEnabled() {
+		t.Fatal("explicit OKX Demo execution adapter should be writable")
+	}
+	stop := contracts.MustDecimal("1800")
+	intent := contracts.OrderIntent{
+		ClientID: "run-eth-demo", Symbol: "ETH/USDT:USDT", Venue: "okx",
+		Side: contracts.SideLong, Instrument: contracts.InstrumentPerp,
+		OrderType: contracts.EntryTypeMarket, SizeQuote: contracts.MustDecimal("2000"),
+		Leverage: 2, MarginMode: contracts.MarginModeIsolated, StopLoss: &stop,
+		TakeProfit: contracts.List[contracts.Decimal]{contracts.MustDecimal("2200")},
+	}
+	result, err := target.Place(context.Background(), intent)
+	if err != nil || result.Status != contracts.OrderStatusFilled || result.FilledBase.Cmp(contracts.MustDecimal("1")) != 0 ||
+		result.AvgPrice == nil || result.AvgPrice.Cmp(contracts.MustDecimal("2001")) != 0 || len(result.ProtectiveOrders) != 2 {
+		t.Fatalf("place result=%#v err=%v", result, err)
+	}
+	replayed, err := target.Place(context.Background(), intent)
+	if err != nil || replayed.Status != contracts.OrderStatusFilled || placed.Load() != 1 {
+		t.Fatalf("idempotent replay=%#v placed=%d err=%v", replayed, placed.Load(), err)
+	}
+	wrongVenue := intent
+	wrongVenue.ClientID = "wrong-venue"
+	wrongVenue.Venue = "paper"
+	rejected, err := target.Place(context.Background(), wrongVenue)
+	if err != nil || rejected.Status != contracts.OrderStatusRejected || placed.Load() != 1 {
+		t.Fatalf("misrouted order=%#v placed=%d err=%v", rejected, placed.Load(), err)
+	}
+	protective, err := target.ProtectiveOrders(context.Background(), intent.Symbol)
+	if err != nil || !hasProtectiveKind(protective, "stop_loss") || !hasProtectiveKind(protective, "take_profit") {
+		t.Fatalf("protective=%#v err=%v", protective, err)
+	}
+	positions, err := target.Positions(context.Background())
+	if err != nil || len(positions) != 1 || positions[0].SizeBase.Cmp(contracts.MustDecimal("1")) != 0 {
+		t.Fatalf("positions=%#v err=%v", positions, err)
+	}
+	if err := target.Cancel(context.Background(), intent.ClientID); err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+}
+
+func assertOKXDemoPOSTSignature(t *testing.T, request *http.Request, secret string) []byte {
+	t.Helper()
+	raw, err := io.ReadAll(request.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	timestamp := request.Header.Get("OK-ACCESS-TIMESTAMP")
+	prehash := timestamp + request.Method + request.URL.RequestURI() + string(raw)
+	if request.Header.Get("OK-ACCESS-SIGN") != hmacBase64(secret, prehash) {
+		t.Errorf("bad OKX Demo POST signature")
+	}
+	request.Body = io.NopCloser(strings.NewReader(string(raw)))
+	return raw
+}
+
+func hasProtectiveKind(orders []contracts.ProtectiveOrder, kind string) bool {
+	for _, order := range orders {
+		if order.Kind == kind && order.ReduceOnly && order.TriggerPrice.IsPositive() {
+			return true
+		}
+	}
+	return false
 }
 
 func TestCEXErrorsPrecisionAdaptersAndTradingGuard(t *testing.T) {

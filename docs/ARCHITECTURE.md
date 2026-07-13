@@ -25,7 +25,7 @@ cmd/cyp-server → internal/api (net/http)
         │    ├─ agents/llm ─ 分析、策略、软风控、复盘
         │    ├─ risk ─────── 确定性硬风控
         │    ├─ approval ─── 人工或受限自动审批
-        │    └─ venue ────── Paper 执行
+        │    └─ venue ────── Paper / OKX Demo 执行
         ├─ runtime ───────── 启动对账、扫描、持仓监控
         ├─ persistence ───── memory / atomic JSON / PostgreSQL
         └─ events/metrics ── SSE 事件、运行指标、JSON 日志
@@ -38,8 +38,8 @@ cmd/cyp ── backtest / sweep / config / version
 `cmd/cyp-server` 是唯一服务入口：
 
 1. `internal/config.Load` 读取默认值、`.env` 和进程环境变量；进程环境变量优先。
-2. `internal/app.New` 创建控制状态、事件总线、PaperVenue、Binance/OKX 只读适配器、行情源、Repository、LLM、智能体、编排器和 RuntimeEngine。
-3. RuntimeEngine 必须先完成 Paper 启动对账。对账失败时应用构建失败，新开仓保持冻结。
+2. `internal/app.New` 创建控制状态、事件总线、PaperVenue、Binance/OKX 适配器、行情源、Repository、LLM、智能体、编排器和 RuntimeEngine，并只把 Paper 或显式 OKX Demo 选作执行场所。
+3. RuntimeEngine 必须先完成当前执行场所的启动对账。对账失败时应用构建失败，新开仓保持冻结。
 4. `CYP_RUNTIME_AUTOSTART=true` 时，对账后再启动机会扫描和持仓监控；否则只完成一次启动对账。
 5. API 使用 Go 标准库 `net/http` 提供 REST、SSE 和已构建前端静态文件。
 6. 收到 `SIGINT`/`SIGTERM` 后停止运行时、审批等待与事件流，再执行 HTTP 优雅关闭。
@@ -59,7 +59,7 @@ cmd/cyp ── backtest / sweep / config / version
 | `internal/llm` | Anthropic、DeepSeek、Mock、重试/熔断/预算 |
 | `internal/risk` | 仓位、敞口、滑点、杠杆、回撤等确定性规则 |
 | `internal/approval` | pending 队列、approve/reject/modify、超时 |
-| `internal/venue` | 统一 Venue、Paper、Binance/OKX 只读和链上安全适配 |
+| `internal/venue` | 统一 Venue、Paper、CEX 行情/账户读取、OKX Demo 执行和链上安全适配 |
 | `internal/data` | 合成/CEX 行情、指标、波动率和跨场所聚合 |
 | `internal/runtime` | 启动对账、安全冻结、扫描、持仓监控和 symbol 锁 |
 | `internal/persistence` | 内存、原子 JSON 文件和 PostgreSQL Repository |
@@ -80,9 +80,9 @@ cmd/cyp ── backtest / sweep / config / version
   → 确定性 Risk + RiskOfficer 评审
   → 人工审批或满足白名单/额度/风险阈值的 auto 审批
   → 对修改后的提案重新执行确定性风控
-  → SafetyState 检查 Paper 模式、Kill Switch 和对账状态
+  → SafetyState 检查 Paper/OKX Demo 执行配置、Kill Switch 和对账状态
   → 保存 OrderIntent
-  → PaperVenue.Place（client_id 幂等）
+  → 当前模拟执行场所 Place（client_id 幂等）
   → Reviewer 复盘并保存 lessons
   → 发布 SSE 事件并保存最终结果
 ```
@@ -99,16 +99,17 @@ cmd/cyp ── backtest / sweep / config / version
 | --- | --- | --- | --- |
 | Paper | 支持 | 支持 | 支持 |
 | Binance | 公共行情支持 | 配置凭据后支持签名只读请求 | 硬禁用 |
-| OKX | 公共行情支持 | 配置凭据后支持签名只读请求 | 硬禁用 |
+| OKX Demo | 公共行情支持 | Demo 凭据支持 | 仅 USDT 线性永续，需显式启用 |
+| OKX 真实环境 | 公共行情支持 | 配置凭据后支持签名只读请求 | 硬禁用 |
 | Onchain | 适配器能力存在，未接入应用默认注册表 | 不作为当前运行路径 | 默认硬禁用 |
 
 实盘拒绝不是一个可由环境变量打开的功能：
 
 - `config.LiveExecutionSupported` 为 `false`，`LiveExecutionAllowed` 始终返回 `false`；
-- Runtime 只允许 `paper/paper` 新开仓；
+- Runtime 只允许 `paper/paper` 或经过适配器证明的 `paper/okx-demo` 新开仓；
 - Orchestrator 在执行前再次校验运行模式；
-- CEX `Place`/`Cancel` 明确返回禁用结果；
-- API 的执行依赖固定为 PaperVenue。
+- Binance、真实 OKX 和未显式启用 Demo 的 CEX `Place`/`Cancel` 明确返回禁用结果；
+- API、编排器、对账与监控共享同一个经过安全选择的执行 Venue。
 
 因此，设置 API Key、`CYP_LIVE_ACK=1` 或关闭 Kill Switch 都不会授权真实下单。
 
@@ -122,12 +123,12 @@ cmd/cyp ── backtest / sweep / config / version
 
 ## 状态、对账与运行时
 
-SafetyState 初始为冻结状态，只有成功的 `StartupReconcile` 可以解除冻结。当前对账目标固定为 PaperVenue，会核验持仓及止损保护；发现未解决差异或保护缺口时服务拒绝启动。
+SafetyState 初始为冻结状态，只有成功的 `StartupReconcile` 可以解除冻结。对账目标是当前 Paper 或 OKX Demo 执行场所，会核验持仓及止损保护；发现未解决差异或保护缺口时服务拒绝启动。
 
 RuntimeEngine 包含两条可选常驻循环：
 
 - Scanner 按 `CYP_SCAN_INTERVAL` 扫描 `CYP_WATCHLIST` 并触发 run；
-- PositionMonitor 按 `CYP_MONITOR_INTERVAL` 检查 Paper 持仓、保护条件和告警。
+- PositionMonitor 按 `CYP_MONITOR_INTERVAL` 检查当前模拟执行场所的持仓、保护条件和告警。
 
 同一 symbol 通过锁避免并发扫描冲突。Kill Switch 阻止新开仓，但平仓接口仍可用于降低风险。
 
@@ -153,6 +154,6 @@ SSE 使用 `text/event-stream`，连接建立后发送 retry 指令，每 15 秒
 
 - 修改外部字段或事件时，同时更新 Go contracts、OpenAPI/JSON Schema、前端类型与契约测试。
 - 修改风控、审批、对账或 Venue 时，必须补充失败路径和边界测试。
-- 不得新增绕过 SafetyState、Risk、Approval 或 Paper-only 门禁的执行入口。
+- 不得新增绕过 SafetyState、Risk、Approval 或 Paper/OKX-Demo 门禁的执行入口。
 - 新持久化实现只通过 `persistence.Repository` 接入，不在 API handler 中直接访问数据库。
 - 后台 goroutine 必须由 Application/Runtime/Orchestrator 持有，并有 context 取消与关闭路径。

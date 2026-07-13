@@ -188,3 +188,21 @@ func TestRuntimeRefusesNonPaperVenueBeforeReadingOrPlacing(t *testing.T) {
 		t.Fatal("non-paper positions were read")
 	}
 }
+
+type okxDemoVenue struct{ nonPaperVenue }
+
+func (*okxDemoVenue) ID() string               { return "okx" }
+func (*okxDemoVenue) DemoTradingEnabled() bool { return true }
+
+func TestRuntimeAllowsExplicitOKXDemoVenue(t *testing.T) {
+	t.Parallel()
+	target := &okxDemoVenue{}
+	reconciler, err := NewVenueReconciler(target, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := reconciler.Reconcile(context.Background())
+	if err != nil || !report.OK || !target.positionsCalled {
+		t.Fatalf("Demo reconcile=%#v called=%t err=%v", report, target.positionsCalled, err)
+	}
+}

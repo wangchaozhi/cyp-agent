@@ -233,18 +233,22 @@ func (venue *CEXVenue) fetchOKXPositions(ctx context.Context) ([]contracts.Posit
 	}
 	positions := make([]contracts.Position, 0, len(payload.Data))
 	for _, row := range payload.Data {
-		amount, err := decimalFromAny(row.Position)
-		if err != nil || amount.IsZero() {
+		contractAmount, err := decimalFromAny(row.Position)
+		if err != nil || contractAmount.IsZero() {
 			continue
 		}
 		side := contracts.Side(row.PositionSide)
 		if side != contracts.SideLong && side != contracts.SideShort {
 			side = contracts.SideLong
-			if amount.IsNegative() {
+			if contractAmount.IsNegative() {
 				side = contracts.SideShort
 			}
 		}
-		amount = amount.Abs()
+		spec, err := venue.okxInstrument(ctx, row.InstrumentID)
+		if err != nil {
+			return nil, err
+		}
+		amount := contractAmount.Abs().Mul(spec.ContractValue)
 		entry, err := decimalFromAny(row.AveragePrice)
 		if err != nil {
 			return nil, err

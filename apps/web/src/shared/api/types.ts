@@ -5,10 +5,11 @@ export type Instrument = "spot" | "perp";
 export type EntryType = "market" | "limit" | "range";
 export type MarginMode = "isolated" | "cross";
 export type Stance = "bullish" | "bearish" | "neutral";
+export type RuntimeMode = "paper" | "live";
 
 export interface HealthStatus {
   ok: boolean;
-  mode: string;
+  mode: RuntimeMode;
   display_mode?: string;
   execution_venue?: string;
   llm: boolean;
@@ -129,7 +130,7 @@ export interface RiskSnapshot {
 }
 
 export interface RuntimeSettings {
-  mode: string;
+  mode: RuntimeMode;
   approval: string;
   kill: boolean;
   allow_perp: boolean;
@@ -190,6 +191,7 @@ export interface RuntimeSettings {
 }
 
 export interface RuntimeSettingsUpdate {
+  mode?: RuntimeMode;
   llm_provider?: string;
   llm_model?: string;
   llm_model_fast?: string;

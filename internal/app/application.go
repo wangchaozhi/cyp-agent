@@ -30,7 +30,7 @@ type Application struct {
 	Control        *control.State
 	Events         *events.Bus
 	Gate           *approval.PendingGate
-	Venue          *venue.PaperVenue
+	Venue          venue.Venue
 	Registry       *venue.VenueRegistry
 	DataSource     data.Source
 	Market         *data.MarketAggregator
@@ -93,6 +93,7 @@ func New(
 	okx, err := venue.NewOKXVenue(venue.CEXConfig{
 		APIKey: settings.OKXAPIKey.Reveal(), APISecret: settings.OKXAPISecret.Reveal(),
 		Passphrase: settings.OKXPassword.Reveal(), Demo: settings.OKXDemo,
+		EnableDemoTrading: settings.OKXDemoExecutionConfigured(),
 	})
 	if err != nil {
 		_ = binance.Close()
@@ -100,6 +101,21 @@ func New(
 	}
 	registry := venue.NewVenueRegistry(paper, binance, okx)
 	historicalVenue, _ := registry.Get(settings.CEXID)
+	executionVenue := venue.Venue(paper)
+	switch settings.ExecutionVenue {
+	case "paper":
+	case "okx":
+		if !okx.DemoTradingEnabled() {
+			_ = binance.Close()
+			_ = okx.Close()
+			return nil, fmt.Errorf("OKX execution requires mode=paper, CYP_OKX_DEMO=true, and complete Demo credentials")
+		}
+		executionVenue = okx
+	default:
+		_ = binance.Close()
+		_ = okx.Close()
+		return nil, fmt.Errorf("execution venue %q is hard-disabled; use paper or OKX Demo", settings.ExecutionVenue)
+	}
 
 	source := configured.dataSource
 	if source == nil {
@@ -145,10 +161,10 @@ func New(
 		}
 	}
 	runMetrics := metrics.NewRuns()
-	balances, err := paper.Balances(ctx)
+	balances, err := executionVenue.Balances(ctx)
 	if err != nil {
 		_ = repository.Close()
-		return nil, fmt.Errorf("read initial paper balance: %w", err)
+		return nil, fmt.Errorf("read initial %s balance: %w", executionVenue.ID(), err)
 	}
 	riskTracker, err := riskstate.New(ctx, repository, balances.TotalQuote)
 	if err != nil {
@@ -163,12 +179,12 @@ func New(
 	// Scanner, manual API runs, and the orchestrator itself serialize on this
 	// single per-symbol lock instance instead of maintaining separate maps.
 	locks := runtimecore.NewSymbolLocks()
-	orch := orchestrator.New(ctx, state, paper, bus, gate, runMetrics,
+	orch := orchestrator.New(ctx, state, executionVenue, bus, gate, runMetrics,
 		orchestrator.WithDataSource(source), orchestrator.WithRepository(repository),
 		orchestrator.WithRiskState(riskTracker), orchestrator.WithSafety(safety), orchestrator.WithLLM(baseLLM),
 		orchestrator.WithSymbolLocks(locks))
 
-	reconciler, err := runtimecore.NewVenueReconciler(paper, bus, logger)
+	reconciler, err := runtimecore.NewVenueReconciler(executionVenue, bus, logger)
 	if err != nil {
 		orch.Close()
 		_ = repository.Close()
@@ -188,7 +204,10 @@ func New(
 		},
 		State: func() runtimecore.RuntimeState {
 			current := state.Settings()
-			return runtimecore.RuntimeState{Mode: current.Mode, ExecutionVenue: current.ExecutionVenue, Kill: current.Kill}
+			return runtimecore.RuntimeState{
+				Mode: current.Mode, ExecutionVenue: current.ExecutionVenue,
+				ExecutionDemo: current.OKXDemoExecutionConfigured(), Kill: current.Kill,
+			}
 		},
 		Safety: safety, Locks: locks, Logger: logger, Metrics: runtimeMetrics,
 	})
@@ -198,7 +217,7 @@ func New(
 		return nil, err
 	}
 	monitor, err := runtimecore.NewPositionMonitor(runtimecore.PositionMonitorConfig{
-		Venue: paper, Interval: time.Duration(settings.MonitorInterval) * time.Second,
+		Venue: executionVenue, Interval: time.Duration(settings.MonitorInterval) * time.Second,
 		Events: bus, Alerter: alerter, Logger: logger, Metrics: runtimeMetrics,
 		MinMarginRatio: settings.Risk.MinMarginRatio,
 	})
@@ -229,7 +248,7 @@ func New(
 	}
 
 	server, err := api.New(api.Dependencies{
-		Control: state, Venue: paper, Events: bus, Gate: gate, Orchestrator: orch,
+		Control: state, Venue: executionVenue, Events: bus, Gate: gate, Orchestrator: orch,
 		Metrics: runMetrics, RuntimeMetrics: runtimeMetrics, Registry: registry,
 		Market: aggregator, Safety: safety, HistoricalVenue: historicalVenue,
 		RiskState: riskTracker,
@@ -245,7 +264,7 @@ func New(
 		return nil, err
 	}
 	return &Application{
-		Control: state, Events: bus, Gate: gate, Venue: paper, Registry: registry,
+		Control: state, Events: bus, Gate: gate, Venue: executionVenue, Registry: registry,
 		DataSource: source, Market: aggregator, Repository: repository,
 		Metrics: runMetrics, RuntimeMetrics: runtimeMetrics, Safety: safety,
 		RiskState: riskTracker,

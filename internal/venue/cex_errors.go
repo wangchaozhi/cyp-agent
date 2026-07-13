@@ -22,7 +22,7 @@ const (
 )
 
 var (
-	ErrCEXTradingDisabled = errors.New("首版 Go 硬禁用 CEX 真实下单")
+	ErrCEXTradingDisabled = errors.New("真实 CEX 与非 OKX Demo 下单已硬禁用")
 	ErrCEXUnsupported     = errors.New("exchange operation is unsupported")
 )
 

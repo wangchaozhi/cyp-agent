@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { X } from "lucide-react";
 
 import { PendingApprovals } from "../features/approvals/PendingApprovals";
@@ -13,14 +13,14 @@ import { PositionsPanel } from "../features/positions/PositionsPanel";
 import { RiskPanel } from "../features/risk/RiskPanel";
 import { SettingsPanel } from "../features/settings/SettingsPanel";
 import { cypApi } from "../shared/api/client";
-import type { ApprovalRequest, DashboardEvent, Position, RuntimeSettingsUpdate } from "../shared/api/types";
+import type { ApprovalRequest, DashboardEvent, Position, RuntimeMode, RuntimeSettingsUpdate } from "../shared/api/types";
 import { useEventStream } from "../shared/hooks/useEventStream";
 import { usePollingResource } from "../shared/hooks/usePollingResource";
 import { SectionHeading } from "../shared/ui/SectionHeading";
 
 const MAX_EVENTS = 160;
 
-type Notice = { tone: "ok" | "bad"; message: string } | null;
+type Notice = { tone: "ok" | "warn" | "bad"; message: string } | null;
 
 function refreshAll(resources: Array<() => Promise<void>>) {
   void Promise.allSettled(resources.map((refresh) => refresh()));
@@ -40,7 +40,10 @@ export default function App() {
   const portfolio = usePollingResource(cypApi.portfolio, 5000);
   const metrics = usePollingResource(cypApi.metrics, 10000);
   const [events, setEvents] = useState<DashboardEvent[]>([]);
+  const [marketSymbols, setMarketSymbols] = useState<string[]>([]);
+  const [analysisSymbol, setAnalysisSymbol] = useState("");
   const [running, setRunning] = useState(false);
+  const [switchingMode, setSwitchingMode] = useState(false);
   const [switchingKill, setSwitchingKill] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [notice, setNotice] = useState<Notice>(null);
@@ -53,6 +56,10 @@ export default function App() {
     risk.error,
     portfolio.error,
   ].find(Boolean);
+  const analysisSymbols = useMemo(() => {
+    const source = marketSymbols.length ? marketSymbols : (runtimeSettings.data?.watchlist ?? []);
+    return [...new Set(source.map((symbol) => symbol.trim()).filter(Boolean))];
+  }, [marketSymbols, runtimeSettings.data?.watchlist]);
 
   const handleEvent = useCallback(
     (event: DashboardEvent) => {
@@ -75,7 +82,21 @@ export default function App() {
   // The backend has a deterministic rules path and intentionally supports
   // running without an LLM. Only block while the backend health state is not
   // available; an unconfigured model is an informational status, not a gate.
-  const runDisabledReason = health.data ? null : "等待后端状态";
+  const runDisabledReason = !health.data
+    ? "等待后端状态"
+    : switchingMode
+      ? "正在切换运行模式"
+      : !runtimeSettings.data && !marketSymbols.length
+        ? "等待币种列表"
+        : !analysisSymbol
+          ? "未选择分析币种"
+          : null;
+
+  useEffect(() => {
+    setAnalysisSymbol((current) => (
+      analysisSymbols.includes(current) ? current : (analysisSymbols[0] ?? "")
+    ));
+  }, [analysisSymbols]);
 
   useEffect(() => {
     if (!settingsOpen) return;
@@ -91,21 +112,42 @@ export default function App() {
   }, [settingsOpen]);
 
   const runOnce = async () => {
-    if (runDisabledReason) {
-      setNotice({ tone: "bad", message: `无法触发：${runDisabledReason}` });
+    const symbol = analysisSymbol.trim();
+    if (runDisabledReason || !symbol) {
+      setNotice({ tone: "bad", message: `无法触发：${runDisabledReason ?? "未选择分析币种"}` });
       return;
     }
 
     setRunning(true);
     setNotice(null);
     try {
-      const result = await cypApi.runOnce();
+      const result = await cypApi.runOnce(symbol);
       await pending.refresh();
       setNotice({ tone: "ok", message: `已触发 ${result.symbol}，run=${result.run_id}` });
     } catch (error) {
       setNotice({ tone: "bad", message: `触发失败：${errorMessage(error)}` });
     } finally {
       setRunning(false);
+    }
+  };
+
+  const switchMode = async (mode: RuntimeMode) => {
+    if (switchingMode || mode === runtimeSettings.data?.mode) return;
+    setSwitchingMode(true);
+    setNotice(null);
+    try {
+      await cypApi.updateSettings({ mode });
+      await Promise.all([runtimeSettings.refresh(), health.refresh(), risk.refresh()]);
+      setNotice({
+        tone: mode === "live" ? "warn" : "ok",
+        message: mode === "live"
+          ? "已切换到 Live 只读模式：允许分析，实盘执行仍由安全锁禁止"
+          : "已切换到 Paper 模拟模式：所有成交仅作用于模拟账户",
+      });
+    } catch (error) {
+      setNotice({ tone: "bad", message: `模式切换失败：${errorMessage(error)}` });
+    } finally {
+      setSwitchingMode(false);
     }
   };
 
@@ -180,9 +222,15 @@ export default function App() {
             venues={venues.data}
             streamStatus={streamStatus}
             running={running}
+            switchingMode={switchingMode}
             switchingKill={switchingKill}
             settingsOpen={settingsOpen}
+            mode={runtimeSettings.data?.mode ?? health.data?.mode ?? "paper"}
+            analysisSymbol={analysisSymbol}
+            analysisSymbols={analysisSymbols}
             runDisabledReason={runDisabledReason}
+            onAnalysisSymbolChange={setAnalysisSymbol}
+            onModeChange={(mode) => void switchMode(mode)}
             onRun={() => void runOnce()}
             onToggleKill={() => void toggleKill()}
             onOpenSettings={() => setSettingsOpen(true)}
@@ -215,7 +263,10 @@ export default function App() {
                 title="市场情报"
                 description="比较多个资产的相对强弱、实时价格与跨场所差异。"
               />
-              <MarketPanel watchlist={runtimeSettings.data?.watchlist ?? null} />
+              <MarketPanel
+                watchlist={runtimeSettings.data?.watchlist ?? null}
+                onSelectionChange={setMarketSymbols}
+              />
             </section>
 
             <section id="operations" className="workspace-section" aria-label="决策与执行">

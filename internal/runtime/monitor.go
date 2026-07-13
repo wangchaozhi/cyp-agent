@@ -103,26 +103,33 @@ func (monitor *PositionMonitor) CheckOnce(ctx context.Context) (report MonitorRe
 	if ctx == nil {
 		return report, errors.New("monitor context is required")
 	}
-	if err := ValidatePaperVenue(string(monitor.venue.Kind()), monitor.venue.ID()); err != nil {
+	if err := ValidateExecutionVenue(monitor.venue); err != nil {
 		return report, err
 	}
 	positions, err := monitor.venue.Positions(ctx)
 	if err != nil {
-		return report, fmt.Errorf("load paper positions: %w", err)
+		return report, fmt.Errorf("load execution venue positions: %w", err)
 	}
 	report.Positions = append(report.Positions, positions...)
-	reader, canInspectProtective := monitor.venue.(protectiveReader)
 	ordersBySymbol := make(map[string][]contracts.ProtectiveOrder)
+	inspectableBySymbol := make(map[string]bool)
 	for _, position := range positions {
 		orders, checked := ordersBySymbol[position.Symbol]
-		if !checked && canInspectProtective {
-			orders = reader.ProtectiveFor(position.Symbol)
+		inspectable := inspectableBySymbol[position.Symbol]
+		if !checked {
+			var inspectErr error
+			orders, inspectable, inspectErr = inspectProtectiveOrders(ctx, monitor.venue, position.Symbol)
+			if inspectErr != nil {
+				report.Alerts = append(report.Alerts,
+					fmt.Sprintf("%s 核验保护单失败：%s", position.Symbol, inspectErr.Error()))
+			}
 			ordersBySymbol[position.Symbol] = orders
+			inspectableBySymbol[position.Symbol] = inspectable
 		}
 		if !monitor.venue.Caps().NativeProtectiveOrders {
 			report.Alerts = append(report.Alerts,
 				fmt.Sprintf("%s 无原生保护单，保护依赖监控存活", position.Symbol))
-		} else if !canInspectProtective || !hasStopLoss(orders) {
+		} else if !inspectable || !hasStopLoss(orders) {
 			report.Alerts = append(report.Alerts, fmt.Sprintf("%s 缺少止损保护单", position.Symbol))
 		}
 		mark, tickerErr := monitor.venue.FetchTicker(ctx, position.Symbol)

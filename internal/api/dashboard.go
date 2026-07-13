@@ -110,7 +110,7 @@ func (s *Server) closePosition(w http.ResponseWriter, request *http.Request) {
 	result, err := s.venue.Place(request.Context(), contracts.OrderIntent{
 		ClientID: "manual-close-" + shortID(), Symbol: found.Symbol, Venue: s.venue.ID(),
 		Side: found.Side, Instrument: found.Instrument, OrderType: contracts.EntryTypeMarket,
-		SizeQuote: found.SizeBase.Mul(mark), Leverage: found.Leverage,
+		SizeQuote: found.SizeBase.Mul(mark), Price: &mark, Leverage: found.Leverage,
 		MarginMode: contracts.MarginModeIsolated, ReduceOnly: true,
 		TakeProfit: contracts.List[contracts.Decimal]{},
 	})

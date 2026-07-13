@@ -5,8 +5,9 @@ info:
   description: |
     React 仪表盘使用的 REST 与 SSE 契约。
 
-    Go 首版仅支持 Paper 模式。`live` 模式以及任何非 `paper` 执行场所均为
-    hard-disabled；实现必须在启动或执行入口拒绝，而不是降级后继续真实下单。
+    真实 CEX 下单和 `live` 模式均为 hard-disabled。执行仅允许本地 Paper，或在
+    `mode=paper`、`execution_venue=okx`、Demo 标识和完整 Demo 凭据同时满足时使用
+    OKX 模拟环境；OKX Demo 当前只开放 USDT 线性永续合约。
 
     交易金额、价格、数量、PnL、费率和风险阈值在响应 JSON 中使用十进制字符串，
     避免经过二进制浮点。回测研究指标和运行计数仍使用 JSON number。集合与嵌套
@@ -185,7 +186,7 @@ paths:
     get:
       tags: [Portfolio]
       operationId: listPositions
-      summary: 获取当前 Paper 持仓
+      summary: 获取当前执行场所持仓
       responses:
         "200":
           description: 持仓列表；无持仓时返回空数组
@@ -204,7 +205,7 @@ paths:
       security:
         - WriteToken: []
       operationId: closePosition
-      summary: 按当前 Paper 价格平仓
+      summary: 按当前执行场所价格平仓
       requestBody:
         required: true
         content:
@@ -231,7 +232,7 @@ paths:
     get:
       tags: [Portfolio]
       operationId: listTrades
-      summary: 获取持久化 Paper 成交账本
+      summary: 获取持久化成交账本
       responses:
         "200":
           description: 按发生时间排列的开平仓记录；无记录时返回空数组
@@ -340,7 +341,7 @@ paths:
       security:
         - WriteToken: []
       operationId: startRun
-      summary: 异步触发一轮 Paper 闭环
+      summary: 异步触发一轮分析、风控与模拟执行闭环
       description: 立即返回 run_id；工作流通过 SSE 和轮询继续观察。
       requestBody:
         required: true
@@ -362,7 +363,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/RunAccepted"
         "409":
-          description: Kill Switch、非 Paper 模式或运行状态禁止触发
+          description: Kill Switch、未配置的执行模式或运行状态禁止触发
           content:
             application/json:
               schema:
@@ -778,6 +779,10 @@ components:
       type: object
       additionalProperties: false
       properties:
+        mode:
+          type: string
+          enum: [paper, live]
+          description: 运行时模式；paper 可使用本地 Paper 或 OKX Demo，live 仅开放只读分析并硬禁真实执行。
         llm_provider:
           type: string
           enum: [anthropic, deepseek]

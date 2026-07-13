@@ -34,6 +34,28 @@ func TestDefaultSettingsArePaperAndLiveExecutionIsCompileTimeDisabled(t *testing
 	}
 }
 
+func TestOnlyConfiguredOKXDemoUnlocksCEXExecution(t *testing.T) {
+	t.Parallel()
+	settings := DefaultSettings()
+	settings.ExecutionVenue = "okx"
+	settings.OKXDemo = true
+	settings.OKXAPIKey = "demo-key"
+	settings.OKXAPISecret = "demo-secret"
+	settings.OKXPassword = "demo-passphrase"
+	if !settings.OKXDemoExecutionConfigured() || !settings.NewPositionAllowed() || !settings.LiveGuard().OK {
+		t.Fatalf("configured Demo account should be executable: %#v", settings.LiveGuard())
+	}
+	settings.OKXDemo = false
+	if settings.NewPositionAllowed() || settings.LiveGuard().OK {
+		t.Fatal("production OKX must stay hard-disabled")
+	}
+	settings.OKXDemo = true
+	settings.Mode = "live"
+	if settings.NewPositionAllowed() || settings.LiveGuard().OK || settings.LiveExecutionAllowed() {
+		t.Fatal("live mode must stay hard-disabled even with Demo credentials")
+	}
+}
+
 func TestLoadDotEnvAndEnvironmentTakesPrecedence(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), ".env")

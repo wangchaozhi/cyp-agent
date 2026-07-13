@@ -37,6 +37,10 @@ type protectiveReader interface {
 	ProtectiveFor(symbol string) []contracts.ProtectiveOrder
 }
 
+type remoteProtectiveReader interface {
+	ProtectiveOrders(context.Context, string) ([]contracts.ProtectiveOrder, error)
+}
+
 type VenueReconciler struct {
 	venue  ReconcileVenue
 	events *events.Bus
@@ -60,29 +64,36 @@ func (reconciler *VenueReconciler) Reconcile(ctx context.Context) (ReconcileRepo
 	if ctx == nil {
 		return report, errors.New("reconcile context is required")
 	}
-	if err := ValidatePaperVenue(string(reconciler.venue.Kind()), reconciler.venue.ID()); err != nil {
+	if err := ValidateExecutionVenue(reconciler.venue); err != nil {
 		return report, err
 	}
 	positions, err := reconciler.venue.Positions(ctx)
 	if err != nil {
-		return report, fmt.Errorf("load paper positions: %w", err)
+		return report, fmt.Errorf("load execution venue positions: %w", err)
 	}
 	report.Positions = append(report.Positions, positions...)
-	reader, canInspectProtective := reconciler.venue.(protectiveReader)
 	checkedSymbols := make(map[string]struct{})
 	for _, position := range positions {
 		if _, checked := checkedSymbols[position.Symbol]; checked {
 			continue
 		}
 		checkedSymbols[position.Symbol] = struct{}{}
-		switch {
-		case !reconciler.venue.Caps().NativeProtectiveOrders:
+		if !reconciler.venue.Caps().NativeProtectiveOrders {
 			report.ProtectiveGaps = append(report.ProtectiveGaps,
 				fmt.Sprintf("%s 无原生保护单，保护依赖监控存活", position.Symbol))
-		case !canInspectProtective:
+			continue
+		}
+		orders, inspectable, inspectErr := inspectProtectiveOrders(ctx, reconciler.venue, position.Symbol)
+		if inspectErr != nil {
+			report.Discrepancies = append(report.Discrepancies,
+				fmt.Sprintf("%s 核验保护单失败：%s", position.Symbol, inspectErr.Error()))
+			continue
+		}
+		switch {
+		case !inspectable:
 			report.ProtectiveGaps = append(report.ProtectiveGaps,
 				fmt.Sprintf("%s 无法核验原生保护单", position.Symbol))
-		case !hasStopLoss(reader.ProtectiveFor(position.Symbol)):
+		case !hasStopLoss(orders):
 			report.ProtectiveGaps = append(report.ProtectiveGaps,
 				fmt.Sprintf("%s 缺少止损保护单", position.Symbol))
 		}
@@ -97,6 +108,21 @@ func (reconciler *VenueReconciler) Reconcile(ctx context.Context) (ReconcileRepo
 		})
 	}
 	return report, nil
+}
+
+func inspectProtectiveOrders(
+	ctx context.Context,
+	target ReconcileVenue,
+	symbol string,
+) ([]contracts.ProtectiveOrder, bool, error) {
+	if reader, ok := target.(protectiveReader); ok {
+		return reader.ProtectiveFor(symbol), true, nil
+	}
+	if reader, ok := target.(remoteProtectiveReader); ok {
+		orders, err := reader.ProtectiveOrders(ctx, symbol)
+		return orders, true, err
+	}
+	return nil, false, nil
 }
 
 func hasStopLoss(orders []contracts.ProtectiveOrder) bool {

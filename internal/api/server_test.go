@@ -119,6 +119,15 @@ func TestHealthSettingsKillAndDashboardShapes(t *testing.T) {
 		t.Fatalf("health did not reflect killswitch: %d %s", response.StatusCode, body)
 	}
 
+	response, body = requestJSON(t, client, http.MethodPost, server.URL+"/api/settings", map[string]any{"mode": "live"})
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), `"mode":"live"`) || !strings.Contains(string(body), `"live_guard":{"ok":false`) {
+		t.Fatalf("mode switch response = %d %s", response.StatusCode, body)
+	}
+	response, body = requestJSON(t, client, http.MethodGet, server.URL+"/api/health", nil)
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), `"mode":"live"`) {
+		t.Fatalf("health did not reflect mode switch: %d %s", response.StatusCode, body)
+	}
+
 	response, body = requestJSON(t, client, http.MethodPost, server.URL+"/api/settings", map[string]any{"llm_provider": "invalid"})
 	if response.StatusCode != http.StatusUnprocessableEntity || !strings.Contains(string(body), `"detail"`) {
 		t.Fatalf("invalid settings response = %d %s", response.StatusCode, body)

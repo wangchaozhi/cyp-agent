@@ -100,10 +100,10 @@ export const cypApi = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  runOnce: () =>
+  runOnce: (symbol: string) =>
     request<{ run_id: string; symbol: string }>("/api/run", {
       method: "POST",
-      body: JSON.stringify({}),
+      body: JSON.stringify({ symbol }),
     }),
   setKillSwitch: (on: boolean) =>
     request<{ kill: boolean }>("/api/killswitch", {

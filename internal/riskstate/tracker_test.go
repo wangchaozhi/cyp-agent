@@ -18,6 +18,9 @@ func TestTrackerPersistsRiskStatisticsAndTradeLedger(t *testing.T) {
 	}
 	now := time.Date(2026, 7, 11, 8, 0, 0, 0, time.UTC)
 	tracker.now = func() time.Time { return now }
+	// New initializes period keys from the wall clock. Pin the initial state to
+	// the same test clock so this test does not cross a day/week as time passes.
+	tracker.state = newState(contracts.MustDecimal("10000"), now)
 
 	if err := tracker.ObserveEquity(ctx, contracts.MustDecimal("9000")); err != nil {
 		t.Fatal(err)

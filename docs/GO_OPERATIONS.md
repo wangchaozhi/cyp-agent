@@ -4,14 +4,14 @@
 
 ## 安全边界
 
-当前版本只允许 Paper 执行。以下配置是唯一可开新仓的组合：
+当前版本允许本地 Paper，以及显式配置的 OKX Demo 执行。默认安全组合为：
 
 ```dotenv
 CYP_MODE=paper
 CYP_EXECUTION_VENUE=paper
 ```
 
-Binance、OKX 可用于公共行情和签名只读请求，但其下单/撤单接口硬禁用。`CYP_LIVE_ACK=1`、配置交易所凭据或关闭 Kill Switch 都不会启用真实下单。
+OKX Demo 执行需使用 Demo Trading 中单独创建的 API key，并设置 `CYP_MODE=paper`、`CYP_EXECUTION_VENUE=okx`、`CYP_OKX_DEMO=true` 和完整凭据；当前只支持 USDT 线性永续。Binance 和真实 OKX 下单仍硬禁用，`CYP_LIVE_ACK=1` 不会启用真实执行。
 
 所有非 GET/HEAD/OPTIONS 请求都经过同源、JSON Content-Type 和可选 Bearer token 校验。回环监听可不配置 token；监听 `0.0.0.0`、局域网地址或容器地址时，`cyp-server` 强制要求 `CYP_API_TOKEN`，否则 fail-closed 退出。公网部署仍必须增加 TLS、访问控制和审计。
 
@@ -46,7 +46,7 @@ go run ./cmd/cyp-server -host 127.0.0.1 -port 8000
 
 若 `.env` 已存在，不要用示例文件覆盖。默认配置使用合成行情、PaperVenue、Mock/规则 LLM 和 `data/cyp-state.json`，无需任何密钥。
 
-服务启动时一定先执行 Paper 对账。成功后才监听 HTTP；对账发现未解决差异或保护缺口时，进程会报错退出，不应通过删除检查绕过。
+服务启动时一定先对当前执行场所做对账。成功后才监听 HTTP；对账发现未解决差异或保护缺口时，进程会报错退出，不应通过删除检查绕过。
 
 另开一个 PowerShell 验证：
 

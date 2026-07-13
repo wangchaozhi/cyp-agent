@@ -1,5 +1,5 @@
-// Package runtime coordinates reconciliation, scanning, and monitoring for the
-// Paper-only first Go release.
+// Package runtime coordinates reconciliation, scanning, and monitoring for
+// the local Paper venue and the explicitly configured OKX Demo environment.
 package runtime
 
 import (
@@ -11,7 +11,7 @@ import (
 )
 
 var (
-	ErrLiveExecutionDisabled = errors.New("live and non-paper execution are hard-disabled")
+	ErrLiveExecutionDisabled = errors.New("live and non-demo CEX execution are hard-disabled")
 	ErrKillSwitch            = errors.New("kill switch is enabled")
 	ErrReconciliationFrozen  = errors.New("new positions are frozen pending successful reconciliation")
 	ErrReconciliationFailed  = errors.New("startup reconciliation failed")
@@ -20,6 +20,7 @@ var (
 type RuntimeState struct {
 	Mode           string
 	ExecutionVenue string
+	ExecutionDemo  bool
 	Kill           bool
 }
 
@@ -108,7 +109,9 @@ func (state *SafetyState) Snapshot() SafetySnapshot {
 }
 
 func (state *SafetyState) CheckNewPosition(runtime RuntimeState) error {
-	if runtime.Mode != "paper" || runtime.ExecutionVenue != "paper" {
+	supported := runtime.Mode == "paper" && (runtime.ExecutionVenue == "paper" ||
+		(runtime.ExecutionVenue == "okx" && runtime.ExecutionDemo))
+	if !supported {
 		return fmt.Errorf(
 			"%w: mode=%q execution_venue=%q",
 			ErrLiveExecutionDisabled,
@@ -126,8 +129,29 @@ func (state *SafetyState) CheckNewPosition(runtime RuntimeState) error {
 	return nil
 }
 
-// ValidatePaperVenue is also used by monitor/reconcile paths, which do not
-// open positions but must never connect the first Go runtime to a live venue.
+type demoExecutionVenue interface {
+	DemoTradingEnabled() bool
+}
+
+// ValidateExecutionVenue is also used by monitor/reconcile paths. It permits
+// only the local Paper venue or an adapter that explicitly proves it is wired
+// to an authenticated OKX Demo account.
+func ValidateExecutionVenue(target ReconcileVenue) error {
+	if target == nil {
+		return fmt.Errorf("%w: venue is nil", ErrLiveExecutionDisabled)
+	}
+	if target.Kind() == "paper" && target.ID() == "paper" {
+		return nil
+	}
+	if target.Kind() == "cex" && target.ID() == "okx" {
+		if demo, ok := target.(demoExecutionVenue); ok && demo.DemoTradingEnabled() {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: venue kind=%q id=%q", ErrLiveExecutionDisabled, target.Kind(), target.ID())
+}
+
+// ValidatePaperVenue is retained for callers that only have venue metadata.
 func ValidatePaperVenue(kind, id string) error {
 	if kind != "paper" || id != "paper" {
 		return fmt.Errorf("%w: venue kind=%q id=%q", ErrLiveExecutionDisabled, kind, id)

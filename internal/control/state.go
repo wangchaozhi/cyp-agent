@@ -13,6 +13,7 @@ import (
 )
 
 var (
+	ErrInvalidRuntimeMode = errors.New("mode must be paper or live")
 	ErrInvalidLLMProvider = errors.New("llm_provider must be anthropic or deepseek")
 	ErrRuntimeLLMBaseURL  = errors.New("llm_base_url is startup-only; set CYP_LLM_BASE_URL and restart")
 )
@@ -55,6 +56,13 @@ func (s *State) UpdateSettings(request contracts.SettingsUpdateRequest) error {
 	defer s.mu.Unlock()
 	next := s.settings
 
+	if request.Mode != nil {
+		mode := strings.ToLower(strings.TrimSpace(*request.Mode))
+		if mode != "paper" && mode != "live" {
+			return ErrInvalidRuntimeMode
+		}
+		next.Mode = mode
+	}
 	if request.LLMProvider != nil {
 		provider := strings.TrimSpace(*request.LLMProvider)
 		if provider != "anthropic" && provider != "deepseek" {

@@ -1,6 +1,6 @@
 # Go 运行时：对账、扫描与持仓监控
 
-`internal/runtime` 协调三件事：启动对账、机会扫描和 Paper 持仓监控。v0.2.0 的 Runtime 只允许连接 `PaperVenue`；`ValidatePaperVenue` 会拒绝把非 Paper 场所接入对账或监控。
+`internal/runtime` 协调三件事：启动对账、机会扫描和模拟持仓监控。Runtime 只允许连接本地 `PaperVenue`，或能显式证明 `DemoTradingEnabled` 的 OKX Demo 适配器；其他 CEX 在读取持仓前即被拒绝。
 
 ## 安全状态机
 
@@ -11,14 +11,14 @@
   → frozen: startup reconciliation required
   → BeginReconcile
   → frozen: reconciliation in progress
-  ├─ 成功且 report.OK=true → 可开 Paper 新仓
+  ├─ 成功且 report.OK=true → 可在已选模拟场所开新仓
   └─ 错误/差异/保护单缺口 → 保持 frozen
 ```
 
 只有 `CompleteReconcile` 的成功路径可以解除冻结。每次新仓前，编排器和扫描器都会调用 `CheckNewPosition`，同时校验：
 
 - `CYP_MODE=paper`；
-- `CYP_EXECUTION_VENUE=paper`；
+- `CYP_EXECUTION_VENUE=paper`，或完整配置的 `okx` Demo 执行路径；
 - Kill Switch 未开启；
 - 对账不在进行且 SafetyState 未冻结。
 
@@ -29,14 +29,14 @@
 应用组装位于 `internal/app/application.go`：
 
 1. 加载并校验 `.env`/进程环境变量。
-2. 创建 Paper、Binance、OKX 场所注册表；CEX 保持只读。
+2. 创建 Paper、Binance、OKX 场所注册表；只把 Paper 或显式启用的 OKX Demo 接到执行链。
 3. 创建数据源、仓储、事件总线、审批门和 Orchestrator。
 4. 创建 `VenueReconciler`、`Scanner`、`PositionMonitor` 和 `Engine`。
 5. 若 `CYP_RUNTIME_AUTOSTART=true`，`Engine.Start` 先对账再启动双循环。
 6. 若为 `false`，仍调用一次 `StartupReconcile`，只是不会启动循环。
 7. 对账失败时服务构建失败，不会进入可接收请求的状态。
 
-当前对账读取 Paper 持仓，并验证每个有仓 symbol 是否存在有效的 reduce-only 止损保护单。报告包含 `positions`、`discrepancies`、`protective_gaps` 和 `ok`。
+对账读取当前模拟执行场所的持仓，并验证每个有仓 symbol 是否存在有效的 reduce-only 止损保护单；OKX Demo 通过私有待处理策略订单接口核验。报告包含 `positions`、`discrepancies`、`protective_gaps` 和 `ok`。
 
 ## 扫描循环
 
@@ -66,7 +66,7 @@ CYP_MAX_CONCURRENCY=2
 
 ## 持仓监控
 
-`PositionMonitor` 每 `CYP_MONITOR_INTERVAL` 秒读取 Paper 持仓、报价、余额和保护单，检查：
+`PositionMonitor` 每 `CYP_MONITOR_INTERVAL` 秒读取当前模拟执行场所的持仓、报价、余额和保护单，检查：
 
 - 场所是否提供原生保护单，当前持仓是否缺止损；
 - mark price 是否有效；
@@ -77,7 +77,7 @@ CYP_MAX_CONCURRENCY=2
 
 警报写结构化日志，发布 `position_monitor` SSE 事件，并可发送到 `CYP_ALERT_WEBHOOK`。Webhook 失败被隔离并计入指标，不会让监控 goroutine panic。
 
-监控是告警层，不是止损执行器。Paper 原生保护单由 `PaperVenue` 模拟；未来真实场所必须依赖交易所原生保护单，不能把进程存活当成唯一保护。
+监控是告警层，不是止损执行器。Paper 保护单由 `PaperVenue` 模拟；OKX Demo 下单时附加交易所原生止盈止损，不能把进程存活当成唯一保护。
 
 ## 检查点与恢复
 

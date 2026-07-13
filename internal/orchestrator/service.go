@@ -627,11 +627,12 @@ func (s *Service) analystsSnapshot() []agents.Analyst {
 func (s *Service) checkNewPosition(settings config.Settings) error {
 	if s.safety != nil {
 		return s.safety.CheckNewPosition(runtimecore.RuntimeState{
-			Mode: settings.Mode, ExecutionVenue: settings.ExecutionVenue, Kill: settings.Kill,
+			Mode: settings.Mode, ExecutionVenue: settings.ExecutionVenue,
+			ExecutionDemo: settings.OKXDemoExecutionConfigured(), Kill: settings.Kill,
 		})
 	}
-	if !settings.NewPaperPositionAllowed() {
-		return errors.New("only mode=paper and execution_venue=paper may open positions")
+	if !settings.NewPositionAllowed() {
+		return errors.New("only Paper or a configured OKX Demo account may open positions")
 	}
 	return nil
 }
@@ -710,12 +711,28 @@ func referencePrice(symbol string) contracts.Decimal {
 
 func intentFor(clientID string, proposal contracts.TradeProposal, size contracts.Decimal) contracts.OrderIntent {
 	return contracts.OrderIntent{
-		ClientID: clientID, Symbol: proposal.Symbol, Venue: "paper",
+		ClientID: clientID, Symbol: proposal.Symbol, Venue: proposal.Venue,
 		Side: proposal.Side, Instrument: proposal.Instrument, OrderType: proposal.Entry.Type,
-		SizeQuote: size, Leverage: proposal.Leverage, MarginMode: proposal.MarginMode,
+		SizeQuote: size, Price: proposalEntryPrice(proposal.Entry),
+		Leverage: proposal.Leverage, MarginMode: proposal.MarginMode,
 		StopLoss:   proposal.StopLoss,
 		TakeProfit: append(contracts.List[contracts.Decimal]{}, proposal.TakeProfit...),
 	}
+}
+
+func proposalEntryPrice(plan contracts.PricePlan) *contracts.Decimal {
+	if plan.Price != nil && plan.Price.IsPositive() {
+		price := *plan.Price
+		return &price
+	}
+	if plan.Low == nil || plan.High == nil || !plan.Low.IsPositive() || !plan.High.IsPositive() {
+		return nil
+	}
+	midpoint, err := plan.Low.Add(*plan.High).Quo(contracts.NewDecimalFromInt64(2))
+	if err != nil || !midpoint.IsPositive() {
+		return nil
+	}
+	return &midpoint
 }
 
 func limitsFromConfig(value config.RiskConfig) risk.Limits {

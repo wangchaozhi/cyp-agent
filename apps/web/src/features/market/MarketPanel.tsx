@@ -67,7 +67,12 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "行情请求失败";
 }
 
-export function MarketPanel({ watchlist }: { watchlist: string[] | null }) {
+interface MarketPanelProps {
+  watchlist: string[] | null;
+  onSelectionChange?: (symbols: string[]) => void;
+}
+
+export function MarketPanel({ watchlist, onSelectionChange }: MarketPanelProps) {
   const initialized = useRef(false);
   const options = useMemo(() => marketSymbolOptions(watchlist ?? []), [watchlist]);
   const [customOptions, setCustomOptions] = useState<string[]>([]);
@@ -88,6 +93,10 @@ export function MarketPanel({ watchlist }: { watchlist: string[] | null }) {
     initialized.current = true;
     setSelected(options.slice(0, 2));
   }, [options, watchlist]);
+
+  useEffect(() => {
+    onSelectionChange?.(selected);
+  }, [onSelectionChange, selected]);
 
   useEffect(() => {
     if (!selected.length) return undefined;
