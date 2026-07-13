@@ -88,6 +88,9 @@ func New(
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if logger == nil {
+		logger = slog.Default()
+	}
 	configured := buildOptions{}
 	for _, option := range options {
 		option(&configured)

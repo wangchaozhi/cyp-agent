@@ -42,6 +42,7 @@ func newTestApplication(t *testing.T, mutate func(*config.Settings)) (*app.Appli
 	settings := config.DefaultSettings()
 	settings.Approval = "dashboard"
 	settings.Persistence = "memory"
+	settings.OHLCVArchiveEnabled = false
 	settings.Risk.ApprovalTimeoutSeconds = 3
 	if mutate != nil {
 		mutate(&settings)
