@@ -119,3 +119,9 @@ type Venue interface {
 	Place(context.Context, contracts.OrderIntent) (contracts.ExecutionResult, error)
 	Cancel(context.Context, string) error
 }
+
+// OrderReconciler is an optional authoritative lookup capability. It is used
+// only after restart/ambiguous submission and must never create a new order.
+type OrderReconciler interface {
+	ReconcileOrder(context.Context, contracts.OrderIntent) (contracts.ExecutionResult, bool, error)
+}

@@ -92,6 +92,14 @@ func WithRepository(repository persistence.Repository) Option {
 	return func(service *Service) { service.repository = repository }
 }
 
+func WithOrderJournal(journal *orders.Journal) Option {
+	return func(service *Service) {
+		if journal != nil {
+			service.journal = journal
+		}
+	}
+}
+
 func WithRiskState(tracker *riskstate.Tracker) Option {
 	return func(service *Service) { service.riskState = tracker }
 }
@@ -692,8 +700,14 @@ func (s *Service) run(ctx context.Context, runID, symbol string) contracts.RunRe
 	if err := s.checkpoint(ctx, runID, "order_intent", orderIntent); err != nil {
 		return fail(result, err)
 	}
-	_ = s.journal.Open(runID+":open", orderIntent)
-	_ = s.journal.Transition(runID+":submit", orderIntent.ClientID, contracts.OrderStatusSubmitting, nil, "")
+	if err := s.journal.OpenContext(ctx, runID+":open", orderIntent); err != nil {
+		s.freezeDurability("order intent journal persistence failed")
+		return fail(result, fmt.Errorf("persist order intent: %w", err))
+	}
+	if err := s.journal.TransitionContext(ctx, runID+":submit", orderIntent.ClientID, contracts.OrderStatusSubmitting, nil, ""); err != nil {
+		s.freezeDurability("order submission journal persistence failed")
+		return fail(result, fmt.Errorf("persist order submission: %w", err))
+	}
 	executionSpan := startSpan(ctx, "execution")
 	execution, err := s.venue.Place(ctx, orderIntent)
 	executionSpan.End(err)
@@ -702,10 +716,16 @@ func (s *Service) run(ctx context.Context, runID, symbol string) contracts.RunRe
 		if s.freezeUnknownOrder(err) {
 			status = contracts.OrderStatusUnknown
 		}
-		_ = s.journal.Transition(runID+":fail", orderIntent.ClientID, status, nil, err.Error())
-		return fail(result, fmt.Errorf("execute: %w", err))
+		journalErr := s.journal.TransitionContext(ctx, runID+":fail", orderIntent.ClientID, status, nil, err.Error())
+		if journalErr != nil {
+			s.freezeDurability("order failure journal persistence failed")
+		}
+		return fail(result, errors.Join(fmt.Errorf("execute: %w", err), journalErr))
 	}
-	s.recordExecution(runID, orderIntent.ClientID, execution)
+	journalErr := s.recordExecution(ctx, runID, orderIntent.ClientID, execution)
+	if journalErr != nil {
+		s.freezeDurability("execution result journal persistence failed")
+	}
 	result.Execution = &execution
 	s.events.Emit("executed", runID, map[string]any{"symbol": symbol, "execution": execution})
 	if reversing && execution.Status == contracts.OrderStatusFilled {
@@ -729,6 +749,9 @@ func (s *Service) run(ctx context.Context, runID, symbol string) contracts.RunRe
 			s.freezeDurability("executed trade risk state persistence failed")
 			return fail(result, fmt.Errorf("persist executed trade risk state: %w", err))
 		}
+	}
+	if journalErr != nil {
+		return fail(result, fmt.Errorf("persist execution result: %w", journalErr))
 	}
 
 	reviewSpan := startSpan(ctx, "review")
@@ -818,15 +841,20 @@ func (s *Service) checkNewPosition(settings config.Settings) error {
 // recordExecution journals the venue outcome. The journal only accepts legal
 // transitions, so a venue reporting an unexpected status leaves the order in
 // its last consistent state instead of corrupting the log.
-func (s *Service) recordExecution(runID, clientID string, execution contracts.ExecutionResult) {
+func (s *Service) recordExecution(ctx context.Context, runID, clientID string, execution contracts.ExecutionResult) error {
 	status := execution.Status
 	if !orders.CanTransition(contracts.OrderStatusSubmitting, status) {
 		status = contracts.OrderStatusUnknown
 	}
-	_ = s.journal.Transition(runID+":result", clientID, status, &execution, "")
-	if execution.Status == contracts.OrderStatusFilled && len(execution.ProtectiveOrders) > 0 {
-		_ = s.journal.Transition(runID+":protective", clientID, contracts.OrderStatusProtectivePlaced, nil, "")
+	if err := s.journal.TransitionContext(ctx, runID+":result", clientID, status, &execution, ""); err != nil {
+		return err
 	}
+	if execution.Status == contracts.OrderStatusFilled && len(execution.ProtectiveOrders) > 0 {
+		if err := s.journal.TransitionContext(ctx, runID+":protective", clientID, contracts.OrderStatusProtectivePlaced, nil, ""); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Order exposes the journaled state of one order for reconciliation and the
@@ -838,6 +866,11 @@ func (s *Service) Order(clientID string) (orders.Order, bool) {
 // UnresolvedOrders lists journaled orders that still need reconciliation.
 func (s *Service) UnresolvedOrders() []orders.Order {
 	return s.journal.Unresolved()
+}
+
+// Orders returns the durable order audit view, newest activity first.
+func (s *Service) Orders() []orders.Order {
+	return s.journal.Orders()
 }
 
 func (s *Service) checkpoint(ctx context.Context, runID, step string, value any) error {

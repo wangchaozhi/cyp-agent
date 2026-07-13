@@ -1,8 +1,10 @@
 package orders
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -25,29 +27,63 @@ type Event struct {
 
 // Order is the current materialized view of one order's journal.
 type Order struct {
-	ClientID string
-	Status   contracts.OrderStatus
-	Intent   contracts.OrderIntent
-	Result   *contracts.ExecutionResult
-	Events   []Event
+	ClientID string                     `json:"client_id"`
+	Status   contracts.OrderStatus      `json:"status"`
+	Intent   contracts.OrderIntent      `json:"intent"`
+	Result   *contracts.ExecutionResult `json:"result,omitempty"`
+	Events   []Event                    `json:"events"`
 }
 
-// Journal is an in-memory, thread-safe order state machine with an
-// append-only event log. A durable implementation replays the same Apply
-// calls from the orders/order_events tables on startup.
+// EventStore is the durable append-only boundary used by Journal. Append must
+// be idempotent by EventID and reject an EventID reused for different content.
+type EventStore interface {
+	LoadOrderEvents(context.Context) ([]Event, error)
+	AppendOrderEvent(context.Context, Event) error
+}
+
+// Journal is a thread-safe order state machine backed by an optional durable
+// append-only event store. Durable mutations are persisted before the
+// materialized in-memory view changes, so a failed write can never authorize
+// an order that cannot be recovered after restart.
 type Journal struct {
 	mu      sync.RWMutex
 	orders  map[string]*Order
-	applied map[string]struct{}
+	applied map[string]Event
+	store   EventStore
 }
 
 func NewJournal() *Journal {
-	return &Journal{orders: make(map[string]*Order), applied: make(map[string]struct{})}
+	return &Journal{orders: make(map[string]*Order), applied: make(map[string]Event)}
+}
+
+// NewDurableJournal rebuilds the materialized order view from the complete
+// persisted event stream before accepting new mutations.
+func NewDurableJournal(ctx context.Context, store EventStore) (*Journal, error) {
+	if ctx == nil {
+		return nil, errors.New("order journal context is required")
+	}
+	if store == nil {
+		return nil, errors.New("order event store is required")
+	}
+	events, err := store.LoadOrderEvents(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("load order journal: %w", err)
+	}
+	journal, err := Replay(events)
+	if err != nil {
+		return nil, err
+	}
+	journal.store = store
+	return journal, nil
 }
 
 // Open registers a new order in OrderStatusNew. It is idempotent for the
 // same event ID so a crash between persist and ack can be replayed safely.
 func (journal *Journal) Open(eventID string, intent contracts.OrderIntent) error {
+	return journal.OpenContext(context.Background(), eventID, intent)
+}
+
+func (journal *Journal) OpenContext(ctx context.Context, eventID string, intent contracts.OrderIntent) error {
 	if strings.TrimSpace(intent.ClientID) == "" {
 		return errors.New("order intent requires a client id")
 	}
@@ -55,7 +91,7 @@ func (journal *Journal) Open(eventID string, intent contracts.OrderIntent) error
 		EventID: eventID, ClientID: intent.ClientID, TS: time.Now().UTC(),
 		Status: contracts.OrderStatusNew, Intent: &intent,
 	}
-	return journal.Apply(event)
+	return journal.ApplyContext(ctx, event)
 }
 
 // Transition appends a status change for an existing order.
@@ -65,17 +101,34 @@ func (journal *Journal) Transition(
 	result *contracts.ExecutionResult,
 	note string,
 ) error {
+	return journal.TransitionContext(context.Background(), eventID, clientID, status, result, note)
+}
+
+func (journal *Journal) TransitionContext(
+	ctx context.Context,
+	eventID, clientID string,
+	status contracts.OrderStatus,
+	result *contracts.ExecutionResult,
+	note string,
+) error {
 	event := Event{
 		EventID: eventID, ClientID: clientID, TS: time.Now().UTC(),
 		Status: status, Result: result, Note: note,
 	}
-	return journal.Apply(event)
+	return journal.ApplyContext(ctx, event)
 }
 
 // Apply validates and applies one journal event. Replaying an event that was
 // already applied returns nil without changing state, which makes crash
 // recovery a plain re-read of the persisted event log.
 func (journal *Journal) Apply(event Event) error {
+	return journal.ApplyContext(context.Background(), event)
+}
+
+func (journal *Journal) ApplyContext(ctx context.Context, event Event) error {
+	if ctx == nil {
+		return errors.New("order journal context is required")
+	}
 	if strings.TrimSpace(event.EventID) == "" {
 		return errors.New("order event requires an event id")
 	}
@@ -84,9 +137,25 @@ func (journal *Journal) Apply(event Event) error {
 	}
 	journal.mu.Lock()
 	defer journal.mu.Unlock()
-	if _, seen := journal.applied[event.EventID]; seen {
-		return nil
+	if existing, seen := journal.applied[event.EventID]; seen {
+		if equivalentEvent(existing, event) {
+			return nil
+		}
+		return fmt.Errorf("order event id %s was reused for different content", event.EventID)
 	}
+	if err := journal.validateLocked(event); err != nil {
+		return err
+	}
+	if journal.store != nil {
+		if err := journal.store.AppendOrderEvent(ctx, event); err != nil {
+			return fmt.Errorf("persist order event %s: %w", event.EventID, err)
+		}
+	}
+	journal.applyLocked(event)
+	return nil
+}
+
+func (journal *Journal) validateLocked(event Event) error {
 	current := journal.orders[event.ClientID]
 	if current == nil {
 		if event.Status != contracts.OrderStatusNew {
@@ -96,18 +165,23 @@ func (journal *Journal) Apply(event Event) error {
 		if event.Intent == nil {
 			return fmt.Errorf("order %s open event requires the intent", event.ClientID)
 		}
-		journal.orders[event.ClientID] = &Order{
-			ClientID: event.ClientID, Status: contracts.OrderStatusNew,
-			Intent: *event.Intent, Events: []Event{event},
-		}
-		journal.applied[event.EventID] = struct{}{}
 		return nil
 	}
 	if event.Status == contracts.OrderStatusNew {
 		return fmt.Errorf("order %s already exists", event.ClientID)
 	}
-	if err := ValidateTransition(current.Status, event.Status); err != nil {
-		return err
+	return ValidateTransition(current.Status, event.Status)
+}
+
+func (journal *Journal) applyLocked(event Event) {
+	current := journal.orders[event.ClientID]
+	if current == nil {
+		journal.orders[event.ClientID] = &Order{
+			ClientID: event.ClientID, Status: contracts.OrderStatusNew,
+			Intent: *event.Intent, Events: []Event{event},
+		}
+		journal.applied[event.EventID] = event
+		return
 	}
 	current.Status = event.Status
 	if event.Result != nil {
@@ -115,8 +189,7 @@ func (journal *Journal) Apply(event Event) error {
 		current.Result = &result
 	}
 	current.Events = append(current.Events, event)
-	journal.applied[event.EventID] = struct{}{}
-	return nil
+	journal.applied[event.EventID] = event
 }
 
 // Get returns a copy of the order's materialized state.
@@ -138,13 +211,32 @@ func (journal *Journal) Unresolved() []Order {
 	defer journal.mu.RUnlock()
 	result := make([]Order, 0)
 	for _, current := range journal.orders {
-		if IsTerminal(current.Status) {
+		if IsTerminal(current.Status) || current.Status == contracts.OrderStatusProtectivePlaced {
 			continue
 		}
 		result = append(result, copyOrder(current))
 	}
 	sort.Slice(result, func(left, right int) bool {
 		return result[left].ClientID < result[right].ClientID
+	})
+	return result
+}
+
+// Orders returns all materialized orders, newest activity first. The returned
+// values are detached copies suitable for audit APIs.
+func (journal *Journal) Orders() []Order {
+	journal.mu.RLock()
+	defer journal.mu.RUnlock()
+	result := make([]Order, 0, len(journal.orders))
+	for _, current := range journal.orders {
+		result = append(result, copyOrder(current))
+	}
+	sort.Slice(result, func(left, right int) bool {
+		leftTS, rightTS := latestTS(result[left]), latestTS(result[right])
+		if leftTS.Equal(rightTS) {
+			return result[left].ClientID < result[right].ClientID
+		}
+		return leftTS.After(rightTS)
 	})
 	return result
 }
@@ -172,4 +264,19 @@ func copyOrder(current *Order) Order {
 		result.Result = &value
 	}
 	return result
+}
+
+func equivalentEvent(left, right Event) bool {
+	// Callers retrying the same deterministic event create a fresh timestamp;
+	// identity is therefore the immutable business payload, not wall-clock time.
+	left.TS = time.Time{}
+	right.TS = time.Time{}
+	return reflect.DeepEqual(left, right)
+}
+
+func latestTS(order Order) time.Time {
+	if len(order.Events) == 0 {
+		return time.Time{}
+	}
+	return order.Events[len(order.Events)-1].TS
 }

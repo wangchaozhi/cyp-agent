@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { KeyRound, ServerCog, Settings as SettingsIcon, ShieldCheck } from "lucide-react";
+import { Download, KeyRound, ServerCog, Settings as SettingsIcon, ShieldCheck } from "lucide-react";
 
 import type { RuntimeSettings, RuntimeSettingsUpdate, VenueInfo } from "../../shared/api/types";
 import { setApiToken } from "../../shared/api/client";
@@ -233,6 +233,10 @@ export function SettingsPanel({ settings, venues, focusSection = "general", onSa
             />
             <MetricRow label="合约策略" value={settings.allow_perp ? "允许" : "关闭"} />
           </div>
+					<a className="command-button settings-audit-download" href="/api/audit/export" download>
+						<Download size={14} />
+						导出订单与成交审计
+					</a>
         </div>
 
         <div className="settings-section">

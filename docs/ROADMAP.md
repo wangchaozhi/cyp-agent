@@ -11,7 +11,7 @@
 | G1 · 运行时与恢复 | ✅ 完成 | 启动对账、冻结门、扫描、监控、检查点、优雅停机 |
 | G2 · 数据与回测 | ✅ 完成 | 合成/CEX 只读行情、回测、扫参、OOS/PBO/DSR、OHLCV 归档 |
 | G3 · 可运维服务 | ✅ 完成 | REST/SSE、React、指标、Docker、PostgreSQL、CI/Release |
-| G4 · 实盘状态机 | ⏳ 未开始 | 持久订单状态、真实场所对账、故障注入、测试网验收 |
+| G4 · 实盘状态机 | 🟡 部分完成 | 持久订单状态与 OKX Demo 恢复已完成；真实场所、故障注入和发布门禁未完成 |
 | G5 · 链上执行 | ⏳ 未开始 | RPC 数据、隔离签名、模拟网执行、授权/MEV 全链路验证 |
 
 ## G0：安全 Paper 闭环
@@ -75,10 +75,11 @@
 
 当前 `config.LiveExecutionSupported` 为 `false`。以下项目全部完成、独立审计并通过验收后，才可讨论修改：
 
-- [ ] 持久化 OrderIntent/Order/Ack/Fill/Cancel 状态机，所有转移可幂等重放。
-  - `internal/orders` 已提供合法转移表、append-only 事件日志、幂等重放与 Unresolved 清单，并接入 paper 执行路径；剩余工作：事件日志落库（orders/order_events 表）与真实场所对账消费。
+- [x] 持久化 OrderIntent/Order/Ack/Fill/Cancel 状态机，所有转移可幂等重放。
+  - `internal/orders` 已提供合法转移表、append-only 事件日志、幂等重放与 Unresolved 清单；文件与 PostgreSQL 均已持久化，Paper/OKX Demo 启动对账会消费未决状态，所有开平仓路径统一接入。
+  - 真实场所执行仍保持 hard-disabled；只有完成多实例租约、真实账户灾难演练、独立审计评审和实盘门禁验收后才允许评估开放。
 - [ ] Binance 与 OKX 的远端订单、成交、余额、仓位和保护单对账。
-- [ ] 下单超时后的未知状态处理，禁止盲目重试。
+- [x] OKX Demo 下单超时后的未知状态处理，禁止盲目重试；真实账户仍未授权。
 - [ ] 原生止损/止盈创建失败后的确定性补救与人工告警。
 - [ ] API 限频、时钟偏差、签名错误、部分成交、断网和进程崩溃故障注入。
 - [ ] Testnet/Demo 全链路回归与自动清仓脚本。

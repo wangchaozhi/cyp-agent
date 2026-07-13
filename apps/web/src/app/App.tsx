@@ -55,6 +55,7 @@ export default function App() {
   const [switchingMode, setSwitchingMode] = useState(false);
   const [switchingAutomation, setSwitchingAutomation] = useState(false);
   const [switchingKill, setSwitchingKill] = useState(false);
+	const [reconciling, setReconciling] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<"general" | "symbols">("general");
   const [notice, setNotice] = useState<Notice>(null);
@@ -130,6 +131,24 @@ export default function App() {
   );
 
   const streamStatus = useEventStream(handleEvent);
+
+	const reconcileNow = useCallback(async () => {
+		if (reconciling) return;
+		setReconciling(true);
+		try {
+			const report = await cypApi.reconcile();
+			setNotice({
+				tone: report.ok ? "ok" : "warn",
+				message: report.ok ? "账户、持仓、保护单与订单日志已完成安全对账" : "对账仍有差异，新开仓继续冻结",
+			});
+			refreshAll([readiness.refresh, positions.refresh, risk.refresh, portfolio.refresh]);
+		} catch (error) {
+			setNotice({ tone: "bad", message: `重新对账失败：${errorMessage(error)}` });
+			void readiness.refresh();
+		} finally {
+			setReconciling(false);
+		}
+	}, [portfolio.refresh, positions.refresh, readiness.refresh, reconciling, risk.refresh]);
   // The backend has a deterministic rules path and intentionally supports
   // running without an LLM. Only block while the backend health state is not
   // available; an unconfigured model is an informational status, not a gate.
@@ -358,6 +377,11 @@ export default function App() {
             {readiness.data && !readiness.data.execution_ready ? (
               <div className="app-safety-alert" role="alert">
                 <span>新开仓已冻结：{readiness.data.safety.reason || (health.data?.kill ? "Kill Switch 已启用" : readiness.data.reasons.join("；") || "交易执行尚未就绪")}。持仓监控与自动平仓继续运行。</span>
+						{readiness.data.safety.frozen ? (
+							<button type="button" className="safety-reconcile" disabled={reconciling || readiness.data.reconciling} onClick={() => void reconcileNow()}>
+								{reconciling || readiness.data.reconciling ? "对账中…" : "重新对账"}
+							</button>
+						) : null}
               </div>
             ) : null}
             {notice ? (

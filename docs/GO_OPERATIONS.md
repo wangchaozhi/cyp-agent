@@ -59,6 +59,16 @@ $ready | ConvertTo-Json -Depth 10
 
 正常 Paper 启动时，`health.ok=true`、`ready.ready=true` 且 `ready.safety.frozen=false`。`execution_ready=false` 通常表示 Kill Switch 已打开。
 
+安全冻结时先读取持久订单与差异，再触发一次受控对账；该接口不会绕过任何风控门禁：
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/api/orders?unresolved=true | ConvertTo-Json -Depth 20
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/api/reconcile -ContentType "application/json" -Body "{}" | ConvertTo-Json -Depth 20
+Invoke-WebRequest http://127.0.0.1:8000/api/audit/export -OutFile cyp-audit.json
+```
+
+OKX Demo 未决订单只按原客户端订单号查询；找不到或查询失败会继续冻结，运维人员不得通过重复 `/api/run` 代替对账。
+
 ## 启动完整开发环境
 
 根目录的一键脚本同时启动 Go API 和 Vite：

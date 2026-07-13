@@ -61,6 +61,42 @@ type okxOrderDetailEnvelope struct {
 	Data []okxOrderDetail `json:"data"`
 }
 
+// ReconcileOrder authoritatively looks up an OKX Demo order by the same
+// deterministic clOrdId used during submission. It never retries Place.
+func (venue *CEXVenue) ReconcileOrder(ctx context.Context, intent contracts.OrderIntent) (contracts.ExecutionResult, bool, error) {
+	if ctx == nil {
+		return contracts.ExecutionResult{}, false, errors.New("OKX order reconcile context is required")
+	}
+	if !venue.DemoTradingEnabled() || venue.id != "okx" {
+		return contracts.ExecutionResult{}, false, ErrCEXTradingDisabled
+	}
+	instrumentID := okxInstrumentID(intent.Symbol)
+	spec, err := venue.okxInstrument(ctx, instrumentID)
+	if err != nil {
+		return contracts.ExecutionResult{}, false, err
+	}
+	var referencePrice contracts.Decimal
+	if intent.Price != nil && intent.Price.IsPositive() {
+		referencePrice = *intent.Price
+	} else {
+		referencePrice, err = venue.FetchTicker(ctx, intent.Symbol)
+		if err != nil {
+			return contracts.ExecutionResult{}, false, err
+		}
+	}
+	result, reference, found, err := venue.recoverOKXOrder(
+		ctx, intent, referencePrice, spec, instrumentID,
+		SanitizeOKXClientID(intent.ClientID, ""), okxProtectiveOrders(intent),
+	)
+	if err != nil || !found {
+		return contracts.ExecutionResult{}, found, err
+	}
+	venue.rememberCEXResult(intent.ClientID, result, reference)
+	return cloneExecution(result), true, nil
+}
+
+var _ OrderReconciler = (*CEXVenue)(nil)
+
 func (venue *CEXVenue) placeOKXDemo(
 	ctx context.Context,
 	intent contracts.OrderIntent,

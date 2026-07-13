@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: cyp-agent HTTP API
-  version: 1.8.0
+  version: 1.9.0
   description: |
     React 仪表盘使用的 REST 与 SSE 契约。
 
@@ -257,6 +257,72 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/MetricsSnapshot"
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/reconcile:
+    post:
+      tags: [System]
+      security:
+        - WriteToken: []
+      operationId: reconcileRuntime
+      summary: 重新执行账户、持仓、保护单和持久订单日志对账
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+      responses:
+        "200":
+          description: 对账成功，SafetyState 可解除冻结
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReconcileReport"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
+        "503":
+          description: 对账仍有差异；响应同时包含 report 和 detail
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/orders:
+    get:
+      tags: [System]
+      operationId: listOrderAudit
+      summary: 获取持久订单状态机审计视图
+      parameters:
+        - name: unresolved
+          in: query
+          schema: { type: boolean, default: false }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
+      responses:
+        "200":
+          description: 最新订单优先
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/OrderAudit" }
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/audit/export:
+    get:
+      tags: [System]
+      operationId: exportAuditSnapshot
+      summary: 导出当前安全、订单与成交审计快照
+      responses:
+        "200":
+          description: 可下载 JSON 审计快照
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditSnapshot"
         default:
           $ref: "#/components/responses/ErrorResponse"
 
@@ -639,6 +705,96 @@ components:
         reasons:
           type: array
           items: { type: string }
+
+    ReconcileReport:
+      type: object
+      additionalProperties: false
+      required: [positions, discrepancies, protective_gaps, ok]
+      properties:
+        positions:
+          type: array
+          items: { $ref: "#/components/schemas/Position" }
+        discrepancies:
+          type: array
+          items: { type: string }
+        protective_gaps:
+          type: array
+          items: { type: string }
+        ok: { type: boolean }
+
+    SafetySnapshot:
+      type: object
+      additionalProperties: false
+      required: [frozen, reason, reconcile_active]
+      properties:
+        frozen: { type: boolean }
+        reason: { type: string }
+        last_reconciled: { type: string, format: date-time }
+        reconcile_active: { type: boolean }
+
+    OrderIntent:
+      type: object
+      additionalProperties: false
+      required: [client_id, symbol, venue, side, instrument, order_type, size_quote, leverage, margin_mode, reduce_only, take_profit]
+      properties:
+        client_id: { type: string }
+        symbol: { type: string }
+        venue: { type: string }
+        side: { type: string, enum: [long, short] }
+        instrument: { type: string, enum: [spot, perp] }
+        order_type: { type: string, enum: [market, limit, range] }
+        size_quote: { $ref: "#/components/schemas/DecimalString" }
+        price: { $ref: "#/components/schemas/NullableDecimalString" }
+        leverage: { type: number }
+        margin_mode: { type: string, enum: [isolated, cross] }
+        reduce_only: { type: boolean }
+        stop_loss: { $ref: "#/components/schemas/NullableDecimalString" }
+        take_profit:
+          type: array
+          items: { $ref: "#/components/schemas/DecimalString" }
+        chain: { type: [string, "null"] }
+        approval_amount: { $ref: "#/components/schemas/NullableDecimalString" }
+
+    OrderEvent:
+      type: object
+      additionalProperties: false
+      required: [event_id, client_id, ts, status]
+      properties:
+        event_id: { type: string }
+        client_id: { type: string }
+        ts: { type: string, format: date-time }
+        status: { type: string }
+        intent: { $ref: "#/components/schemas/OrderIntent" }
+        result: { $ref: "#/components/schemas/ExecutionResult" }
+        note: { type: string }
+
+    OrderAudit:
+      type: object
+      additionalProperties: false
+      required: [client_id, status, intent, events]
+      properties:
+        client_id: { type: string }
+        status: { type: string }
+        intent: { $ref: "#/components/schemas/OrderIntent" }
+        result: { $ref: "#/components/schemas/ExecutionResult" }
+        events:
+          type: array
+          items: { $ref: "#/components/schemas/OrderEvent" }
+
+    AuditSnapshot:
+      type: object
+      additionalProperties: false
+      required: [generated_at, safety, orders, trades]
+      properties:
+        generated_at: { type: string, format: date-time }
+        safety:
+          $ref: "#/components/schemas/SafetySnapshot"
+        orders:
+          type: array
+          items: { $ref: "#/components/schemas/OrderAudit" }
+        trades:
+          type: array
+          items: { $ref: "#/components/schemas/TradeRecord" }
 
     VenueInfo:
       type: object

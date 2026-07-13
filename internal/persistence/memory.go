@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"sync"
 	"time"
+
+	"github.com/wangchaozhi/cyp-agent/internal/orders"
 )
 
 // MemoryRepository is a concurrency-safe process-local Repository.
@@ -128,6 +130,27 @@ func (repository *MemoryRepository) GetLessons(
 	repository.mu.RLock()
 	defer repository.mu.RUnlock()
 	return getLessons(repository.state, limit, symbol), nil
+}
+
+func (repository *MemoryRepository) AppendOrderEvent(ctx context.Context, event orders.Event) error {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	if err := contextError(ctx); err != nil {
+		return err
+	}
+	return appendOrderEvent(&repository.state, event)
+}
+
+func (repository *MemoryRepository) LoadOrderEvents(ctx context.Context) ([]orders.Event, error) {
+	if err := contextError(ctx); err != nil {
+		return nil, err
+	}
+	repository.mu.RLock()
+	defer repository.mu.RUnlock()
+	return loadOrderEvents(repository.state), nil
 }
 
 func (repository *MemoryRepository) Close() error { return nil }

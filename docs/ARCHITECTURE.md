@@ -126,7 +126,7 @@ cmd/cyp ── backtest / sweep / config / version
 
 ## 状态、对账与运行时
 
-SafetyState 初始为冻结状态，只有成功的 `StartupReconcile` 可以解除冻结。对账目标是当前 Paper 或 OKX Demo 执行场所，会把执行场所持仓与持久风险账本双向修复；发现未解决差异时服务拒绝启动。持仓监控连续发现原生止损缺口或账户保证金越线时会再次冻结新开仓，已有持仓的监控与 reduce-only 平仓保持运行。
+SafetyState 初始为冻结状态，只有成功的 `StartupReconcile` 可以解除冻结。对账目标是当前 Paper 或 OKX Demo 执行场所，会把执行场所持仓、持久风险账本和订单事件日志双向修复，并核验保证金率与原生保护单；发现未解决差异时保持降级运行并冻结新仓。对账期间产生的新冻结具有更高代际，不能被旧结果覆盖；已有持仓的监控与持久 reduce-only 平仓保持运行。
 
 RuntimeEngine 包含三条可选常驻循环：
 
@@ -152,7 +152,7 @@ OHLCV 归档与上述运行状态 Repository 解耦：即使 `CYP_PERSISTENCE=fi
 
 ## HTTP 与事件契约
 
-核心接口包括健康/就绪、场所、设置、行情、持仓、组合、风控、指标、模型用量、回测、run、审批、Kill Switch 和 SSE。`GET /api/token-usage` 提供不含正文的趋势、维度和最近调用。公开业务契约与 Schema 见 [`api/openapi.yaml`](../api/openapi.yaml)，运行时另提供 `GET /api/ready` 作为安全就绪检查；Dashboard 事件见 [`api/jsonschema/dashboard-event.schema.json`](../api/jsonschema/dashboard-event.schema.json)。
+核心接口包括健康/就绪、重新对账、持久订单审计、场所、设置、行情、持仓、组合、风控、指标、模型用量、回测、run、审批、Kill Switch 和 SSE。`GET /api/token-usage` 提供不含正文的趋势、维度和最近调用，`GET /api/audit/export` 导出脱敏订单/成交快照。公开业务契约与 Schema 见 [`api/openapi.yaml`](../api/openapi.yaml)，运行时另提供 `GET /api/ready` 作为安全就绪检查；Dashboard 事件见 [`api/jsonschema/dashboard-event.schema.json`](../api/jsonschema/dashboard-event.schema.json)。
 
 SSE 使用 `text/event-stream`，连接建立后发送 retry 指令，每 15 秒发送 keepalive。前端请求 `replay=160`，总线在同一锁内完成订阅与有界历史预装，避免“先读历史、后订阅”之间丢事件；每帧使用纳秒时间戳 ID，浏览器携带 `Last-Event-ID` 时只续传缺失部分。事件仍只保留在当前进程内，后端重启后应重新拉取 REST 快照。
 

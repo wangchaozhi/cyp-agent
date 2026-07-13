@@ -9,18 +9,26 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/wangchaozhi/cyp-agent/internal/orders"
 )
 
-const defaultMaxLessons = 200
+const (
+	defaultMaxLessons        = 200
+	defaultMaxOrderEvents    = 20_000
+	defaultMaxTerminalOrders = 5_000
+)
 
 var (
-	ErrInvalidRunID = errors.New("run_id is required")
-	ErrInvalidStep  = errors.New("checkpoint step is required")
-	ErrInvalidKeep  = errors.New("checkpoint retention must be positive")
+	ErrInvalidRunID      = errors.New("run_id is required")
+	ErrInvalidStep       = errors.New("checkpoint step is required")
+	ErrInvalidKeep       = errors.New("checkpoint retention must be positive")
+	ErrInvalidOrderEvent = errors.New("order event requires event_id, client_id, status and timestamp")
 )
 
 // CheckpointRepository stores JSON-safe run checkpoints. Returned RawMessages
@@ -43,6 +51,7 @@ type LessonRepository interface {
 type Repository interface {
 	CheckpointRepository
 	LessonRepository
+	orders.EventStore
 	Close() error
 }
 
@@ -59,14 +68,16 @@ type repositoryState struct {
 	Checkpoints       map[string]map[string]json.RawMessage `json:"checkpoints"`
 	CheckpointUpdated map[string]time.Time                  `json:"checkpoint_updated,omitempty"`
 	Lessons           []lessonRecord                        `json:"lessons"`
+	OrderEvents       []orders.Event                        `json:"order_events,omitempty"`
 }
 
 func newRepositoryState() repositoryState {
 	return repositoryState{
-		Version:           2,
+		Version:           3,
 		Checkpoints:       make(map[string]map[string]json.RawMessage),
 		CheckpointUpdated: make(map[string]time.Time),
 		Lessons:           make([]lessonRecord, 0),
+		OrderEvents:       make([]orders.Event, 0),
 	}
 }
 
@@ -347,5 +358,140 @@ func cloneState(state repositoryState) repositoryState {
 		copyState.Checkpoints[runID] = copySteps
 	}
 	copyState.Lessons = append(copyState.Lessons, state.Lessons...)
+	copyState.OrderEvents = make([]orders.Event, 0, len(state.OrderEvents))
+	for _, event := range state.OrderEvents {
+		copyState.OrderEvents = append(copyState.OrderEvents, cloneOrderEvent(event))
+	}
 	return copyState
+}
+
+func normalizeOrderEvent(event orders.Event) (orders.Event, error) {
+	if strings.TrimSpace(event.EventID) == "" || strings.TrimSpace(event.ClientID) == "" ||
+		strings.TrimSpace(string(event.Status)) == "" || event.TS.IsZero() {
+		return orders.Event{}, ErrInvalidOrderEvent
+	}
+	// Reuse the recursive secret masker and JSON round-trip so the repository
+	// owns every nested slice/pointer and can never retain caller mutations.
+	raw, err := json.Marshal(event)
+	if err != nil {
+		return orders.Event{}, fmt.Errorf("encode order event: %w", err)
+	}
+	raw, err = sanitizeCheckpoint(raw)
+	if err != nil {
+		return orders.Event{}, fmt.Errorf("sanitize order event: %w", err)
+	}
+	var normalized orders.Event
+	if err := json.Unmarshal(raw, &normalized); err != nil {
+		return orders.Event{}, fmt.Errorf("decode order event: %w", err)
+	}
+	normalized.EventID = strings.TrimSpace(normalized.EventID)
+	normalized.ClientID = strings.TrimSpace(normalized.ClientID)
+	normalized.Note = strings.TrimSpace(normalized.Note)
+	if len(normalized.Note) > 1000 {
+		normalized.Note = normalized.Note[:1000]
+	}
+	normalized.TS = normalized.TS.UTC()
+	return normalized, nil
+}
+
+func appendOrderEvent(state *repositoryState, event orders.Event) error {
+	normalized, err := normalizeOrderEvent(event)
+	if err != nil {
+		return err
+	}
+	for _, existing := range state.OrderEvents {
+		if existing.EventID != normalized.EventID {
+			continue
+		}
+		if equivalentOrderEvent(existing, normalized) {
+			return nil
+		}
+		return fmt.Errorf("order event id %s conflicts with persisted content", normalized.EventID)
+	}
+	state.OrderEvents = append(state.OrderEvents, normalized)
+	compactOrderEvents(state, defaultMaxOrderEvents)
+	return nil
+}
+
+func loadOrderEvents(state repositoryState) []orders.Event {
+	result := make([]orders.Event, 0, len(state.OrderEvents))
+	for _, event := range state.OrderEvents {
+		result = append(result, cloneOrderEvent(event))
+	}
+	return result
+}
+
+func cloneOrderEvent(event orders.Event) orders.Event {
+	raw, err := json.Marshal(event)
+	if err != nil {
+		return event
+	}
+	var cloned orders.Event
+	if err := json.Unmarshal(raw, &cloned); err != nil {
+		return event
+	}
+	return cloned
+}
+
+func equivalentOrderEvent(left, right orders.Event) bool {
+	left.TS = time.Time{}
+	right.TS = time.Time{}
+	return reflect.DeepEqual(left, right)
+}
+
+// compactOrderEvents removes complete histories of the oldest terminal
+// orders. It never truncates an unresolved order or leaves a partial stream
+// that could not be replayed after restart.
+func compactOrderEvents(state *repositoryState, limit int) {
+	if limit <= 0 || len(state.OrderEvents) <= limit {
+		return
+	}
+	type group struct {
+		clientID string
+		last     time.Time
+		count    int
+		terminal bool
+	}
+	byClient := make(map[string]*group)
+	for _, event := range state.OrderEvents {
+		current := byClient[event.ClientID]
+		if current == nil {
+			current = &group{clientID: event.ClientID}
+			byClient[event.ClientID] = current
+		}
+		current.count++
+		current.last = event.TS
+		current.terminal = orders.IsTerminal(event.Status)
+	}
+	candidates := make([]group, 0)
+	for _, current := range byClient {
+		if current.terminal {
+			candidates = append(candidates, *current)
+		}
+	}
+	sort.Slice(candidates, func(left, right int) bool {
+		if candidates[left].last.Equal(candidates[right].last) {
+			return candidates[left].clientID < candidates[right].clientID
+		}
+		return candidates[left].last.Before(candidates[right].last)
+	})
+	remove := make(map[string]struct{})
+	remaining := len(state.OrderEvents)
+	for _, candidate := range candidates {
+		if remaining <= limit {
+			break
+		}
+		remove[candidate.clientID] = struct{}{}
+		remaining -= candidate.count
+	}
+	if len(remove) == 0 {
+		return
+	}
+	compacted := make([]orders.Event, 0, remaining)
+	for _, event := range state.OrderEvents {
+		if _, discarded := remove[event.ClientID]; !discarded {
+			compacted = append(compacted, event)
+		}
+	}
+	state.OrderEvents = compacted
 }

@@ -125,18 +125,10 @@ func (s *Service) closeForReversal(
 	if err := s.checkpoint(ctx, runID, "reversal_close_intent", intent); err != nil {
 		return err
 	}
-	_ = s.journal.Open(runID+":reverse-close:open", intent)
-	_ = s.journal.Transition(runID+":reverse-close:submit", clientID, contracts.OrderStatusSubmitting, nil, "")
-	execution, err := s.venue.Place(ctx, intent)
-	if err != nil {
-		status := contracts.OrderStatusFailed
-		if s.freezeUnknownOrder(err) {
-			status = contracts.OrderStatusUnknown
-		}
-		_ = s.journal.Transition(runID+":reverse-close:fail", clientID, status, nil, err.Error())
-		return err
+	execution, journalErr := s.ExecuteReduceOnly(ctx, runID+":reverse-close", intent)
+	if journalErr != nil && execution.Status != contracts.OrderStatusFilled {
+		return journalErr
 	}
-	s.recordExecution(runID+":reverse-close", clientID, execution)
 	if execution.Status != contracts.OrderStatusFilled {
 		if execution.Error != nil && strings.TrimSpace(*execution.Error) != "" {
 			return errors.New(*execution.Error)
@@ -144,7 +136,25 @@ func (s *Service) closeForReversal(
 		return fmt.Errorf("close order status is %s", execution.Status)
 	}
 	finalizeErr := s.FinalizeClose(ctx, *position)
-	balances, balanceErr := s.venue.Balances(ctx)
+	positionFlat := finalizeErr == nil
+	var verifyErr error
+	if finalizeErr != nil {
+		var verified bool
+		verified, verifyErr = s.PositionFlat(ctx, *position)
+		positionFlat = verifyErr == nil && verified
+		if verifyErr == nil && !verified {
+			verifyErr = errors.New("position remains after reversal close")
+		}
+	}
+	var completionErr error
+	if finalizeErr == nil {
+		completionErr = s.CompleteReduceOnly(ctx, runID+":reverse-close", clientID, execution)
+	}
+	var balances contracts.Balances
+	var balanceErr error
+	if positionFlat {
+		balances, balanceErr = s.venue.Balances(ctx)
+	}
 	equity := balances.TotalQuote
 	if !equity.IsPositive() {
 		equity = balances.FreeQuote
@@ -152,7 +162,7 @@ func (s *Service) closeForReversal(
 	reference := runID
 	var pnl contracts.Decimal
 	var stateErr error
-	if balanceErr == nil && s.riskState != nil {
+	if positionFlat && balanceErr == nil && s.riskState != nil {
 		if opened, ok := s.riskState.OpenTrade(position.Symbol, position.Instrument); ok && opened.RunID != "" {
 			reference = opened.RunID
 		}
@@ -163,11 +173,14 @@ func (s *Service) closeForReversal(
 		}
 	}
 	var reviewErr error
-	if balanceErr == nil && stateErr == nil {
+	if positionFlat && balanceErr == nil && stateErr == nil {
 		_, reviewErr = s.ReviewClosed(ctx, *position, execution, pnl, reference)
 	}
 	if joined := errors.Join(
+		wrapReversalError("persist close execution", journalErr),
 		wrapReversalError("finalize close", finalizeErr),
+		wrapReversalError("verify flat position", verifyErr),
+		wrapReversalError("complete close journal", completionErr),
 		wrapReversalError("post-close balances", balanceErr),
 		wrapReversalError("persist close", stateErr),
 		wrapReversalError("review close", reviewErr),
@@ -214,6 +227,22 @@ func (s *Service) waitUntilFlat(ctx context.Context, symbol string, instrument c
 		}
 	}
 	return errors.New("position still exists after reduce-only close")
+}
+
+// PositionFlat performs one authoritative venue read. Close callers use it
+// after a finalization error to avoid recording a full close while exposure
+// may still exist.
+func (s *Service) PositionFlat(ctx context.Context, position contracts.Position) (bool, error) {
+	positions, err := s.venue.Positions(ctx)
+	if err != nil {
+		return false, fmt.Errorf("verify position state: %w", err)
+	}
+	for _, current := range positions {
+		if current.Symbol == position.Symbol && current.Instrument == position.Instrument {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // FinalizeClose verifies that a reduce-only fill actually flattened the

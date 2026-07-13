@@ -80,6 +80,7 @@ type Server struct {
 	}
 	notifyScanScheduleChanged func()
 	ensureRuntime             func() error
+	reconcile                 func(context.Context) (runtimecore.ReconcileReport, error)
 	webDir                    string
 	logger                    *slog.Logger
 	authToken                 string
@@ -120,6 +121,7 @@ type Dependencies struct {
 	}
 	NotifyScanScheduleChanged func()
 	EnsureRuntime             func() error
+	Reconcile                 func(context.Context) (runtimecore.ReconcileReport, error)
 	WebDir                    string
 	Logger                    *slog.Logger
 	APIToken                  string
@@ -152,6 +154,7 @@ func New(dependencies Dependencies) (*Server, error) {
 		scanIntervalStore:         dependencies.ScanIntervalStore,
 		notifyScanScheduleChanged: dependencies.NotifyScanScheduleChanged,
 		ensureRuntime:             dependencies.EnsureRuntime,
+		reconcile:                 dependencies.Reconcile,
 		webDir:                    dependencies.WebDir, logger: logger, authToken: strings.TrimSpace(dependencies.APIToken),
 		corsOrigins:      configuredCORSOrigins(),
 		backtestSlots:    make(chan struct{}, maxConcurrentBacktests),
@@ -167,6 +170,9 @@ func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", s.health)
 	mux.HandleFunc("GET /api/ready", s.ready)
+	mux.HandleFunc("POST /api/reconcile", s.reconcileNow)
+	mux.HandleFunc("GET /api/orders", s.orders)
+	mux.HandleFunc("GET /api/audit/export", s.auditExport)
 	mux.HandleFunc("GET /api/venues", s.venues)
 	mux.HandleFunc("GET /api/settings", s.settings)
 	mux.HandleFunc("POST /api/settings", s.updateSettings)

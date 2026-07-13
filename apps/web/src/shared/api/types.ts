@@ -70,6 +70,13 @@ export interface ReadinessStatus {
   reasons: string[];
 }
 
+export interface ReconcileReport {
+  positions: Position[];
+  discrepancies: string[];
+  protective_gaps: string[];
+  ok: boolean;
+}
+
 export interface VenueInfo {
   id: string;
   kind: string;

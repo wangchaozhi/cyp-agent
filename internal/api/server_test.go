@@ -99,7 +99,7 @@ func TestHealthSettingsKillAndDashboardShapes(t *testing.T) {
 	})
 	client := server.Client()
 
-	for _, path := range []string{"/api/health", "/api/ready", "/api/venues", "/api/settings", "/api/risk", "/api/portfolio", "/api/market", "/api/metrics", "/api/token-usage", "/api/pending", "/api/trades"} {
+	for _, path := range []string{"/api/health", "/api/ready", "/api/venues", "/api/settings", "/api/risk", "/api/portfolio", "/api/market", "/api/metrics", "/api/token-usage", "/api/pending", "/api/trades", "/api/orders", "/api/audit/export"} {
 		response, body := requestJSON(t, client, http.MethodGet, server.URL+path, nil)
 		if response.StatusCode != http.StatusOK {
 			t.Fatalf("GET %s status = %d, body = %s", path, response.StatusCode, body)
@@ -115,12 +115,17 @@ func TestHealthSettingsKillAndDashboardShapes(t *testing.T) {
 		}
 	}
 
+	response, body := requestJSON(t, client, http.MethodPost, server.URL+"/api/reconcile", map[string]any{})
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), `"ok":true`) {
+		t.Fatalf("manual reconcile response = %d %s", response.StatusCode, body)
+	}
+
 	request, err := http.NewRequest(http.MethodGet, server.URL+"/api/health", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	request.Header.Set("X-Request-ID", "unsafe request id")
-	response, err := client.Do(request)
+	response, err = client.Do(request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +135,7 @@ func TestHealthSettingsKillAndDashboardShapes(t *testing.T) {
 		t.Fatalf("unsafe request ID was not replaced: %q", requestID)
 	}
 
-	response, body := requestJSON(t, client, http.MethodPost, server.URL+"/api/settings", map[string]any{
+	response, body = requestJSON(t, client, http.MethodPost, server.URL+"/api/settings", map[string]any{
 		"watchlist": []string{"BTC/USDT", "ETH/USDT"},
 	})
 	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), `"watchlist":["BTC/USDT","ETH/USDT"]`) {

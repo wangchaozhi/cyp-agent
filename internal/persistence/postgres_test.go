@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/wangchaozhi/cyp-agent/internal/contracts"
+	"github.com/wangchaozhi/cyp-agent/internal/orders"
 )
 
 func TestPostgresCheckpointBatchAndRetention(t *testing.T) {
@@ -68,6 +70,35 @@ func TestPostgresCheckpointBatchAndRetention(t *testing.T) {
 		if err != nil || len(loaded) == 0 {
 			t.Fatalf("load %s after prune: checkpoints=%v err=%v", runID, loaded, err)
 		}
+	}
+	intent := contracts.OrderIntent{
+		ClientID: "pg-order", Symbol: "BTC/USDT", Venue: "paper",
+		Side: contracts.SideLong, Instrument: contracts.InstrumentSpot,
+		OrderType: contracts.EntryTypeMarket, SizeQuote: contracts.MustDecimal("100"),
+	}
+	if err := repository.AppendOrderEvent(ctx, orders.Event{
+		EventID: "pg-event-open", ClientID: intent.ClientID, TS: time.Now().UTC(),
+		Status: contracts.OrderStatusNew, Intent: &intent,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.AppendOrderEvent(ctx, orders.Event{
+		EventID: "pg-event-cancel", ClientID: intent.ClientID, TS: time.Now().UTC(),
+		Status: contracts.OrderStatusCanceled,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	events, err := repository.LoadOrderEvents(ctx)
+	if err != nil || len(events) != 2 {
+		t.Fatalf("PostgreSQL order events=%v err=%v", events, err)
+	}
+	journal, err := orders.Replay(events)
+	if err != nil {
+		t.Fatal(err)
+	}
+	order, exists := journal.Get(intent.ClientID)
+	if !exists || order.Status != contracts.OrderStatusCanceled {
+		t.Fatalf("replayed PostgreSQL order=%+v exists=%v", order, exists)
 	}
 }
 

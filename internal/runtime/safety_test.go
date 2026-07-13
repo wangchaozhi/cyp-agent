@@ -48,6 +48,20 @@ func TestSafetyStateRequiresSuccessfulReconcileAndRejectsLive(t *testing.T) {
 	}
 }
 
+func TestReconcileCannotClearNewerConcurrentFreeze(t *testing.T) {
+	state := NewSafetyState()
+	state.BeginReconcile()
+	state.Freeze("position monitor found a new margin breach")
+	err := state.CompleteReconcile(ReconcileReport{OK: true}, nil)
+	if !errors.Is(err, ErrReconciliationFrozen) {
+		t.Fatalf("complete reconcile error = %v", err)
+	}
+	snapshot := state.Snapshot()
+	if !snapshot.Frozen || snapshot.Reason != "position monitor found a new margin breach" || snapshot.ReconcileActive {
+		t.Fatalf("newer freeze was overwritten: %+v", snapshot)
+	}
+}
+
 func TestModePolicySeparatesPaperDemoAndLiveRiskScopes(t *testing.T) {
 	t.Parallel()
 	policy, err := ResolveModePolicy("paper")

@@ -24,6 +24,10 @@ type Reconciler interface {
 	Reconcile(ctx context.Context) (ReconcileReport, error)
 }
 
+type OrderStateReconciler interface {
+	ReconcileOrders(context.Context, []contracts.Position) ([]string, error)
+}
+
 // ReconcileVenue deliberately excludes Place/Cancel/Preflight. Startup
 // reconciliation is a read-only safety operation.
 type ReconcileVenue interface {
@@ -41,6 +45,11 @@ type remoteProtectiveReader interface {
 	ProtectiveOrders(context.Context, string) ([]contracts.ProtectiveOrder, error)
 }
 
+type reconcileAccountReader interface {
+	Balances(context.Context) (contracts.Balances, error)
+	FetchTicker(context.Context, string) (contracts.Decimal, error)
+}
+
 type VenueReconciler struct {
 	venue         ReconcileVenue
 	events        *events.Bus
@@ -48,6 +57,8 @@ type VenueReconciler struct {
 	positionState interface {
 		ReconcilePositions(context.Context, []contracts.Position) error
 	}
+	orderState     OrderStateReconciler
+	minMarginRatio contracts.Decimal
 }
 
 type ReconcileOption func(*VenueReconciler)
@@ -56,6 +67,14 @@ func WithPositionState(state interface {
 	ReconcilePositions(context.Context, []contracts.Position) error
 }) ReconcileOption {
 	return func(reconciler *VenueReconciler) { reconciler.positionState = state }
+}
+
+func WithOrderState(state OrderStateReconciler) ReconcileOption {
+	return func(reconciler *VenueReconciler) { reconciler.orderState = state }
+}
+
+func WithMinimumMarginRatio(value contracts.Decimal) ReconcileOption {
+	return func(reconciler *VenueReconciler) { reconciler.minMarginRatio = value }
 }
 
 func NewVenueReconciler(target ReconcileVenue, eventBus *events.Bus, logger *slog.Logger, options ...ReconcileOption) (*VenueReconciler, error) {
@@ -93,6 +112,20 @@ func (reconciler *VenueReconciler) Reconcile(ctx context.Context) (ReconcileRepo
 				"持仓风险账本对账失败："+stateErr.Error())
 		}
 	}
+	if reconciler.orderState != nil {
+		orderDiscrepancies, orderErr := reconciler.orderState.ReconcileOrders(ctx, positions)
+		if orderErr != nil {
+			return report, fmt.Errorf("reconcile durable orders: %w", orderErr)
+		}
+		report.Discrepancies = append(report.Discrepancies, orderDiscrepancies...)
+	}
+	if reconciler.minMarginRatio.IsPositive() {
+		marginDiscrepancies, marginErr := reconciler.reconcileMargin(ctx, positions)
+		if marginErr != nil {
+			return report, marginErr
+		}
+		report.Discrepancies = append(report.Discrepancies, marginDiscrepancies...)
+	}
 	checkedSymbols := make(map[string]struct{})
 	for _, position := range positions {
 		if _, checked := checkedSymbols[position.Symbol]; checked {
@@ -129,6 +162,43 @@ func (reconciler *VenueReconciler) Reconcile(ctx context.Context) (ReconcileRepo
 		})
 	}
 	return report, nil
+}
+
+func (reconciler *VenueReconciler) reconcileMargin(ctx context.Context, positions []contracts.Position) ([]string, error) {
+	reader, ok := reconciler.venue.(reconcileAccountReader)
+	if !ok {
+		return []string{"执行场所无法核验账户保证金"}, nil
+	}
+	balances, err := reader.Balances(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("load balances for reconciliation: %w", err)
+	}
+	equity := balances.TotalQuote
+	if !equity.IsPositive() {
+		equity = balances.FreeQuote
+	}
+	perpetualNotional := contracts.Zero()
+	for _, position := range positions {
+		if position.Instrument != contracts.InstrumentPerp {
+			continue
+		}
+		mark, markErr := reader.FetchTicker(ctx, position.Symbol)
+		if markErr != nil || !mark.IsPositive() {
+			mark = position.EntryPrice
+		}
+		perpetualNotional = perpetualNotional.Add(position.NotionalAt(mark))
+	}
+	if !perpetualNotional.IsPositive() {
+		return []string{}, nil
+	}
+	ratio, err := equity.Quo(perpetualNotional)
+	if err != nil {
+		return nil, fmt.Errorf("calculate reconciliation margin ratio: %w", err)
+	}
+	if ratio.Cmp(reconciler.minMarginRatio) < 0 {
+		return []string{fmt.Sprintf("账户保证金率 %s 低于安全阈值 %s", ratio.String(), reconciler.minMarginRatio.String())}, nil
+	}
+	return []string{}, nil
 }
 
 func inspectProtectiveOrders(

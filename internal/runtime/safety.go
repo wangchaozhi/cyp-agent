@@ -36,12 +36,14 @@ type SafetySnapshot struct {
 // SafetyState starts frozen. There is deliberately no generic Unfreeze method:
 // only CompleteReconcile can authorize new Paper positions.
 type SafetyState struct {
-	mu              sync.RWMutex
-	frozen          bool
-	reason          string
-	reconcileActive bool
-	lastReconciled  time.Time
-	now             func() time.Time
+	mu                  sync.RWMutex
+	frozen              bool
+	reason              string
+	reconcileActive     bool
+	freezeGeneration    uint64
+	reconcileGeneration uint64
+	lastReconciled      time.Time
+	now                 func() time.Time
 }
 
 func NewSafetyState() *SafetyState {
@@ -59,6 +61,7 @@ func (state *SafetyState) BeginReconcile() {
 	state.frozen = true
 	state.reason = "reconciliation in progress"
 	state.reconcileActive = true
+	state.reconcileGeneration = state.freezeGeneration
 }
 
 func (state *SafetyState) CompleteReconcile(report ReconcileReport, reconcileErr error) error {
@@ -68,6 +71,12 @@ func (state *SafetyState) CompleteReconcile(report ReconcileReport, reconcileErr
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	state.reconcileActive = false
+	if state.freezeGeneration != state.reconcileGeneration {
+		return errors.Join(
+			fmt.Errorf("%w: a newer safety freeze occurred during reconciliation", ErrReconciliationFrozen),
+			reconcileErr,
+		)
+	}
 	if reconcileErr != nil {
 		state.frozen = true
 		state.reason = "reconciliation failed"
@@ -95,6 +104,7 @@ func (state *SafetyState) Freeze(reason string) {
 	state.mu.Lock()
 	state.frozen = true
 	state.reason = reason
+	state.freezeGeneration++
 	state.mu.Unlock()
 }
 

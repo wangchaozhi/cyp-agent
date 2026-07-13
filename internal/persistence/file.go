@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/wangchaozhi/cyp-agent/internal/orders"
 )
 
 // FileRepository persists the complete repository state as one JSON document.
@@ -62,10 +64,10 @@ func loadFileState(path string) (repositoryState, error) {
 	if err := json.Unmarshal(raw, &state); err != nil {
 		return repositoryState{}, fmt.Errorf("decode repository file: %w", err)
 	}
-	if state.Version != 0 && state.Version != 1 && state.Version != 2 {
+	if state.Version < 0 || state.Version > 3 {
 		return repositoryState{}, fmt.Errorf("unsupported repository version %d", state.Version)
 	}
-	state.Version = 2
+	state.Version = 3
 	if state.Checkpoints == nil {
 		state.Checkpoints = make(map[string]map[string]json.RawMessage)
 	}
@@ -74,6 +76,9 @@ func loadFileState(path string) (repositoryState, error) {
 	}
 	if state.Lessons == nil {
 		state.Lessons = make([]lessonRecord, 0)
+	}
+	if state.OrderEvents == nil {
+		state.OrderEvents = make([]orders.Event, 0)
 	}
 	for runID, steps := range state.Checkpoints {
 		if steps == nil {
@@ -91,7 +96,39 @@ func loadFileState(path string) (repositoryState, error) {
 			state.NextLessonID = lesson.ID
 		}
 	}
+	// Validate the complete stream at startup. Replay performs the legal state
+	// transition validation after the repository has loaded it.
+	seenEvents := make(map[string]orders.Event, len(state.OrderEvents))
+	for index, event := range state.OrderEvents {
+		normalized, normalizeErr := normalizeOrderEvent(event)
+		if normalizeErr != nil {
+			return repositoryState{}, fmt.Errorf("invalid order event %d: %w", index, normalizeErr)
+		}
+		if existing, seen := seenEvents[normalized.EventID]; seen && !equivalentOrderEvent(existing, normalized) {
+			return repositoryState{}, fmt.Errorf("conflicting duplicate order event %s", normalized.EventID)
+		}
+		seenEvents[normalized.EventID] = normalized
+		state.OrderEvents[index] = normalized
+	}
 	return state, nil
+}
+
+func (repository *FileRepository) AppendOrderEvent(ctx context.Context, event orders.Event) error {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
+	return repository.mutate(ctx, func(state *repositoryState) error {
+		return appendOrderEvent(state, event)
+	})
+}
+
+func (repository *FileRepository) LoadOrderEvents(ctx context.Context) ([]orders.Event, error) {
+	if err := contextError(ctx); err != nil {
+		return nil, err
+	}
+	repository.mu.RLock()
+	defer repository.mu.RUnlock()
+	return loadOrderEvents(repository.state), nil
 }
 
 func (repository *FileRepository) SaveCheckpoint(

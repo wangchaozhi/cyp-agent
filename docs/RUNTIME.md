@@ -15,7 +15,7 @@
   └─ 错误/差异/保护单缺口 → 保持 frozen
 ```
 
-只有 `CompleteReconcile` 的成功路径可以解除冻结。每次新仓前，编排器和扫描器都会调用 `CheckNewPosition`，同时校验：
+只有 `CompleteReconcile` 的成功路径可以解除冻结。对账期间若监控线程产生更新的冻结，旧对账结果不能覆盖它。每次新仓前，编排器和扫描器都会调用 `CheckNewPosition`，同时校验：
 
 - `CYP_MODE=paper`；
 - `CYP_EXECUTION_VENUE=paper`，或完整配置的 `okx` Demo 执行路径；
@@ -42,7 +42,9 @@
 
 软件停机期间确实不会实时采集，因此 Backfiller 会在每次启动立即比较数据库时间点与完整保留窗口，并按缺口分页向 Binance/OKX 补录；之后每 6 小时重复检查。唯一键 `(venue, symbol, timeframe, ts)` 使重复补录幂等，交易所临时失败的缺口会留到下一轮重试。每天按 `CYP_OHLCV_RETENTION_DAYS` 清理过期数据，默认 730 天可覆盖两年季节性和不同市场状态，同时对 1 小时 K 线保持较小存储量。
 
-对账读取当前模拟执行场所的持仓，并验证每个有仓 symbol 是否存在有效的 reduce-only 止损保护单；OKX Demo 通过私有待处理策略订单接口核验。报告包含 `positions`、`discrepancies`、`protective_gaps` 和 `ok`。
+对账读取当前模拟执行场所的持仓，并验证持久订单日志、风险账本、保证金率以及每个有仓 symbol 的有效 reduce-only 止损保护单；OKX Demo 通过确定性 `clOrdId` 和私有订单/策略订单接口核验。远端订单查不清时保持冻结且不重试提交。报告包含 `positions`、`discrepancies`、`protective_gaps` 和 `ok`。
+
+Dashboard 可调用 `POST /api/reconcile` 安全地重新对账；这不是通用解冻按钮。`GET /api/orders` 提供持久订单状态机视图，`GET /api/audit/export` 导出安全状态、订单事件和成交账本。
 
 ## 扫描循环
 

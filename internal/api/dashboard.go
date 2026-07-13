@@ -10,7 +10,6 @@ import (
 	"github.com/wangchaozhi/cyp-agent/internal/contracts"
 	"github.com/wangchaozhi/cyp-agent/internal/portfolio"
 	"github.com/wangchaozhi/cyp-agent/internal/tokenusage"
-	"github.com/wangchaozhi/cyp-agent/internal/venue"
 )
 
 type positionView struct {
@@ -131,18 +130,17 @@ func (s *Server) closePositionLocked(
 	if found.MarginMode != nil {
 		marginMode = *found.MarginMode
 	}
-	result, err := s.venue.Place(request.Context(), contracts.OrderIntent{
-		ClientID: "manual-close-" + shortID(), Symbol: found.Symbol, Venue: s.venue.ID(),
+	clientID := "manual-close-" + shortID()
+	eventPrefix := "manual-close:" + clientID
+	result, executeErr := s.orchestrator.ExecuteReduceOnly(request.Context(), eventPrefix, contracts.OrderIntent{
+		ClientID: clientID, Symbol: found.Symbol, Venue: s.venue.ID(),
 		Side: found.Side, Instrument: found.Instrument, OrderType: contracts.EntryTypeMarket,
 		SizeQuote: found.SizeBase.Mul(mark), Price: &mark, Leverage: found.Leverage,
 		MarginMode: marginMode, ReduceOnly: true,
 		TakeProfit: contracts.List[contracts.Decimal]{},
 	})
-	if err != nil {
-		if errors.Is(err, venue.ErrOrderStateUnknown) && s.safety != nil {
-			s.safety.Freeze("manual close order submission state is unknown")
-		}
-		writeError(w, http.StatusBadRequest, err.Error())
+	if executeErr != nil && result.Status != contracts.OrderStatusFilled {
+		writeError(w, http.StatusBadRequest, executeErr.Error())
 		return
 	}
 	if result.Status != contracts.OrderStatusFilled {
@@ -154,13 +152,25 @@ func (s *Server) closePositionLocked(
 		return
 	}
 	s.accountCache.Invalidate()
-	if err := s.orchestrator.FinalizeClose(request.Context(), *found); err != nil {
-		s.logger.ErrorContext(request.Context(), "manual_close_finalize_failed", "error", err.Error())
+	finalizeErr := s.orchestrator.FinalizeClose(request.Context(), *found)
+	positionFlat := finalizeErr == nil
+	if finalizeErr != nil {
+		s.logger.ErrorContext(request.Context(), "manual_close_finalize_failed", "error", finalizeErr.Error())
 		if s.safety != nil {
 			s.safety.Freeze("manual close protection cleanup failed")
 		}
+		executeErr = errors.Join(executeErr, finalizeErr)
+		verifiedFlat, verifyErr := s.orchestrator.PositionFlat(request.Context(), *found)
+		positionFlat = verifyErr == nil && verifiedFlat
+		if verifyErr != nil {
+			executeErr = errors.Join(executeErr, verifyErr)
+		} else if !verifiedFlat {
+			executeErr = errors.Join(executeErr, errors.New("平仓后仍存在剩余持仓"))
+		}
+	} else if completeErr := s.orchestrator.CompleteReduceOnly(request.Context(), eventPrefix, clientID, result); completeErr != nil {
+		executeErr = errors.Join(executeErr, completeErr)
 	}
-	if s.riskState != nil {
+	if s.riskState != nil && positionFlat {
 		balances, balanceErr := s.venue.Balances(request.Context())
 		if balanceErr != nil {
 			s.logger.ErrorContext(request.Context(), "risk_state_close_balance_failed", "error", balanceErr.Error())
@@ -188,6 +198,10 @@ func (s *Server) closePositionLocked(
 				s.logger.ErrorContext(request.Context(), "close_review_failed", "error", reviewErr.Error())
 			}
 		}
+	}
+	if executeErr != nil {
+		writeError(w, http.StatusServiceUnavailable, "平仓已成交，但订单审计或保护单清理失败；系统已冻结，请重新对账")
+		return
 	}
 	writeJSON(w, http.StatusOK, result)
 }

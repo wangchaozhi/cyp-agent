@@ -23,6 +23,7 @@ import (
 	"github.com/wangchaozhi/cyp-agent/internal/observability"
 	"github.com/wangchaozhi/cyp-agent/internal/ohlcv"
 	"github.com/wangchaozhi/cyp-agent/internal/orchestrator"
+	"github.com/wangchaozhi/cyp-agent/internal/orders"
 	"github.com/wangchaozhi/cyp-agent/internal/persistence"
 	"github.com/wangchaozhi/cyp-agent/internal/riskstate"
 	runtimecore "github.com/wangchaozhi/cyp-agent/internal/runtime"
@@ -305,6 +306,12 @@ func New(
 	timeout := time.Duration(settings.Risk.ApprovalTimeoutSeconds) * time.Second
 	gate := approval.NewPendingGate(timeout, bus)
 	safety := runtimecore.NewSafetyState()
+	orderJournal, err := orders.NewDurableJournal(ctx, repository)
+	if err != nil {
+		closeArchive(context.Background())
+		_ = repository.Close()
+		return nil, fmt.Errorf("restore durable order journal: %w", err)
+	}
 	var usageTracker *tokenusage.Tracker
 	if settings.TokenUsageEnabled {
 		location, locationErr := time.LoadLocation(settings.TokenUsageTimezone)
@@ -358,11 +365,13 @@ func New(
 	locks := runtimecore.NewSymbolLocks()
 	orch := orchestrator.New(ctx, state, executionVenue, bus, gate, runMetrics,
 		orchestrator.WithDataSource(source), orchestrator.WithRepository(repository),
+		orchestrator.WithOrderJournal(orderJournal),
 		orchestrator.WithRiskState(riskTracker), orchestrator.WithSafety(safety), orchestrator.WithLLM(baseLLM),
 		orchestrator.WithSymbolLocks(locks))
 
 	reconciler, err := runtimecore.NewVenueReconciler(
-		executionVenue, bus, logger, runtimecore.WithPositionState(riskTracker),
+		executionVenue, bus, logger, runtimecore.WithPositionState(riskTracker), runtimecore.WithOrderState(orch),
+		runtimecore.WithMinimumMarginRatio(settings.Risk.MinMarginRatio),
 	)
 	if err != nil {
 		closeTokenUsage(context.Background())
@@ -497,6 +506,16 @@ func New(
 			}
 			return startErr
 		},
+		Reconcile: func(reconcileContext context.Context) (runtimecore.ReconcileReport, error) {
+			report, reconcileErr := runtimeEngine.StartupReconcile(reconcileContext)
+			if reconcileErr != nil {
+				_ = alerter.Alert(reconcileContext, "critical", "runtime_reconciliation_failed", map[string]any{
+					"error": reconcileErr.Error(), "discrepancies": report.Discrepancies,
+					"protective_gaps": report.ProtectiveGaps,
+				})
+			}
+			return report, reconcileErr
+		},
 		WebDir: webDir, Logger: logger, APIToken: settings.APIToken.Reveal(),
 	})
 	if err != nil {
@@ -560,18 +579,17 @@ func executeAutomatedExit(
 	if position.MarginMode != nil {
 		marginMode = *position.MarginMode
 	}
-	result, err := target.Place(ctx, contracts.OrderIntent{
-		ClientID: fmt.Sprintf("auto-exit-%d", time.Now().UTC().UnixNano()),
+	clientID := fmt.Sprintf("auto-exit-%d", time.Now().UTC().UnixNano())
+	eventPrefix := "auto-exit:" + clientID
+	result, executeErr := orch.ExecuteReduceOnly(ctx, eventPrefix, contracts.OrderIntent{
+		ClientID: clientID,
 		Symbol:   position.Symbol, Venue: target.ID(), Side: position.Side,
 		Instrument: position.Instrument, OrderType: contracts.EntryTypeMarket,
 		SizeQuote: position.SizeBase.Mul(mark), Price: &mark, Leverage: position.Leverage,
 		MarginMode: marginMode, ReduceOnly: true, TakeProfit: contracts.List[contracts.Decimal]{},
 	})
-	if err != nil {
-		if errors.Is(err, venue.ErrOrderStateUnknown) && safety != nil {
-			safety.Freeze("automated close order submission state is unknown")
-		}
-		return err
+	if executeErr != nil && result.Status != contracts.OrderStatusFilled {
+		return executeErr
 	}
 	if result.Status != contracts.OrderStatusFilled {
 		if result.Error != nil && *result.Error != "" {
@@ -580,13 +598,33 @@ func executeAutomatedExit(
 		return fmt.Errorf("automated exit status is %s", result.Status)
 	}
 	finalizeErr := orch.FinalizeClose(ctx, position)
+	positionFlat := finalizeErr == nil
+	var verifyErr error
+	if finalizeErr != nil {
+		var verified bool
+		verified, verifyErr = orch.PositionFlat(ctx, position)
+		positionFlat = verifyErr == nil && verified
+		if verifyErr == nil && !verified {
+			verifyErr = errors.New("position remains after automated close")
+		}
+	}
+	var completionErr error
+	if finalizeErr == nil {
+		completionErr = orch.CompleteReduceOnly(ctx, eventPrefix, clientID, result)
+	}
 	reference := result.ClientID
 	if opened, ok := riskTracker.OpenTrade(position.Symbol, position.Instrument); ok && opened.RunID != "" {
 		reference = opened.RunID
 	}
-	balances, balanceErr := target.Balances(ctx)
+	var balances contracts.Balances
+	var balanceErr error
+	if positionFlat {
+		balances, balanceErr = target.Balances(ctx)
+	}
 	var stateErr error
-	if balanceErr != nil {
+	if !positionFlat {
+		logger.ErrorContext(ctx, "automated_exit_position_not_flat")
+	} else if balanceErr != nil {
 		logger.ErrorContext(ctx, "automated_exit_balance_failed", "error", balanceErr.Error())
 	} else {
 		equity := balances.TotalQuote
@@ -605,7 +643,10 @@ func executeAutomatedExit(
 		"symbol": position.Symbol, "execution": result, "exit_decision": decision,
 	})
 	if criticalErr := errors.Join(
+		wrapApplicationError("persist close execution", executeErr),
 		wrapApplicationError("finalize close", finalizeErr),
+		wrapApplicationError("verify flat position", verifyErr),
+		wrapApplicationError("complete close journal", completionErr),
 		wrapApplicationError("post-close balances", balanceErr),
 		wrapApplicationError("persist close", stateErr),
 	); criticalErr != nil {

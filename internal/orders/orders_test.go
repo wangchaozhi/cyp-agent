@@ -1,11 +1,30 @@
 package orders
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/wangchaozhi/cyp-agent/internal/contracts"
 )
+
+type journalStore struct {
+	events []Event
+	fail   bool
+}
+
+func (store *journalStore) LoadOrderEvents(context.Context) ([]Event, error) {
+	return append([]Event(nil), store.events...), nil
+}
+
+func (store *journalStore) AppendOrderEvent(_ context.Context, event Event) error {
+	if store.fail {
+		return errors.New("disk unavailable")
+	}
+	store.events = append(store.events, event)
+	return nil
+}
 
 func testIntent(clientID string) contracts.OrderIntent {
 	return contracts.OrderIntent{
@@ -152,5 +171,37 @@ func TestUnresolvedSkipsTerminalOrders(t *testing.T) {
 	unresolved := journal.Unresolved()
 	if len(unresolved) != 1 || unresolved[0].ClientID != "order-open" {
 		t.Fatalf("unresolved = %+v", unresolved)
+	}
+}
+
+func TestDurableJournalPersistsBeforeMutationAndRestores(t *testing.T) {
+	store := &journalStore{fail: true}
+	journal, err := NewDurableJournal(context.Background(), store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.OpenContext(context.Background(), "evt-durable", testIntent("durable-order")); err == nil {
+		t.Fatal("failed durable append unexpectedly opened the order")
+	}
+	if _, exists := journal.Get("durable-order"); exists {
+		t.Fatal("memory changed before durable append succeeded")
+	}
+	store.fail = false
+	if err := journal.OpenContext(context.Background(), "evt-durable", testIntent("durable-order")); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.events) != 1 {
+		t.Fatalf("persisted events = %d, want 1", len(store.events))
+	}
+	restored, err := NewDurableJournal(context.Background(), store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	order, exists := restored.Get("durable-order")
+	if !exists || order.Status != contracts.OrderStatusNew {
+		t.Fatalf("restored order = %+v, exists=%v", order, exists)
+	}
+	if err := restored.TransitionContext(context.Background(), "evt-durable", "durable-order", contracts.OrderStatusCanceled, nil, "collision"); err == nil {
+		t.Fatal("event id collision with different content was accepted")
 	}
 }

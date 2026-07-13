@@ -9,7 +9,10 @@ import (
 	"github.com/wangchaozhi/cyp-agent/internal/observability"
 )
 
-var ErrRuntimeStarted = errors.New("runtime is already started or starting")
+var (
+	ErrRuntimeStarted      = errors.New("runtime is already started or starting")
+	ErrReconcileInProgress = errors.New("reconciliation is already in progress")
+)
 
 type loop interface {
 	Run(ctx context.Context) error
@@ -36,13 +39,14 @@ type Engine struct {
 	metrics            *observability.RuntimeMetrics
 	allowDegradedStart bool
 
-	mu        sync.Mutex
-	starting  bool
-	started   bool
-	cancel    context.CancelFunc
-	startDone chan struct{}
-	wait      sync.WaitGroup
-	errors    chan error
+	mu          sync.Mutex
+	starting    bool
+	started     bool
+	cancel      context.CancelFunc
+	startDone   chan struct{}
+	wait        sync.WaitGroup
+	errors      chan error
+	reconcileMu sync.Mutex
 }
 
 func NewEngine(config EngineConfig) (*Engine, error) {
@@ -70,12 +74,21 @@ func (engine *Engine) Safety() *SafetyState { return engine.safety }
 func (engine *Engine) Errors() <-chan error { return engine.errors }
 
 func (engine *Engine) StartupReconcile(ctx context.Context) (ReconcileReport, error) {
+	if ctx == nil {
+		return ReconcileReport{}, errors.New("reconcile context is required")
+	}
+	if !engine.reconcileMu.TryLock() {
+		return ReconcileReport{}, ErrReconcileInProgress
+	}
+	defer engine.reconcileMu.Unlock()
 	engine.safety.BeginReconcile()
 	report, reconcileErr := engine.reconciler.Reconcile(ctx)
 	if reconcileErr == nil && !report.OK {
 		reconcileErr = ErrReconciliationFailed
 	}
-	engine.metrics.RecordReconcile(reconcileErr)
+	if engine.metrics != nil {
+		engine.metrics.RecordReconcile(reconcileErr)
+	}
 	if err := engine.safety.CompleteReconcile(report, reconcileErr); err != nil {
 		engine.logger.ErrorContext(ctx, "startup_reconcile_failed", "error", err.Error())
 		return report, err

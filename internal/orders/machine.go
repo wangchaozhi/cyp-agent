@@ -1,8 +1,7 @@
 // Package orders implements the G4 persistent order state machine. It owns
 // the legal OrderStatus transitions and an append-only, idempotently
-// replayable event journal. The package is intentionally not wired into the
-// live execution path: config.LiveExecutionSupported stays false and every
-// real-venue integration must go through the G4 acceptance checklist first.
+// replayable event journal. Every writable Paper/OKX Demo path is wired here;
+// real execution remains disabled and must pass the G4 acceptance checklist.
 package orders
 
 import (
@@ -25,7 +24,7 @@ var transitions = map[contracts.OrderStatus][]contracts.OrderStatus{
 	},
 	contracts.OrderStatusSubmitting: {
 		contracts.OrderStatusAcknowledged, contracts.OrderStatusPartiallyFilled,
-		contracts.OrderStatusFilled, contracts.OrderStatusRejected,
+		contracts.OrderStatusFilled, contracts.OrderStatusCanceled, contracts.OrderStatusRejected,
 		contracts.OrderStatusFailed, contracts.OrderStatusUnknown,
 	},
 	contracts.OrderStatusAcknowledged: {

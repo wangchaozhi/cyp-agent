@@ -108,6 +108,29 @@ func (venue *PaperVenue) ExecutionIdentity() ExecutionIdentity {
 		VenueID: venue.ID(), Kind: venue.Kind(), Environment: EnvironmentPaper, Writable: true,
 	}
 }
+
+// ReconcileOrder performs a read-only lookup in the process-local Paper fill
+// ledger. A miss is authoritative because Paper has no external venue state.
+func (venue *PaperVenue) ReconcileOrder(ctx context.Context, intent contracts.OrderIntent) (contracts.ExecutionResult, bool, error) {
+	if ctx == nil {
+		return contracts.ExecutionResult{}, false, errors.New("paper reconcile context is required")
+	}
+	select {
+	case <-ctx.Done():
+		return contracts.ExecutionResult{}, false, ctx.Err()
+	default:
+	}
+	venue.mu.RLock()
+	defer venue.mu.RUnlock()
+	result, ok := venue.fills[intent.ClientID]
+	if !ok {
+		return contracts.ExecutionResult{}, false, nil
+	}
+	return cloneExecution(result), true, nil
+}
+
+var _ OrderReconciler = (*PaperVenue)(nil)
+
 func (*PaperVenue) Caps() Caps {
 	return Caps{Spot: true, Perp: true, NativeProtectiveOrders: true, ReadOnly: false}
 }

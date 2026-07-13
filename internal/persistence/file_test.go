@@ -8,6 +8,10 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
+
+	"github.com/wangchaozhi/cyp-agent/internal/contracts"
+	"github.com/wangchaozhi/cyp-agent/internal/orders"
 )
 
 func TestFileRepositoryPersistsAndReloadsAtomically(t *testing.T) {
@@ -70,6 +74,48 @@ func TestFileRepositoryPersistsAndReloadsAtomically(t *testing.T) {
 	}
 	if len(lessons) != 2 || lessons[0] != "one" || lessons[1] != "two" {
 		t.Fatalf("reloaded lessons = %v", lessons)
+	}
+}
+
+func TestFileRepositoryPersistsIdempotentOrderEvents(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	repository, err := NewFileRepository(path, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event := orders.Event{
+		EventID: "event-1", ClientID: "order-1", TS: time.Now().UTC(),
+		Status: contracts.OrderStatusNew,
+		Intent: &contracts.OrderIntent{
+			ClientID: "order-1", Symbol: "BTC/USDT", Venue: "paper",
+			Side: contracts.SideLong, Instrument: contracts.InstrumentSpot,
+			OrderType: contracts.EntryTypeMarket, SizeQuote: contracts.MustDecimal("100"),
+		},
+	}
+	if err := repository.AppendOrderEvent(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
+	event.TS = event.TS.Add(time.Second)
+	if err := repository.AppendOrderEvent(context.Background(), event); err != nil {
+		t.Fatalf("idempotent append failed: %v", err)
+	}
+	reloaded, err := NewFileRepository(path, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := reloaded.LoadOrderEvents(context.Background())
+	if err != nil || len(events) != 1 {
+		t.Fatalf("reloaded events=%v err=%v", events, err)
+	}
+	events[0].Intent.Symbol = "MUTATED"
+	again, _ := reloaded.LoadOrderEvents(context.Background())
+	if again[0].Intent.Symbol != "BTC/USDT" {
+		t.Fatal("caller mutation changed durable order event")
+	}
+	conflict := event
+	conflict.Status = contracts.OrderStatusCanceled
+	if err := reloaded.AppendOrderEvent(context.Background(), conflict); err == nil {
+		t.Fatal("conflicting event id was accepted")
 	}
 }
 

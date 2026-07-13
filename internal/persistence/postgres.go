@@ -8,7 +8,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/wangchaozhi/cyp-agent/internal/contracts"
+	"github.com/wangchaozhi/cyp-agent/internal/orders"
 )
 
 // PostgresRepository preserves the legacy lessons/checkpoints tables while
@@ -66,6 +69,29 @@ func (repository *PostgresRepository) ensureSchema(ctx context.Context) error {
             PRIMARY KEY (run_id, step)
         )`,
 		`ALTER TABLE checkpoints ADD COLUMN IF NOT EXISTS ts TIMESTAMPTZ NOT NULL DEFAULT now()`,
+		`CREATE TABLE IF NOT EXISTS orders (
+            client_id TEXT PRIMARY KEY,
+            run_id TEXT,
+            venue TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            status TEXT NOT NULL,
+            intent JSONB NOT NULL,
+            result JSONB,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )`,
+		`CREATE TABLE IF NOT EXISTS order_events (
+            id BIGSERIAL PRIMARY KEY,
+            event_id TEXT,
+            client_id TEXT NOT NULL REFERENCES orders(client_id),
+            ts TIMESTAMPTZ NOT NULL DEFAULT now(),
+            type TEXT NOT NULL,
+            payload JSONB NOT NULL
+        )`,
+		`ALTER TABLE order_events ADD COLUMN IF NOT EXISTS event_id TEXT`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS order_events_event_id_uidx
+            ON order_events (event_id) WHERE event_id IS NOT NULL`,
+		`CREATE INDEX IF NOT EXISTS order_events_client_ts_idx ON order_events (client_id, ts)`,
 	}
 	for _, statement := range statements {
 		if _, err := repository.pool.Exec(ctx, statement); err != nil {
@@ -73,6 +99,159 @@ func (repository *PostgresRepository) ensureSchema(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (repository *PostgresRepository) AppendOrderEvent(ctx context.Context, event orders.Event) error {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
+	normalized, err := normalizeOrderEvent(event)
+	if err != nil {
+		return err
+	}
+	payload, err := json.Marshal(normalized)
+	if err != nil {
+		return fmt.Errorf("encode PostgreSQL order event: %w", err)
+	}
+	transaction, err := repository.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin PostgreSQL order event transaction: %w", err)
+	}
+	defer func() { _ = transaction.Rollback(ctx) }()
+
+	var existingPayload []byte
+	queryErr := transaction.QueryRow(ctx,
+		`SELECT payload FROM order_events WHERE event_id=$1`, normalized.EventID).Scan(&existingPayload)
+	if queryErr == nil {
+		var existing orders.Event
+		if err := json.Unmarshal(existingPayload, &existing); err != nil {
+			return fmt.Errorf("decode existing PostgreSQL order event: %w", err)
+		}
+		if !equivalentOrderEvent(existing, normalized) {
+			return fmt.Errorf("order event id %s conflicts with persisted content", normalized.EventID)
+		}
+		return transaction.Commit(ctx)
+	}
+	if !errors.Is(queryErr, pgx.ErrNoRows) {
+		return fmt.Errorf("inspect PostgreSQL order event: %w", queryErr)
+	}
+
+	if normalized.Status == contracts.OrderStatusNew {
+		if normalized.Intent == nil {
+			return ErrInvalidOrderEvent
+		}
+		intent, marshalErr := json.Marshal(normalized.Intent)
+		if marshalErr != nil {
+			return fmt.Errorf("encode PostgreSQL order intent: %w", marshalErr)
+		}
+		if _, err := transaction.Exec(ctx, `
+            INSERT INTO orders (client_id, venue, symbol, status, intent, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $6)
+            ON CONFLICT (client_id) DO NOTHING`, normalized.ClientID, normalized.Intent.Venue,
+			normalized.Intent.Symbol, normalized.Status, intent, normalized.TS); err != nil {
+			return fmt.Errorf("create PostgreSQL order: %w", err)
+		}
+	}
+	var orderExists bool
+	if err := transaction.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM orders WHERE client_id=$1)`, normalized.ClientID).Scan(&orderExists); err != nil {
+		return fmt.Errorf("inspect PostgreSQL order: %w", err)
+	}
+	if !orderExists {
+		return fmt.Errorf("order %s does not exist", normalized.ClientID)
+	}
+	command, err := transaction.Exec(ctx, `
+        INSERT INTO order_events (event_id, client_id, ts, type, payload)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT DO NOTHING`, normalized.EventID, normalized.ClientID,
+		normalized.TS, normalized.Status, payload)
+	if err != nil {
+		return fmt.Errorf("append PostgreSQL order event: %w", err)
+	}
+	if command.RowsAffected() == 0 {
+		return fmt.Errorf("order event %s raced with another writer; retry reconciliation", normalized.EventID)
+	}
+	var result []byte
+	if normalized.Result != nil {
+		result, err = json.Marshal(normalized.Result)
+		if err != nil {
+			return fmt.Errorf("encode PostgreSQL order result: %w", err)
+		}
+	}
+	if _, err := transaction.Exec(ctx, `
+        UPDATE orders SET status=$2, result=COALESCE($3::jsonb, result), updated_at=$4
+        WHERE client_id=$1`, normalized.ClientID, normalized.Status, result, normalized.TS); err != nil {
+		return fmt.Errorf("update PostgreSQL order: %w", err)
+	}
+	if orders.IsTerminal(normalized.Status) {
+		if _, err := transaction.Exec(ctx, `
+            WITH expired AS MATERIALIZED (
+                SELECT target.client_id
+                FROM orders AS target
+                WHERE target.status = ANY($1)
+                  AND EXISTS (
+                      SELECT 1 FROM order_events AS journal
+                      WHERE journal.client_id = target.client_id AND journal.event_id IS NOT NULL
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1 FROM order_events AS legacy
+                      WHERE legacy.client_id = target.client_id AND legacy.event_id IS NULL
+                  )
+                ORDER BY target.updated_at DESC, target.client_id DESC
+                OFFSET $2
+            ), deleted_events AS (
+                DELETE FROM order_events AS journal
+                USING expired
+                WHERE journal.client_id = expired.client_id
+                RETURNING journal.client_id
+            )
+            DELETE FROM orders AS target
+            USING expired
+            WHERE target.client_id = expired.client_id`, []string{
+			string(contracts.OrderStatusClosed), string(contracts.OrderStatusCanceled),
+			string(contracts.OrderStatusRejected), string(contracts.OrderStatusFailed),
+		}, defaultMaxTerminalOrders); err != nil {
+			return fmt.Errorf("compact PostgreSQL order journal: %w", err)
+		}
+	}
+	if err := transaction.Commit(ctx); err != nil {
+		return fmt.Errorf("commit PostgreSQL order event: %w", err)
+	}
+	return nil
+}
+
+func (repository *PostgresRepository) LoadOrderEvents(ctx context.Context) ([]orders.Event, error) {
+	if err := contextError(ctx); err != nil {
+		return nil, err
+	}
+	rows, err := repository.pool.Query(ctx, `
+        SELECT payload FROM order_events
+        WHERE event_id IS NOT NULL
+        ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("load PostgreSQL order events: %w", err)
+	}
+	defer rows.Close()
+	result := make([]orders.Event, 0)
+	for rows.Next() {
+		var raw []byte
+		if err := rows.Scan(&raw); err != nil {
+			return nil, fmt.Errorf("scan PostgreSQL order event: %w", err)
+		}
+		var event orders.Event
+		if err := json.Unmarshal(raw, &event); err != nil {
+			return nil, fmt.Errorf("decode PostgreSQL order event: %w", err)
+		}
+		normalized, err := normalizeOrderEvent(event)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, normalized)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate PostgreSQL order events: %w", err)
+	}
+	return result, nil
 }
 
 func (repository *PostgresRepository) SaveCheckpoint(

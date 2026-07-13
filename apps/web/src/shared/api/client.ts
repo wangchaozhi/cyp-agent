@@ -11,6 +11,7 @@ import type {
   PortfolioSnapshot,
   Position,
   ReadinessStatus,
+	ReconcileReport,
   RiskSnapshot,
   RuntimeSettings,
   RuntimeSettingsUpdate,
@@ -97,6 +98,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const cypApi = {
   health: () => request<HealthStatus>("/api/health"),
   ready: () => request<ReadinessStatus>("/api/ready"),
+	reconcile: () => request<ReconcileReport>("/api/reconcile", {
+		method: "POST",
+		body: JSON.stringify({}),
+	}),
   venues: () => request<VenueInfo[]>("/api/venues"),
   settings: () => request<RuntimeSettings>("/api/settings"),
   updateSettings: (payload: RuntimeSettingsUpdate) =>
