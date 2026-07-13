@@ -227,6 +227,10 @@ export function SettingsPanel({ settings, venues, focusSection = "general", onSa
             <MetricRow label="行情源" value={settings.data_source} />
             <MetricRow label="扫描 / 监控" value={`${formatSeconds(settings.intervals.scan)} / ${formatSeconds(settings.intervals.monitor)}`} />
             <MetricRow label="并发 / 日志" value={`${settings.runtime.max_concurrency} / ${settings.runtime.log_level}`} />
+            <MetricRow
+              label="K 线归档"
+              value={settings.runtime.ohlcv_archive_enabled ? `PostgreSQL / ${settings.runtime.ohlcv_retention_days} 天` : "已关闭"}
+            />
             <MetricRow label="合约策略" value={settings.allow_perp ? "允许" : "关闭"} />
           </div>
         </div>

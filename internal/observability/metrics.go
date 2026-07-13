@@ -21,6 +21,13 @@ type RuntimeMetricsSnapshot struct {
 	ReconcileAttempts uint64 `json:"reconcile_attempts"`
 	ReconcileFailures uint64 `json:"reconcile_failures"`
 	Alerts            uint64 `json:"alerts"`
+	OHLCVQueued       uint64 `json:"ohlcv_queued"`
+	OHLCVSaved        uint64 `json:"ohlcv_saved"`
+	OHLCVDropped      uint64 `json:"ohlcv_dropped"`
+	OHLCVErrors       uint64 `json:"ohlcv_errors"`
+	OHLCVPruned       uint64 `json:"ohlcv_pruned"`
+	OHLCVRepairRuns   uint64 `json:"ohlcv_repair_runs"`
+	OHLCVBackfilled   uint64 `json:"ohlcv_backfilled"`
 }
 
 type RuntimeMetrics struct {
@@ -31,6 +38,55 @@ type RuntimeMetrics struct {
 	reconcileAttempts atomic.Uint64
 	reconcileFailures atomic.Uint64
 	alerts            atomic.Uint64
+	ohlcvQueued       atomic.Uint64
+	ohlcvSaved        atomic.Uint64
+	ohlcvDropped      atomic.Uint64
+	ohlcvErrors       atomic.Uint64
+	ohlcvPruned       atomic.Uint64
+	ohlcvRepairRuns   atomic.Uint64
+	ohlcvBackfilled   atomic.Uint64
+}
+
+func (metrics *RuntimeMetrics) RecordOHLCVQueued(count uint64) {
+	if metrics != nil {
+		metrics.ohlcvQueued.Add(count)
+	}
+}
+
+func (metrics *RuntimeMetrics) RecordOHLCVSaved(count uint64) {
+	if metrics != nil {
+		metrics.ohlcvSaved.Add(count)
+	}
+}
+
+func (metrics *RuntimeMetrics) RecordOHLCVDropped(count uint64) {
+	if metrics != nil {
+		metrics.ohlcvDropped.Add(count)
+	}
+}
+
+func (metrics *RuntimeMetrics) RecordOHLCVError() {
+	if metrics != nil {
+		metrics.ohlcvErrors.Add(1)
+	}
+}
+
+func (metrics *RuntimeMetrics) RecordOHLCVPruned(count uint64) {
+	if metrics != nil {
+		metrics.ohlcvPruned.Add(count)
+	}
+}
+
+func (metrics *RuntimeMetrics) RecordOHLCVRepairRun() {
+	if metrics != nil {
+		metrics.ohlcvRepairRuns.Add(1)
+	}
+}
+
+func (metrics *RuntimeMetrics) RecordOHLCVBackfilled(count uint64) {
+	if metrics != nil {
+		metrics.ohlcvBackfilled.Add(count)
+	}
 }
 
 func (metrics *RuntimeMetrics) RecordScan(err error) {
@@ -78,5 +134,9 @@ func (metrics *RuntimeMetrics) Snapshot() RuntimeMetricsSnapshot {
 		MonitorCycles: metrics.monitorCycles.Load(), MonitorErrors: metrics.monitorErrors.Load(),
 		ReconcileAttempts: metrics.reconcileAttempts.Load(),
 		ReconcileFailures: metrics.reconcileFailures.Load(), Alerts: metrics.alerts.Load(),
+		OHLCVQueued: metrics.ohlcvQueued.Load(), OHLCVSaved: metrics.ohlcvSaved.Load(),
+		OHLCVDropped: metrics.ohlcvDropped.Load(), OHLCVErrors: metrics.ohlcvErrors.Load(),
+		OHLCVPruned: metrics.ohlcvPruned.Load(), OHLCVRepairRuns: metrics.ohlcvRepairRuns.Load(),
+		OHLCVBackfilled: metrics.ohlcvBackfilled.Load(),
 	}
 }

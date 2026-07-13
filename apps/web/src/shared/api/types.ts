@@ -229,6 +229,8 @@ export interface RuntimeSettings {
     log_level: string;
     autostart: boolean;
     persistence: "memory" | "file" | "postgres";
+    ohlcv_archive_enabled: boolean;
+    ohlcv_retention_days: number;
   };
   risk: {
     max_risk_per_trade: Numeric;
@@ -485,4 +487,20 @@ export interface RunMetricsSnapshot {
 export interface MetricsSnapshot {
   runs: RunMetricsSnapshot;
   llm: Record<string, unknown>;
+  runtime: {
+    scan_cycles: number;
+    scan_errors: number;
+    monitor_cycles: number;
+    monitor_errors: number;
+    reconcile_attempts: number;
+    reconcile_failures: number;
+    alerts: number;
+    ohlcv_queued: number;
+    ohlcv_saved: number;
+    ohlcv_dropped: number;
+    ohlcv_errors: number;
+    ohlcv_pruned: number;
+    ohlcv_repair_runs: number;
+    ohlcv_backfilled: number;
+  };
 }

@@ -19,6 +19,12 @@ import { usePollingResource } from "../shared/hooks/usePollingResource";
 import { SectionHeading } from "../shared/ui/SectionHeading";
 
 const MAX_EVENTS = 160;
+const ACTIVE_POSITION_POLL_MS = 5_000;
+const IDLE_POSITION_POLL_MS = 60_000;
+
+export function positionPollingInterval(positionCount: number): number {
+  return positionCount > 0 ? ACTIVE_POSITION_POLL_MS : IDLE_POSITION_POLL_MS;
+}
 
 type Notice = { tone: "ok" | "warn" | "bad"; message: string } | null;
 
@@ -31,11 +37,12 @@ function errorMessage(error: unknown): string {
 }
 
 export default function App() {
+  const [positionPollInterval, setPositionPollInterval] = useState(IDLE_POSITION_POLL_MS);
   const health = usePollingResource(cypApi.health, 5000);
   const venues = usePollingResource(cypApi.venues, 10000);
   const runtimeSettings = usePollingResource(cypApi.settings, 10000);
   const pending = usePollingResource(cypApi.pending, 3000);
-  const positions = usePollingResource(cypApi.positions, 5000);
+  const positions = usePollingResource(cypApi.positions, positionPollInterval);
   const risk = usePollingResource(cypApi.risk, 5000);
   const portfolio = usePollingResource(cypApi.portfolio, 5000);
   const metrics = usePollingResource(cypApi.metrics, 10000);
@@ -63,6 +70,10 @@ export default function App() {
     const source = configured.length ? configured : marketSymbols;
     return [...new Set(source.map((symbol) => symbol.trim()).filter(Boolean))];
   }, [marketSymbols, runtimeSettings.data?.watchlist]);
+
+  useEffect(() => {
+    setPositionPollInterval(positionPollingInterval(positions.data?.length ?? 0));
+  }, [positions.data?.length]);
 
   const handleEvent = useCallback(
     (event: DashboardEvent) => {

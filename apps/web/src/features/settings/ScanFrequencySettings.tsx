@@ -6,6 +6,7 @@ import type { RuntimeSettings, RuntimeSettingsUpdate } from "../../shared/api/ty
 const FREQUENCY_OPTIONS = [
   { seconds: 60, label: "每 1 分钟", note: "响应最快 · Token 100%" },
   { seconds: 300, label: "每 5 分钟", note: "均衡 · Token 约 20%" },
+  { seconds: 600, label: "每 10 分钟", note: "推荐 · Token 约 10%" },
   { seconds: 900, label: "每 15 分钟", note: "节省 · Token 约 7%" },
   { seconds: 1800, label: "每 30 分钟", note: "低频 · Token 约 3%" },
 ] as const;

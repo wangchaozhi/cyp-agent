@@ -21,6 +21,7 @@ import (
 	"github.com/wangchaozhi/cyp-agent/internal/llm"
 	"github.com/wangchaozhi/cyp-agent/internal/metrics"
 	"github.com/wangchaozhi/cyp-agent/internal/observability"
+	"github.com/wangchaozhi/cyp-agent/internal/ohlcv"
 	"github.com/wangchaozhi/cyp-agent/internal/orchestrator"
 	"github.com/wangchaozhi/cyp-agent/internal/persistence"
 	"github.com/wangchaozhi/cyp-agent/internal/riskstate"
@@ -30,29 +31,33 @@ import (
 )
 
 type Application struct {
-	Control        *control.State
-	Events         *events.Bus
-	Gate           *approval.PendingGate
-	Venue          venue.Venue
-	Registry       *venue.VenueRegistry
-	DataSource     data.Source
-	Market         *data.MarketAggregator
-	Repository     persistence.Repository
-	Metrics        *metrics.Runs
-	RuntimeMetrics *observability.RuntimeMetrics
-	Safety         *runtimecore.SafetyState
-	RiskState      *riskstate.Tracker
-	Runtime        *runtimecore.Engine
-	Orchestrator   *orchestrator.Service
-	API            *api.Server
+	Control         *control.State
+	Events          *events.Bus
+	Gate            *approval.PendingGate
+	Venue           venue.Venue
+	Registry        *venue.VenueRegistry
+	DataSource      data.Source
+	Market          *data.MarketAggregator
+	Repository      persistence.Repository
+	Metrics         *metrics.Runs
+	RuntimeMetrics  *observability.RuntimeMetrics
+	Safety          *runtimecore.SafetyState
+	RiskState       *riskstate.Tracker
+	Runtime         *runtimecore.Engine
+	Orchestrator    *orchestrator.Service
+	API             *api.Server
+	OHLCVArchive    ohlcv.Archive
+	OHLCVRecorder   *ohlcv.AsyncRecorder
+	OHLCVBackfiller *ohlcv.Backfiller
 
 	closeOnce sync.Once
 }
 
 type buildOptions struct {
-	dataSource data.Source
-	repository persistence.Repository
-	market     *data.MarketAggregator
+	dataSource   data.Source
+	repository   persistence.Repository
+	market       *data.MarketAggregator
+	ohlcvArchive ohlcv.Archive
 }
 
 type Option func(*buildOptions)
@@ -67,6 +72,10 @@ func WithRepository(repository persistence.Repository) Option {
 
 func WithMarketAggregator(aggregator *data.MarketAggregator) Option {
 	return func(options *buildOptions) { options.market = aggregator }
+}
+
+func WithOHLCVArchive(archive ohlcv.Archive) Option {
+	return func(options *buildOptions) { options.ohlcvArchive = archive }
 }
 
 func New(
@@ -218,6 +227,69 @@ func New(
 		return nil, fmt.Errorf("restore risk state: %w", err)
 	}
 	runtimeMetrics := &observability.RuntimeMetrics{}
+	historicalArchive := configured.ohlcvArchive
+	if historicalArchive == nil && settings.OHLCVArchiveEnabled {
+		connectContext, cancel := context.WithTimeout(ctx, 5*time.Second)
+		postgresArchive, archiveErr := ohlcv.NewPostgresArchive(connectContext, settings.DBURL)
+		cancel()
+		if archiveErr != nil {
+			// Historical persistence is best-effort by design. A database outage
+			// must not freeze account reconciliation or trading safeguards.
+			logger.Warn("ohlcv_archive_unavailable", "error", archiveErr.Error(), "trading_continues", true)
+		} else {
+			historicalArchive = postgresArchive
+		}
+	}
+	var archiveRecorder *ohlcv.AsyncRecorder
+	var archiveBackfiller *ohlcv.Backfiller
+	closeArchive := func(closeContext context.Context) {
+		archiveContext, cancel := context.WithTimeout(closeContext, 5*time.Second)
+		defer cancel()
+		if archiveBackfiller != nil {
+			_ = archiveBackfiller.Close(archiveContext)
+		}
+		if archiveRecorder != nil {
+			_ = archiveRecorder.Close(archiveContext)
+		}
+		if historicalArchive != nil {
+			historicalArchive.Close()
+		}
+	}
+	if historicalArchive != nil {
+		retention := time.Duration(settings.OHLCVRetentionDays) * 24 * time.Hour
+		archiveRecorder, err = ohlcv.NewAsyncRecorder(ohlcv.RecorderConfig{
+			Store: historicalArchive, Retention: retention, QueueSize: 256,
+			CleanupInterval: 24 * time.Hour, WriteTimeout: 10 * time.Second,
+			Logger: logger, Metrics: runtimeMetrics,
+		})
+		if err != nil {
+			closeArchive(context.Background())
+			_ = repository.Close()
+			return nil, fmt.Errorf("configure OHLCV recorder: %w", err)
+		}
+		if settings.DataSource == "cex" {
+			archivingSource, wrapErr := data.NewArchivingSource(source, archiveRecorder, "1h")
+			if wrapErr != nil {
+				closeArchive(context.Background())
+				_ = repository.Close()
+				return nil, fmt.Errorf("configure OHLCV source: %w", wrapErr)
+			}
+			source = archivingSource
+		}
+		if historicalVenue != nil {
+			archiveBackfiller, err = ohlcv.NewBackfiller(ohlcv.BackfillerConfig{
+				Archive: historicalArchive, Market: historicalVenue,
+				Symbols:   func() []string { return state.Settings().WatchlistSymbols() },
+				Timeframe: "1h", Retention: retention, Interval: 6 * time.Hour,
+				Logger: logger, Metrics: runtimeMetrics,
+			})
+			if err != nil {
+				closeArchive(context.Background())
+				_ = repository.Close()
+				return nil, fmt.Errorf("configure OHLCV backfill: %w", err)
+			}
+		}
+	}
 	timeout := time.Duration(settings.Risk.ApprovalTimeoutSeconds) * time.Second
 	gate := approval.NewPendingGate(timeout, bus)
 	safety := runtimecore.NewSafetyState()
@@ -232,12 +304,14 @@ func New(
 
 	reconciler, err := runtimecore.NewVenueReconciler(executionVenue, bus, logger)
 	if err != nil {
+		closeArchive(context.Background())
 		orch.Close()
 		_ = repository.Close()
 		return nil, err
 	}
 	alerter, err := alerts.Build(logger, runtimeMetrics, settings.AlertWebhook)
 	if err != nil {
+		closeArchive(context.Background())
 		orch.Close()
 		_ = repository.Close()
 		return nil, err
@@ -266,6 +340,7 @@ func New(
 		},
 	})
 	if err != nil {
+		closeArchive(context.Background())
 		orch.Close()
 		_ = repository.Close()
 		return nil, err
@@ -276,6 +351,7 @@ func New(
 		MinMarginRatio: settings.Risk.MinMarginRatio,
 	})
 	if err != nil {
+		closeArchive(context.Background())
 		orch.Close()
 		_ = repository.Close()
 		return nil, err
@@ -302,6 +378,7 @@ func New(
 		Events: bus, Logger: logger,
 	})
 	if err != nil {
+		closeArchive(context.Background())
 		orch.Close()
 		_ = repository.Close()
 		return nil, err
@@ -311,12 +388,14 @@ func New(
 		Safety: safety, Logger: logger, Metrics: runtimeMetrics, AllowDegradedStart: true,
 	})
 	if err != nil {
+		closeArchive(context.Background())
 		orch.Close()
 		_ = repository.Close()
 		return nil, err
 	}
 	if settings.RuntimeAutostart || settings.Automation.Enabled {
 		if err := runtimeEngine.Start(ctx); err != nil {
+			closeArchive(context.Background())
 			orch.Close()
 			_ = repository.Close()
 			return nil, fmt.Errorf("start runtime: %w", err)
@@ -332,7 +411,8 @@ func New(
 		Control: state, Venue: executionVenue, Events: bus, Gate: gate, Orchestrator: orch,
 		Metrics: runMetrics, RuntimeMetrics: runtimeMetrics, Registry: registry,
 		Market: aggregator, Safety: safety, HistoricalVenue: historicalVenue,
-		RiskState: riskTracker, WatchlistStore: preferenceStore, AutomationStore: preferenceStore,
+		HistoricalArchive: historicalArchive,
+		RiskState:         riskTracker, WatchlistStore: preferenceStore, AutomationStore: preferenceStore,
 		ScanIntervalStore: preferenceStore, NotifyScanScheduleChanged: scanner.NotifyScheduleChanged,
 		EnsureRuntime: func() error {
 			if runtimeEngine.Started() {
@@ -350,6 +430,7 @@ func New(
 		stopContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = runtimeEngine.Stop(stopContext)
+		closeArchive(stopContext)
 		orch.Close()
 		bus.Close()
 		_ = repository.Close()
@@ -361,6 +442,7 @@ func New(
 		Metrics: runMetrics, RuntimeMetrics: runtimeMetrics, Safety: safety,
 		RiskState: riskTracker,
 		Runtime:   runtimeEngine, Orchestrator: orch, API: server,
+		OHLCVArchive: historicalArchive, OHLCVRecorder: archiveRecorder, OHLCVBackfiller: archiveBackfiller,
 	}, nil
 }
 
@@ -450,6 +532,17 @@ func (application *Application) Close() {
 		defer cancel()
 		_ = application.Runtime.Stop(stopContext)
 		application.Orchestrator.Close()
+		archiveContext, archiveCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer archiveCancel()
+		if application.OHLCVBackfiller != nil {
+			_ = application.OHLCVBackfiller.Close(archiveContext)
+		}
+		if application.OHLCVRecorder != nil {
+			_ = application.OHLCVRecorder.Close(archiveContext)
+		}
+		if application.OHLCVArchive != nil {
+			application.OHLCVArchive.Close()
+		}
 		application.Events.Close()
 		_ = application.Repository.Close()
 		for _, current := range application.Registry.All() {

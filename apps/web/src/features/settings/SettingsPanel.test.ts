@@ -71,6 +71,7 @@ describe("scan frequency configuration", () => {
   it("estimates token-driving symbol scans for the selected preset", () => {
     expect(estimateDailySymbolScans(60, 7)).toBe(10_080);
     expect(estimateDailySymbolScans(300, 7)).toBe(2_016);
+    expect(estimateDailySymbolScans(600, 7)).toBe(1_008);
     expect(estimateDailySymbolScans(900, 7)).toBe(672);
     expect(estimateDailySymbolScans(0, 7)).toBe(0);
   });

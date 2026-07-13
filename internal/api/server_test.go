@@ -118,9 +118,9 @@ func TestHealthSettingsKillAndDashboardShapes(t *testing.T) {
 	}
 
 	response, body = requestJSON(t, client, http.MethodPost, server.URL+"/api/settings", map[string]any{
-		"scan_interval": 900,
+		"scan_interval": 600,
 	})
-	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), `"intervals":{"scan":900`) {
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), `"intervals":{"scan":600`) {
 		t.Fatalf("scan interval settings response = %d %s", response.StatusCode, body)
 	}
 	response, body = requestJSON(t, client, http.MethodPost, server.URL+"/api/settings", map[string]any{

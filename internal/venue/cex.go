@@ -610,3 +610,16 @@ func milliseconds(value any) (time.Time, error) {
 func sortCandles(candles []contracts.Candle) {
 	sort.Slice(candles, func(i, j int) bool { return candles[i].TS.Before(candles[j].TS) })
 }
+
+func uniqueSortedCandles(candles []contracts.Candle) []contracts.Candle {
+	unique := make(map[int64]contracts.Candle, len(candles))
+	for _, candle := range candles {
+		unique[candle.TS.UTC().UnixNano()] = candle
+	}
+	result := make([]contracts.Candle, 0, len(unique))
+	for _, candle := range unique {
+		result = append(result, candle)
+	}
+	sortCandles(result)
+	return result
+}

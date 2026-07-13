@@ -75,11 +75,11 @@ func TestScanIntervalStoreRoundTrip(t *testing.T) {
 	if _, found, err := store.LoadScanInterval(ctx); err != nil || found {
 		t.Fatalf("empty scan interval: found=%v err=%v", found, err)
 	}
-	if err := store.SaveScanInterval(ctx, 900); err != nil {
+	if err := store.SaveScanInterval(ctx, 600); err != nil {
 		t.Fatal(err)
 	}
 	seconds, found, err := store.LoadScanInterval(ctx)
-	if err != nil || !found || seconds != 900 {
+	if err != nil || !found || seconds != 600 {
 		t.Fatalf("scan interval=%d found=%v err=%v", seconds, found, err)
 	}
 }

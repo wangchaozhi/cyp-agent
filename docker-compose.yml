@@ -33,6 +33,8 @@ services:
       CYP_DATA_SOURCE: synthetic
       CYP_PERSISTENCE: postgres
       CYP_DB_URL: postgresql://cyp:cyp@db:5432/cyp
+      CYP_OHLCV_ARCHIVE_ENABLED: "true"
+      CYP_OHLCV_RETENTION_DAYS: "730"
       CYP_APPROVAL: dashboard
       CYP_RUNTIME_AUTOSTART: "false"
       CYP_API_TOKEN: "${CYP_API_TOKEN:-}"

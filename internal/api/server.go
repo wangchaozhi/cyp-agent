@@ -33,6 +33,7 @@ import (
 	"github.com/wangchaozhi/cyp-agent/internal/llm"
 	"github.com/wangchaozhi/cyp-agent/internal/metrics"
 	"github.com/wangchaozhi/cyp-agent/internal/observability"
+	"github.com/wangchaozhi/cyp-agent/internal/ohlcv"
 	"github.com/wangchaozhi/cyp-agent/internal/orchestrator"
 	"github.com/wangchaozhi/cyp-agent/internal/riskstate"
 	runtimecore "github.com/wangchaozhi/cyp-agent/internal/runtime"
@@ -42,19 +43,20 @@ import (
 const maxRequestBody = 1 << 20
 
 type Server struct {
-	control         *control.State
-	venue           venue.Venue
-	events          *events.Bus
-	gate            *approval.PendingGate
-	orchestrator    *orchestrator.Service
-	metrics         *metrics.Runs
-	runtimeMetrics  *observability.RuntimeMetrics
-	registry        *venue.VenueRegistry
-	marketData      *data.MarketAggregator
-	safety          *runtimecore.SafetyState
-	riskState       *riskstate.Tracker
-	historicalVenue venue.Venue
-	watchlistStore  interface {
+	control           *control.State
+	venue             venue.Venue
+	events            *events.Bus
+	gate              *approval.PendingGate
+	orchestrator      *orchestrator.Service
+	metrics           *metrics.Runs
+	runtimeMetrics    *observability.RuntimeMetrics
+	registry          *venue.VenueRegistry
+	marketData        *data.MarketAggregator
+	safety            *runtimecore.SafetyState
+	riskState         *riskstate.Tracker
+	historicalVenue   venue.Venue
+	historicalArchive ohlcv.Archive
+	watchlistStore    interface {
 		SaveWatchlist(context.Context, []string) error
 	}
 	automationStore interface {
@@ -73,19 +75,20 @@ type Server struct {
 }
 
 type Dependencies struct {
-	Control         *control.State
-	Venue           venue.Venue
-	Events          *events.Bus
-	Gate            *approval.PendingGate
-	Orchestrator    *orchestrator.Service
-	Metrics         *metrics.Runs
-	RuntimeMetrics  *observability.RuntimeMetrics
-	Registry        *venue.VenueRegistry
-	Market          *data.MarketAggregator
-	Safety          *runtimecore.SafetyState
-	RiskState       *riskstate.Tracker
-	HistoricalVenue venue.Venue
-	WatchlistStore  interface {
+	Control           *control.State
+	Venue             venue.Venue
+	Events            *events.Bus
+	Gate              *approval.PendingGate
+	Orchestrator      *orchestrator.Service
+	Metrics           *metrics.Runs
+	RuntimeMetrics    *observability.RuntimeMetrics
+	Registry          *venue.VenueRegistry
+	Market            *data.MarketAggregator
+	Safety            *runtimecore.SafetyState
+	RiskState         *riskstate.Tracker
+	HistoricalVenue   venue.Venue
+	HistoricalArchive ohlcv.Archive
+	WatchlistStore    interface {
 		SaveWatchlist(context.Context, []string) error
 	}
 	AutomationStore interface {
@@ -117,6 +120,7 @@ func New(dependencies Dependencies) (*Server, error) {
 		registry: dependencies.Registry, marketData: dependencies.Market, safety: dependencies.Safety,
 		riskState:                 dependencies.RiskState,
 		historicalVenue:           dependencies.HistoricalVenue,
+		historicalArchive:         dependencies.HistoricalArchive,
 		watchlistStore:            dependencies.WatchlistStore,
 		automationStore:           dependencies.AutomationStore,
 		scanIntervalStore:         dependencies.ScanIntervalStore,
@@ -350,7 +354,13 @@ func (s *Server) marketHistory(w http.ResponseWriter, request *http.Request) {
 		wait.Add(1)
 		go func(index int, symbol string) {
 			defer wait.Done()
-			candles, fetchErr := s.historicalVenue.FetchOHLCV(request.Context(), symbol, timeframe, limit)
+			var candles []contracts.Candle
+			var fetchErr error
+			if s.historicalArchive != nil {
+				candles, fetchErr = s.historicalArchive.Ensure(request.Context(), s.historicalVenue, symbol, timeframe, limit)
+			} else {
+				candles, fetchErr = s.historicalVenue.FetchOHLCV(request.Context(), symbol, timeframe, limit)
+			}
 			if fetchErr != nil {
 				return
 			}
@@ -502,7 +512,13 @@ func (s *Server) backtest(w http.ResponseWriter, request *http.Request) {
 			writeError(w, http.StatusBadGateway, "真实历史拉取失败：未配置 CEX 行情场所")
 			return
 		}
-		candles, fetchErr := s.historicalVenue.FetchOHLCV(request.Context(), symbol, params.Timeframe, params.Bars)
+		var candles []contracts.Candle
+		var fetchErr error
+		if s.historicalArchive != nil {
+			candles, fetchErr = s.historicalArchive.Ensure(request.Context(), s.historicalVenue, symbol, params.Timeframe, params.Bars)
+		} else {
+			candles, fetchErr = s.historicalVenue.FetchOHLCV(request.Context(), symbol, params.Timeframe, params.Bars)
+		}
 		if fetchErr != nil {
 			writeError(w, http.StatusBadGateway, "真实历史拉取失败："+fetchErr.Error())
 			return

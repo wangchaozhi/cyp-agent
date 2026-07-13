@@ -86,6 +86,33 @@ func TestBinancePublicMarketEndpoints(t *testing.T) {
 	}
 }
 
+func TestBinanceOHLCVRangePaginatesChronologically(t *testing.T) {
+	start := time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC)
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		if request.URL.Path != "/api/v3/klines" || request.URL.Query().Get("startTime") == "" ||
+			request.URL.Query().Get("endTime") == "" || request.URL.Query().Get("limit") != "2" {
+			t.Errorf("unexpected range request: %s", request.URL.RequestURI())
+		}
+		if calls.Add(1) == 1 {
+			_, _ = fmt.Fprintf(response, `[[%d,"100","110","90","101","1"],[%d,"101","111","91","102","2"]]`,
+				start.UnixMilli(), start.Add(time.Hour).UnixMilli())
+			return
+		}
+		_, _ = fmt.Fprintf(response, `[[%d,"102","112","92","103","3"]]`,
+			start.Add(2*time.Hour).UnixMilli())
+	}))
+	defer server.Close()
+	venue := newTestCEX(t, "binance", server.URL, nil)
+	candles, err := venue.FetchOHLCVRange(context.Background(), "BTC/USDT", "1h",
+		start, start.Add(3*time.Hour), 2)
+	if err != nil || len(candles) != 3 || calls.Load() != 2 ||
+		!candles[0].TS.Equal(start) || !candles[2].TS.Equal(start.Add(2*time.Hour)) {
+		t.Fatalf("candles=%#v calls=%d err=%v", candles, calls.Load(), err)
+	}
+}
+
 func TestBinanceSignedReadOnlyAccountRequests(t *testing.T) {
 	const secret = "binance-secret"
 	var signedCalls atomic.Int32
@@ -192,6 +219,33 @@ func TestOKXPublicMarketAndDemoSignature(t *testing.T) {
 	balances, err := venue.Balances(ctx)
 	if err != nil || balances.TotalQuote.Cmp(contracts.MustDecimal("100")) != 0 {
 		t.Fatalf("balances=%#v err=%v", balances, err)
+	}
+}
+
+func TestOKXOHLCVRangePaginatesBackward(t *testing.T) {
+	start := time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC)
+	end := start.Add(3 * time.Hour)
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		if request.URL.Path != "/api/v5/market/history-candles" ||
+			request.URL.Query().Get("after") == "" || request.URL.Query().Get("limit") != "2" {
+			t.Errorf("unexpected range request: %s", request.URL.RequestURI())
+		}
+		if calls.Add(1) == 1 {
+			_, _ = fmt.Fprintf(response, `{"code":"0","data":[["%d","102","112","92","103","3"],["%d","101","111","91","102","2"]]}`,
+				start.Add(2*time.Hour).UnixMilli(), start.Add(time.Hour).UnixMilli())
+			return
+		}
+		_, _ = fmt.Fprintf(response, `{"code":"0","data":[["%d","100","110","90","101","1"]]}`,
+			start.UnixMilli())
+	}))
+	defer server.Close()
+	venue := newTestCEX(t, "okx", server.URL, nil)
+	candles, err := venue.FetchOHLCVRange(context.Background(), "BTC/USDT", "1h", start, end, 2)
+	if err != nil || len(candles) != 3 || calls.Load() != 2 ||
+		!candles[0].TS.Equal(start) || !candles[2].TS.Equal(start.Add(2*time.Hour)) {
+		t.Fatalf("candles=%#v calls=%d err=%v", candles, calls.Load(), err)
 	}
 }
 

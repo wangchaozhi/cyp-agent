@@ -115,7 +115,7 @@ func TestRuntimeWatchlistUpdateNormalizesAndRejectsUnsafeDemoSymbols(t *testing.
 
 func TestRuntimeScanIntervalUsesTokenSavingPresets(t *testing.T) {
 	state := New(config.DefaultSettings())
-	interval := 900
+	interval := 600
 	if err := state.UpdateSettings(contracts.SettingsUpdateRequest{ScanInterval: &interval}); err != nil {
 		t.Fatalf("scan interval update: %v", err)
 	}

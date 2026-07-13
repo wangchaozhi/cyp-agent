@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/wangchaozhi/cyp-agent/internal/contracts"
 )
@@ -62,20 +63,74 @@ func (venue *CEXVenue) fetchOKXOHLCV(
 	}, false, &payload); err != nil {
 		return nil, err
 	}
-	candles := make([]contracts.Candle, 0, len(payload.Data))
-	for _, row := range payload.Data {
+	return parseOKXCandles(venue.id, payload.Data)
+}
+
+func (venue *CEXVenue) fetchOKXOHLCVRange(
+	ctx context.Context,
+	symbol, timeframe string,
+	start, end time.Time,
+	pageSize int,
+) ([]contracts.Candle, error) {
+	bar, ok := okxTimeframe(timeframe)
+	if !ok || !start.Before(end) || pageSize <= 0 || pageSize > 300 {
+		return nil, &CEXError{Kind: CEXErrorValidation, Exchange: venue.id, Operation: "ohlcv_range", Message: "unsupported timeframe, range, or page size"}
+	}
+	start, end = start.UTC(), end.UTC()
+	cursor := end
+	result := make([]contracts.Candle, 0)
+	for cursor.After(start) {
+		var payload struct {
+			Code string  `json:"code"`
+			Data [][]any `json:"data"`
+		}
+		if err := venue.doJSON(ctx, http.MethodGet, "/api/v5/market/history-candles", url.Values{
+			"instId": {okxInstrumentID(symbol)}, "bar": {bar}, "limit": {strconv.Itoa(pageSize)},
+			"after": {strconv.FormatInt(cursor.UnixMilli(), 10)},
+		}, false, &payload); err != nil {
+			return nil, err
+		}
+		page, err := parseOKXCandles(venue.id, payload.Data)
+		if err != nil {
+			return nil, err
+		}
+		if len(page) == 0 {
+			break
+		}
+		for _, candle := range page {
+			if !candle.TS.Before(start) && candle.TS.Before(end) {
+				result = append(result, candle)
+			}
+		}
+		oldest := page[0].TS
+		if !oldest.Before(cursor) || !oldest.After(start) || len(page) < pageSize {
+			break
+		}
+		cursor = oldest
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(120 * time.Millisecond):
+		}
+	}
+	return uniqueSortedCandles(result), nil
+}
+
+func parseOKXCandles(exchange string, rows [][]any) ([]contracts.Candle, error) {
+	candles := make([]contracts.Candle, 0, len(rows))
+	for _, row := range rows {
 		if len(row) < 6 {
-			return nil, &CEXError{Kind: CEXErrorDecode, Exchange: venue.id, Operation: "ohlcv", Message: "short OKX candle row"}
+			return nil, &CEXError{Kind: CEXErrorDecode, Exchange: exchange, Operation: "ohlcv", Message: "short OKX candle row"}
 		}
 		stamp, err := milliseconds(row[0])
 		if err != nil {
-			return nil, &CEXError{Kind: CEXErrorDecode, Exchange: venue.id, Operation: "ohlcv", Message: "invalid OKX timestamp", Err: err}
+			return nil, &CEXError{Kind: CEXErrorDecode, Exchange: exchange, Operation: "ohlcv", Message: "invalid OKX timestamp", Err: err}
 		}
 		values := make([]contracts.Decimal, 5)
 		for index := range values {
 			values[index], err = decimalFromAny(row[index+1])
 			if err != nil {
-				return nil, &CEXError{Kind: CEXErrorDecode, Exchange: venue.id, Operation: "ohlcv", Message: "invalid OKX decimal", Err: err}
+				return nil, &CEXError{Kind: CEXErrorDecode, Exchange: exchange, Operation: "ohlcv", Message: "invalid OKX decimal", Err: err}
 			}
 		}
 		candles = append(candles, contracts.Candle{

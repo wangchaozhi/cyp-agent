@@ -151,14 +151,16 @@ type Settings struct {
 	Watchlist        string
 	MaxConcurrency   int
 
-	DBURL       string
-	Persistence string
-	StateFile   string
-	LogLevel    string
-	APIToken    Secret
-	Risk        RiskConfig
-	Budget      BudgetConfig
-	Automation  AutomationConfig
+	DBURL               string
+	Persistence         string
+	StateFile           string
+	OHLCVArchiveEnabled bool
+	OHLCVRetentionDays  int
+	LogLevel            string
+	APIToken            Secret
+	Risk                RiskConfig
+	Budget              BudgetConfig
+	Automation          AutomationConfig
 }
 
 func DefaultRiskConfig() RiskConfig {
@@ -194,24 +196,26 @@ func DefaultRiskConfig() RiskConfig {
 
 func DefaultSettings() Settings {
 	return Settings{
-		Mode:            "paper",
-		Approval:        "dashboard",
-		ExecutionVenue:  "paper",
-		DataSource:      "synthetic",
-		LLMProvider:     "anthropic",
-		LLMModel:        "claude-opus-4-8",
-		LLMModelFast:    "claude-haiku-4-5-20251001",
-		CEXID:           "binance",
-		OKXDemo:         true,
-		Signer:          "keystore",
-		ScanInterval:    900,
-		MonitorInterval: 5,
-		Watchlist:       "BTC/USDT",
-		MaxConcurrency:  2,
-		DBURL:           "postgresql://cyp:cyp@localhost:5433/cyp",
-		Persistence:     "file",
-		StateFile:       "data/cyp-state.json",
-		LogLevel:        "INFO",
+		Mode:                "paper",
+		Approval:            "dashboard",
+		ExecutionVenue:      "paper",
+		DataSource:          "synthetic",
+		LLMProvider:         "anthropic",
+		LLMModel:            "claude-opus-4-8",
+		LLMModelFast:        "claude-haiku-4-5-20251001",
+		CEXID:               "binance",
+		OKXDemo:             true,
+		Signer:              "keystore",
+		ScanInterval:        600,
+		MonitorInterval:     5,
+		Watchlist:           "BTC/USDT",
+		MaxConcurrency:      2,
+		DBURL:               "postgresql://cyp:cyp@localhost:5433/cyp",
+		Persistence:         "file",
+		StateFile:           "data/cyp-state.json",
+		OHLCVArchiveEnabled: true,
+		OHLCVRetentionDays:  730,
+		LogLevel:            "INFO",
 		Automation: AutomationConfig{
 			Enabled: true, ScanEnabled: true, EntryEnabled: true, ApprovalEnabled: true,
 			ExitEnabled: true, ReverseEnabled: true, AddEnabled: true,
@@ -366,10 +370,12 @@ type IntervalSnapshot struct {
 }
 
 type RuntimeSnapshot struct {
-	MaxConcurrency int    `json:"max_concurrency"`
-	LogLevel       string `json:"log_level"`
-	Autostart      bool   `json:"autostart"`
-	Persistence    string `json:"persistence"`
+	MaxConcurrency      int    `json:"max_concurrency"`
+	LogLevel            string `json:"log_level"`
+	Autostart           bool   `json:"autostart"`
+	Persistence         string `json:"persistence"`
+	OHLCVArchiveEnabled bool   `json:"ohlcv_archive_enabled"`
+	OHLCVRetentionDays  int    `json:"ohlcv_retention_days"`
 }
 
 type RiskSnapshot struct {
@@ -424,7 +430,8 @@ func (s Settings) Snapshot() SettingsSnapshot {
 		Watchlist: s.WatchlistSymbols(),
 		Intervals: IntervalSnapshot{Scan: s.ScanInterval, Monitor: s.MonitorInterval},
 		Runtime: RuntimeSnapshot{MaxConcurrency: s.MaxConcurrency, LogLevel: s.LogLevel,
-			Autostart: s.RuntimeAutostart, Persistence: s.Persistence},
+			Autostart: s.RuntimeAutostart, Persistence: s.Persistence,
+			OHLCVArchiveEnabled: s.OHLCVArchiveEnabled, OHLCVRetentionDays: s.OHLCVRetentionDays},
 		APIAuthEnabled: s.APIToken.Configured(),
 		Risk: RiskSnapshot{
 			MaxRiskPerTrade: r.MaxRiskPerTrade, MaxPositionPct: r.MaxPositionPct,

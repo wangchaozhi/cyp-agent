@@ -28,6 +28,7 @@ cmd/cyp-server → internal/api (net/http)
         │    └─ venue ────── Paper / OKX Demo 执行
         ├─ runtime ───────── 启动对账、扫描、持仓监控
         ├─ persistence ───── memory / atomic JSON / PostgreSQL
+		├─ ohlcv ─────────── 已闭合 K 线异步归档、保留与缺口补录
         └─ events/metrics ── SSE 事件、运行指标、JSON 日志
 
 cmd/cyp ── backtest / sweep / config / version
@@ -63,7 +64,8 @@ cmd/cyp ── backtest / sweep / config / version
 | `internal/data` | 合成/CEX 行情、指标、波动率和跨场所聚合 |
 | `internal/runtime` | 启动对账、安全冻结、扫描、持仓监控和 symbol 锁 |
 | `internal/persistence` | 内存、原子 JSON 文件和 PostgreSQL Repository |
-| `internal/backtest` | 回测、扫参、walk-forward、PBO/DSR 和归档 |
+| `internal/backtest` | 回测、扫参、walk-forward 和 PBO/DSR |
+| `internal/ohlcv` | 已闭合 K 线校验、异步 PostgreSQL 归档、保留策略和停机补数 |
 | `internal/events` | 有界发布订阅总线，供 SSE 消费 |
 | `internal/metrics`、`internal/observability` | 运行指标、日志、轻量 trace |
 | `internal/portfolio`、`internal/alerts` | 组合视图和告警输出 |
@@ -141,6 +143,8 @@ RuntimeEngine 包含两条可选常驻循环：
 | `postgres` | pgx 连接池，保存 `checkpoints` 和 `lessons` | Docker Compose、持久部署 |
 
 文件模式通过临时文件、原子替换和 `.bak` 恢复降低中断写入风险；不支持多进程共享。PostgreSQL 模式会在启动时确保所需表和字段存在，初始化 SQL 同时位于 `db/migrations/` 与 `docker/initdb/`。
+
+OHLCV 归档与上述运行状态 Repository 解耦：即使 `CYP_PERSISTENCE=file`，也可通过 `CYP_OHLCV_ARCHIVE_ENABLED=true` 把行情写入同一 PostgreSQL/TimescaleDB。实时写入使用有界异步队列；失败只记录指标和日志，不阻塞交易、对账或主动平仓。启动及每 6 小时按 watchlist 修复默认 730 天窗口中的时间缺口，upsert 保证重复补数安全。
 
 ## HTTP 与事件契约
 

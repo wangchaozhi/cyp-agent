@@ -29,11 +29,15 @@ export function usePollingResource<T>(
   }, []);
 
   const refresh = useCallback(async () => {
-    setLoading(true);
     try {
       const next = await loaderRef.current();
       if (!mountedRef.current) return;
-      setData(next);
+      setData((current) => {
+        if (current !== null && JSON.stringify(current) === JSON.stringify(next)) {
+          return current;
+        }
+        return next;
+      });
       setError(null);
     } catch (err) {
       if (!mountedRef.current) return;

@@ -3,6 +3,7 @@ package venue
 import (
 	"context"
 	"net/http"
+	"time"
 
 	"github.com/wangchaozhi/cyp-agent/internal/contracts"
 )
@@ -12,6 +13,20 @@ func (venue *CEXVenue) FetchTicker(ctx context.Context, symbol string) (contract
 		return venue.fetchOKXTicker(ctx, symbol)
 	}
 	return venue.fetchBinanceTicker(ctx, symbol)
+}
+
+// FetchOHLCVRange returns closed or forming candles whose opening timestamp is
+// in [start, end). Exchange-specific pagination is hidden from archive users.
+func (venue *CEXVenue) FetchOHLCVRange(
+	ctx context.Context,
+	symbol, timeframe string,
+	start, end time.Time,
+	pageSize int,
+) ([]contracts.Candle, error) {
+	if venue.id == "okx" {
+		return venue.fetchOKXOHLCVRange(ctx, symbol, timeframe, start, end, pageSize)
+	}
+	return venue.fetchBinanceOHLCVRange(ctx, symbol, timeframe, start, end, pageSize)
 }
 
 func (venue *CEXVenue) FetchOHLCV(

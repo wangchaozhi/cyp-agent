@@ -41,10 +41,14 @@ CREATE TABLE IF NOT EXISTS ohlcv (
     low NUMERIC NOT NULL,
     close NUMERIC NOT NULL,
     volume NUMERIC NOT NULL,
+	 ingested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+	 quality_status TEXT NOT NULL DEFAULT 'validated',
     PRIMARY KEY (venue, symbol, timeframe, ts)
 );
 
 SELECT create_hypertable('ohlcv', 'ts', if_not_exists => TRUE, migrate_data => TRUE);
+CREATE INDEX IF NOT EXISTS ohlcv_symbol_timeframe_ts_idx
+    ON ohlcv (symbol, timeframe, ts DESC);
 
 CREATE TABLE IF NOT EXISTS runs (
     run_id TEXT PRIMARY KEY,

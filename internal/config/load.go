@@ -207,6 +207,8 @@ func LoadWithOptions(options LoadOptions) (Settings, error) {
 		func() error { return setInt("CYP_SCAN_INTERVAL", &settings.ScanInterval) },
 		func() error { return setInt("CYP_MONITOR_INTERVAL", &settings.MonitorInterval) },
 		func() error { return setInt("CYP_MAX_CONCURRENCY", &settings.MaxConcurrency) },
+		func() error { return setBool("CYP_OHLCV_ARCHIVE_ENABLED", &settings.OHLCVArchiveEnabled) },
+		func() error { return setInt("CYP_OHLCV_RETENTION_DAYS", &settings.OHLCVRetentionDays) },
 		func() error { return setDecimal("CYP_MAX_RISK_PER_TRADE", &settings.Risk.MaxRiskPerTrade) },
 		func() error { return setDecimal("CYP_MAX_POSITION_PCT", &settings.Risk.MaxPositionPct) },
 		func() error { return setDecimal("CYP_MAX_GROSS_EXPOSURE", &settings.Risk.MaxGrossExposure) },
@@ -295,6 +297,12 @@ func (s Settings) Validate() error {
 	}
 	if s.Persistence == "postgres" && strings.TrimSpace(s.DBURL) == "" {
 		return errors.New("CYP_DB_URL is required when CYP_PERSISTENCE=postgres")
+	}
+	if s.OHLCVArchiveEnabled && strings.TrimSpace(s.DBURL) == "" {
+		return errors.New("CYP_DB_URL is required when CYP_OHLCV_ARCHIVE_ENABLED=true")
+	}
+	if s.OHLCVRetentionDays < 30 || s.OHLCVRetentionDays > 3650 {
+		return errors.New("CYP_OHLCV_RETENTION_DAYS must be between 30 and 3650")
 	}
 	if api := strings.TrimSpace(s.OnchainDataAPI); api != "" &&
 		!strings.HasPrefix(api, "http://") && !strings.HasPrefix(api, "https://") {

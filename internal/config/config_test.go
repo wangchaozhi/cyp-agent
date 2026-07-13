@@ -20,6 +20,13 @@ func TestDefaultSettingsArePaperAndLiveExecutionIsCompileTimeDisabled(t *testing
 	if LiveExecutionSupported || settings.LiveExecutionAllowed() {
 		t.Fatal("first Go slice must never enable live execution")
 	}
+	if settings.ScanInterval != 600 {
+		t.Fatalf("default scan interval=%d, want 600", settings.ScanInterval)
+	}
+	if !settings.OHLCVArchiveEnabled || settings.OHLCVRetentionDays != 730 {
+		t.Fatalf("OHLCV defaults: enabled=%v retention=%d",
+			settings.OHLCVArchiveEnabled, settings.OHLCVRetentionDays)
+	}
 
 	settings.Mode = "live"
 	settings.LiveAck = true
