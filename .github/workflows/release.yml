@@ -49,7 +49,7 @@ jobs:
           cache: true
       - uses: actions/setup-node@v6
         with:
-          node-version: "20.19.0"
+          node-version: "24"
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
       - name: Validate versions
