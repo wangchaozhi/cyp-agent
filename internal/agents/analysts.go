@@ -126,7 +126,18 @@ func (TechnicalAnalyst) Run(
 		}
 		rationale = fmt.Sprintf("技术面：RSI=%.1f MACD=%s", *values.rsi, cross)
 	}
-	return reportFromVotes(contracts.AgentTechnical, stance, confidence, votes, rationale), nil
+	report := reportFromVotes(contracts.AgentTechnical, stance, confidence, votes, rationale)
+	if values.lastClose != nil && *values.lastClose > 0 {
+		regime := "震荡"
+		note := "趋势距离与波动均未达到状态阈值"
+		if values.atr != nil && *values.atr / *values.lastClose >= 0.03 {
+			regime, note = "高波动", "ATR/价格 ≥ 3%"
+		} else if values.smaFast != nil && values.smaSlow != nil && math.Abs(*values.smaFast-*values.smaSlow) / *values.lastClose >= 0.01 {
+			regime, note = "趋势", "SMA20/50 距离 ≥ 1%"
+		}
+		report.Signals = append(report.Signals, contracts.Signal{Name: "regime", Value: regime, Note: note})
+	}
+	return report, nil
 }
 
 func (DerivativesAnalyst) Run(
@@ -164,9 +175,29 @@ func (DerivativesAnalyst) Run(
 				Signal: contracts.Signal{Name: "ls_ratio", Value: ratio.String() + " 空头偏拥挤"}})
 		}
 	}
+	if data.Basis != nil {
+		basis := *data.Basis
+		switch {
+		case basis.Cmp(contracts.MustDecimal("0.005")) > 0:
+			votes = append(votes, Vote{Sign: -0.5, Weight: 0.4,
+				Signal: contracts.Signal{Name: "basis", Value: basis.String() + " 正基差偏高"}})
+		case basis.Cmp(contracts.MustDecimal("-0.005")) < 0:
+			votes = append(votes, Vote{Sign: 0.5, Weight: 0.4,
+				Signal: contracts.Signal{Name: "basis", Value: basis.String() + " 负基差偏深"}})
+		default:
+			votes = append(votes, Vote{Weight: 0.2,
+				Signal: contracts.Signal{Name: "basis", Value: basis.String() + " 正常"}})
+		}
+	}
 	stance, confidence := Blend(votes)
-	return reportFromVotes(contracts.AgentDerivatives, stance, confidence, votes,
-		"衍生品：资金费 "+funding.String()), nil
+	report := reportFromVotes(contracts.AgentDerivatives, stance, confidence, votes,
+		"衍生品：资金费 "+funding.String())
+	if data.OpenInterest != nil {
+		report.Signals = append(report.Signals, contracts.Signal{
+			Name: "open_interest", Value: data.OpenInterest.String(), Note: "单点 OI 仅作覆盖证明；需历史变化率才参与方向投票",
+		})
+	}
+	return report, nil
 }
 
 func (SentimentAnalyst) Run(

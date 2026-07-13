@@ -16,14 +16,18 @@ const initialEquity = 10_000.0
 
 // Params is the validated backtest input exposed by the HTTP API.
 type Params struct {
-	Symbol    string  `json:"symbol"`
-	Bars      int     `json:"bars"`
-	Window    int     `json:"window"`
-	Seed      int64   `json:"seed"`
-	Drift     float64 `json:"drift"`
-	Vol       float64 `json:"vol"`
-	Data      string  `json:"data"`
-	Timeframe string  `json:"timeframe"`
+	Symbol      string  `json:"symbol"`
+	Bars        int     `json:"bars"`
+	Window      int     `json:"window"`
+	Seed        int64   `json:"seed"`
+	Drift       float64 `json:"drift"`
+	Vol         float64 `json:"vol"`
+	Data        string  `json:"data"`
+	Timeframe   string  `json:"timeframe"`
+	FeeRate     float64 `json:"fee_rate"`
+	SlippageBPS float64 `json:"slippage_bps"`
+	SpreadBPS   float64 `json:"spread_bps"`
+	FundingRate float64 `json:"funding_rate"`
 }
 
 // Metrics mirrors the dashboard's existing backtest contract.
@@ -36,6 +40,7 @@ type Metrics struct {
 	NTrades       int      `json:"n_trades"`
 	WinRate       float64  `json:"win_rate"`
 	ProfitFactor  *float64 `json:"profit_factor"`
+	TotalCosts    float64  `json:"total_costs"`
 }
 
 // Trade is a completed long paper trade.
@@ -46,6 +51,7 @@ type Trade struct {
 	PnL    float64 `json:"pnl"`
 	BarIn  int     `json:"bar_in"`
 	BarOut int     `json:"bar_out"`
+	Costs  float64 `json:"costs"`
 }
 
 // Report is JSON-compatible with apps/web/src/shared/api/types.ts.
@@ -84,6 +90,15 @@ func (p Params) Validate() error {
 	}
 	if p.Data != "synthetic" && p.Data != "cex" {
 		return errors.New("data must be synthetic or cex")
+	}
+	if p.FeeRate < 0 || p.FeeRate > 0.01 {
+		return errors.New("fee_rate must be between 0 and 0.01")
+	}
+	if p.SlippageBPS < 0 || p.SlippageBPS > 1000 || p.SpreadBPS < 0 || p.SpreadBPS > 1000 {
+		return errors.New("slippage_bps and spread_bps must be between 0 and 1000")
+	}
+	if math.Abs(p.FundingRate) > 0.01 {
+		return errors.New("funding_rate must be between -0.01 and 0.01")
 	}
 	return nil
 }
@@ -136,11 +151,13 @@ func runPrices(p Params, strategy StrategyConfig, prices []float64) (Report, err
 	equityCurve := make([]float64, 0, p.Bars-p.Window+1)
 	strategyReturns := make([]float64, 0, p.Bars-p.Window)
 	trades := make([]Trade, 0)
+	totalCosts := 0.0
 
 	inPosition := false
 	entryPrice := 0.0
 	entryEquity := 0.0
 	entryBar := 0
+	entryCosts := 0.0
 	previousPrice := prices[p.Window-1]
 
 	for i := p.Window; i < len(prices); i++ {
@@ -155,6 +172,10 @@ func runPrices(p Params, strategy StrategyConfig, prices []float64) (Report, err
 		if inPosition && previousPrice > 0 {
 			periodReturn = prices[i]/previousPrice - 1
 			equity *= 1 + periodReturn
+			fundingCost := equity * p.FundingRate
+			equity -= fundingCost
+			totalCosts += fundingCost
+			entryCosts += fundingCost
 		}
 
 		protectiveExit := false
@@ -168,14 +189,26 @@ func runPrices(p Params, strategy StrategyConfig, prices []float64) (Report, err
 		}
 
 		if wantLong && !inPosition {
-			inPosition = true
-			entryPrice = prices[i]
 			entryEquity = equity
+			impactRate := (p.SlippageBPS + p.SpreadBPS/2) / 10_000
+			entryImpact := equity * impactRate
+			entryFee := equity * p.FeeRate
+			equity -= entryImpact + entryFee
+			totalCosts += entryImpact + entryFee
+			entryCosts = entryImpact + entryFee
+			inPosition = true
+			entryPrice = prices[i] * (1 + impactRate)
 			entryBar = i
 		} else if (!wantLong || protectiveExit) && inPosition {
+			exitImpactRate := (p.SlippageBPS + p.SpreadBPS/2) / 10_000
+			exitImpact := equity * exitImpactRate
+			exitFee := equity * p.FeeRate
+			equity -= exitImpact + exitFee
+			totalCosts += exitImpact + exitFee
+			entryCosts += exitImpact + exitFee
 			trades = append(trades, Trade{
-				Side: "long", Entry: finite(entryPrice), Exit: finite(prices[i]),
-				PnL: finite(equity - entryEquity), BarIn: entryBar, BarOut: i,
+				Side: "long", Entry: finite(entryPrice), Exit: finite(prices[i] * (1 - exitImpactRate)),
+				PnL: finite(equity - entryEquity), BarIn: entryBar, BarOut: i, Costs: finite(entryCosts),
 			})
 			inPosition = false
 		}
@@ -191,9 +224,15 @@ func runPrices(p Params, strategy StrategyConfig, prices []float64) (Report, err
 
 	if inPosition {
 		last := len(prices) - 1
+		exitImpactRate := (p.SlippageBPS + p.SpreadBPS/2) / 10_000
+		exitImpact := equity * exitImpactRate
+		exitFee := equity * p.FeeRate
+		equity -= exitImpact + exitFee
+		totalCosts += exitImpact + exitFee
+		entryCosts += exitImpact + exitFee
 		trades = append(trades, Trade{
-			Side: "long", Entry: finite(entryPrice), Exit: finite(prices[last]),
-			PnL: finite(equity - entryEquity), BarIn: entryBar, BarOut: last,
+			Side: "long", Entry: finite(entryPrice), Exit: finite(prices[last] * (1 - exitImpactRate)),
+			PnL: finite(equity - entryEquity), BarIn: entryBar, BarOut: last, Costs: finite(entryCosts),
 		})
 	}
 
@@ -231,10 +270,11 @@ func runPrices(p Params, strategy StrategyConfig, prices []float64) (Report, err
 			NTrades:       len(trades),
 			WinRate:       roundTo(finite(winRate), 4),
 			ProfitFactor:  profitFactor,
+			TotalCosts:    roundTo(finite(totalCosts), 2),
 		},
 		Trades:      trades,
 		EquityCurve: equityCurve,
-		Lessons:     []string{"移动均线仅用于迁移验收，不构成交易建议"},
+		Lessons:     []string{"回测已计入双边手续费、点差、滑点与逐周期资金费；移动均线逻辑仍待与实时多分析师策略完全统一"},
 		Params:      p,
 	}
 	return report, nil

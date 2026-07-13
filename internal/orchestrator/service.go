@@ -23,9 +23,11 @@ import (
 	"github.com/wangchaozhi/cyp-agent/internal/llm"
 	"github.com/wangchaozhi/cyp-agent/internal/metrics"
 	"github.com/wangchaozhi/cyp-agent/internal/observability"
+	"github.com/wangchaozhi/cyp-agent/internal/orders"
 	"github.com/wangchaozhi/cyp-agent/internal/persistence"
 	"github.com/wangchaozhi/cyp-agent/internal/portfolio"
 	"github.com/wangchaozhi/cyp-agent/internal/risk"
+	"github.com/wangchaozhi/cyp-agent/internal/riskstate"
 	runtimecore "github.com/wangchaozhi/cyp-agent/internal/runtime"
 	"github.com/wangchaozhi/cyp-agent/internal/venue"
 )
@@ -44,6 +46,7 @@ type Service struct {
 	dataSource   data.Source
 	fallbackData data.Source
 	repository   persistence.Repository
+	riskState    *riskstate.Tracker
 	safety       *runtimecore.SafetyState
 
 	pipelineMu  sync.RWMutex
@@ -53,16 +56,17 @@ type Service struct {
 	riskOfficer agents.RiskOfficer
 	reviewer    agents.Reviewer
 
-	ctx    context.Context
-	cancel context.CancelFunc
-	sem    chan struct{}
+	ctx     context.Context
+	cancel  context.CancelFunc
+	sem     chan struct{}
+	locks   *runtimecore.SymbolLocks
+	journal *orders.Journal
 
-	mu          sync.RWMutex
-	runs        map[string]contracts.RunResult
-	symbolLocks map[string]*sync.Mutex
-	marks       map[string]contracts.Decimal
-	stopped     bool
-	wg          sync.WaitGroup
+	mu      sync.RWMutex
+	runs    map[string]contracts.RunResult
+	marks   map[string]contracts.Decimal
+	stopped bool
+	wg      sync.WaitGroup
 }
 
 type Option func(*Service)
@@ -79,12 +83,27 @@ func WithRepository(repository persistence.Repository) Option {
 	return func(service *Service) { service.repository = repository }
 }
 
+func WithRiskState(tracker *riskstate.Tracker) Option {
+	return func(service *Service) { service.riskState = tracker }
+}
+
 func WithSafety(safety *runtimecore.SafetyState) Option {
 	return func(service *Service) { service.safety = safety }
 }
 
 func WithLLM(client *llm.Client) Option {
 	return func(service *Service) { service.llm = client }
+}
+
+// WithSymbolLocks shares one per-symbol lock instance with the runtime
+// scanner and reconciliation paths so that every action on a symbol is
+// serialized by a single mechanism instead of two independent lock maps.
+func WithSymbolLocks(locks *runtimecore.SymbolLocks) Option {
+	return func(service *Service) {
+		if locks != nil {
+			service.locks = locks
+		}
+	}
 }
 
 func New(
@@ -107,7 +126,9 @@ func New(
 	service := &Service{
 		control: state, venue: executionVenue, events: bus, gate: gate, metrics: runMetrics,
 		ctx: ctx, cancel: cancel, sem: make(chan struct{}, concurrency),
-		runs: make(map[string]contracts.RunResult), symbolLocks: make(map[string]*sync.Mutex),
+		locks:        runtimecore.NewSymbolLocks(),
+		journal:      orders.NewJournal(),
+		runs:         make(map[string]contracts.RunResult),
 		marks:        make(map[string]contracts.Decimal),
 		dataSource:   data.NewSyntheticMarketData(data.WithLiveTicks(true)),
 		fallbackData: data.NewSyntheticMarketData(data.WithLiveTicks(true)),
@@ -137,6 +158,39 @@ func (s *Service) LLMMetrics() llm.MetricsSnapshot {
 	return s.llm.Metrics()
 }
 
+// ReviewClosed completes lifecycle attribution after a position has actually
+// been closed. Entry execution review remains available on the original run,
+// while this review carries realized PnL and durable lessons.
+func (s *Service) ReviewClosed(
+	ctx context.Context,
+	position contracts.Position,
+	execution contracts.ExecutionResult,
+	pnl contracts.Decimal,
+	reference string,
+) (contracts.TradeReview, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	review, err := s.reviewer.RunClosed(ctx, position, execution, pnl, reference)
+	if err != nil {
+		return contracts.TradeReview{}, err
+	}
+	if s.repository != nil {
+		if err := s.repository.AppendLessons(ctx, position.Symbol, review.Lessons); err != nil {
+			return contracts.TradeReview{}, fmt.Errorf("persist close lessons: %w", err)
+		}
+		checkpointID := reference
+		if checkpointID == "" {
+			checkpointID = execution.ClientID
+		}
+		if err := s.checkpoint(ctx, checkpointID, "close_review", review); err != nil {
+			return contracts.TradeReview{}, err
+		}
+	}
+	s.events.Emit("reviewed", reference, map[string]any{"symbol": position.Symbol, "review": review})
+	return review, nil
+}
+
 // Start accepts a run immediately and executes it in a bounded goroutine.
 func (s *Service) Start(symbol string) (contracts.RunAccepted, error) {
 	symbol = strings.TrimSpace(symbol)
@@ -164,10 +218,13 @@ func (s *Service) Start(symbol string) (contracts.RunAccepted, error) {
 			s.finishCanceled(runID, symbol, s.ctx.Err())
 			return
 		}
-		lock := s.symbolLock(symbol)
-		lock.Lock()
-		defer lock.Unlock()
-		s.runAndRecord(s.ctx, runID, symbol)
+		err := s.locks.Do(s.ctx, symbol, func(runContext context.Context) error {
+			s.runAndRecord(runContext, runID, symbol)
+			return nil
+		})
+		if err != nil {
+			s.finishCanceled(runID, symbol, err)
+		}
 	}()
 	return contracts.RunAccepted{RunID: runID, Symbol: symbol}, nil
 }
@@ -309,6 +366,13 @@ func (s *Service) run(ctx context.Context, runID, symbol string) contracts.RunRe
 	if !equity.IsPositive() {
 		equity = balances.FreeQuote
 	}
+	accountRisk := riskstate.Snapshot{CurrentEquity: equity}
+	if s.riskState != nil {
+		if err := s.riskState.ObserveEquity(ctx, equity); err != nil {
+			return fail(result, fmt.Errorf("persist risk state: %w", err))
+		}
+		accountRisk = s.riskState.Snapshot(equity)
+	}
 	positions, err := s.venue.Positions(ctx)
 	if err != nil {
 		return fail(result, fmt.Errorf("positions: %w", err))
@@ -393,8 +457,13 @@ func (s *Service) run(ctx context.Context, runID, symbol string) contracts.RunRe
 		GrossExposureQuote:      view.Gross,
 		SymbolExposureQuote:     portfolio.SymbolNotional(view, symbol),
 		CorrelatedExposureQuote: &correlated,
-		DailyDrawdown:           contracts.Zero(), WeeklyDrawdown: contracts.Zero(), TotalDrawdown: contracts.Zero(),
-		Kill: settings.Kill, Reconciling: reconciling,
+		PortfolioCVARQuote:      accountRisk.PortfolioCVARQuote,
+		OrdersLastHour:          accountRisk.OrdersLastHour,
+		ConsecutiveLosses:       accountRisk.ConsecutiveLosses,
+		DailyDrawdown:           accountRisk.DailyDrawdown,
+		WeeklyDrawdown:          accountRisk.WeeklyDrawdown,
+		TotalDrawdown:           accountRisk.TotalDrawdown,
+		Kill:                    settings.Kill, Reconciling: reconciling,
 		EstimatedSlippageBPS:      preflight.EstSlippageBPS,
 		EstimatedLiquidationPrice: preflight.EstLiquidationPrice,
 		EstimatedPriceImpact:      preflight.EstPriceImpact,
@@ -461,16 +530,33 @@ func (s *Service) run(ctx context.Context, runID, symbol string) contracts.RunRe
 	if err := s.checkpoint(ctx, runID, "order_intent", orderIntent); err != nil {
 		return fail(result, err)
 	}
+	_ = s.journal.Open(runID+":open", orderIntent)
+	_ = s.journal.Transition(runID+":submit", orderIntent.ClientID, contracts.OrderStatusSubmitting, nil, "")
 	executionSpan := startSpan(ctx, "execution")
 	execution, err := s.venue.Place(ctx, orderIntent)
 	executionSpan.End(err)
 	if err != nil {
+		_ = s.journal.Transition(runID+":fail", orderIntent.ClientID, contracts.OrderStatusFailed, nil, err.Error())
 		return fail(result, fmt.Errorf("execute: %w", err))
 	}
+	s.recordExecution(runID, orderIntent.ClientID, execution)
 	result.Execution = &execution
 	s.events.Emit("executed", runID, map[string]any{"symbol": symbol, "execution": execution})
 	if err := s.checkpoint(ctx, runID, "execution", execution); err != nil {
 		return fail(result, err)
+	}
+	if s.riskState != nil && execution.Status == contracts.OrderStatusFilled {
+		balancesAfter, balanceErr := s.venue.Balances(ctx)
+		if balanceErr != nil {
+			return fail(result, fmt.Errorf("post-execution balances: %w", balanceErr))
+		}
+		equityAfter := balancesAfter.TotalQuote
+		if !equityAfter.IsPositive() {
+			equityAfter = balancesAfter.FreeQuote
+		}
+		if err := s.riskState.RecordOpen(ctx, runID, finalProposal, execution, equityAfter); err != nil {
+			return fail(result, fmt.Errorf("persist executed trade risk state: %w", err))
+		}
 	}
 
 	reviewSpan := startSpan(ctx, "review")
@@ -550,6 +636,31 @@ func (s *Service) checkNewPosition(settings config.Settings) error {
 	return nil
 }
 
+// recordExecution journals the venue outcome. The journal only accepts legal
+// transitions, so a venue reporting an unexpected status leaves the order in
+// its last consistent state instead of corrupting the log.
+func (s *Service) recordExecution(runID, clientID string, execution contracts.ExecutionResult) {
+	status := execution.Status
+	if !orders.CanTransition(contracts.OrderStatusSubmitting, status) {
+		status = contracts.OrderStatusUnknown
+	}
+	_ = s.journal.Transition(runID+":result", clientID, status, &execution, "")
+	if execution.Status == contracts.OrderStatusFilled && len(execution.ProtectiveOrders) > 0 {
+		_ = s.journal.Transition(runID+":protective", clientID, contracts.OrderStatusProtectivePlaced, nil, "")
+	}
+}
+
+// Order exposes the journaled state of one order for reconciliation and the
+// API layer.
+func (s *Service) Order(clientID string) (orders.Order, bool) {
+	return s.journal.Get(clientID)
+}
+
+// UnresolvedOrders lists journaled orders that still need reconciliation.
+func (s *Service) UnresolvedOrders() []orders.Order {
+	return s.journal.Unresolved()
+}
+
 func (s *Service) checkpoint(ctx context.Context, runID, step string, value any) error {
 	if s.repository == nil {
 		return nil
@@ -566,17 +677,6 @@ func startSpan(ctx context.Context, name string) *observability.Span {
 		return &observability.Span{}
 	}
 	return trace.StartSpan(name)
-}
-
-func (s *Service) symbolLock(symbol string) *sync.Mutex {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	lock := s.symbolLocks[symbol]
-	if lock == nil {
-		lock = &sync.Mutex{}
-		s.symbolLocks[symbol] = lock
-	}
-	return lock
 }
 
 func (s *Service) setMark(symbol string, mark contracts.Decimal) {

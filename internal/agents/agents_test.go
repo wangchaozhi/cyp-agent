@@ -103,10 +103,15 @@ func TestAnalystsRuleOutputsAndMissingDataDegrade(t *testing.T) {
 
 	funding := contracts.MustDecimal("0.001")
 	ratio := contracts.MustDecimal("1.20")
+	basis := contracts.MustDecimal("0.01")
+	openInterest := contracts.MustDecimal("123456")
 	derivatives, err := (DerivativesAnalyst{}).Run(context.Background(), contracts.MarketSnapshot{
-		Derivatives: &contracts.DerivativesData{FundingRate: &funding, LongShortRatio: &ratio},
+		Derivatives: &contracts.DerivativesData{
+			FundingRate: &funding, LongShortRatio: &ratio, Basis: &basis, OpenInterest: &openInterest,
+		},
 	}, AgentContext{})
-	if err != nil || derivatives.Stance != contracts.StanceBearish || derivatives.Degraded {
+	if err != nil || derivatives.Stance != contracts.StanceBearish || derivatives.Degraded ||
+		!hasSignal(derivatives.Signals, "basis") || !hasSignal(derivatives.Signals, "open_interest") {
 		t.Fatalf("derivatives = %+v, %v", derivatives, err)
 	}
 
@@ -127,6 +132,15 @@ func TestAnalystsRuleOutputsAndMissingDataDegrade(t *testing.T) {
 	if err != nil || onchain.Stance != contracts.StanceBullish {
 		t.Fatalf("onchain = %+v, %v", onchain, err)
 	}
+}
+
+func hasSignal(signals []contracts.Signal, name string) bool {
+	for _, signal := range signals {
+		if signal.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 type failingAnalyst struct{ id contracts.AgentID }
@@ -273,7 +287,7 @@ func TestReviewerRuleFallback(t *testing.T) {
 	review, err := reviewer.Run(context.Background(), proposal, contracts.ExecutionResult{
 		Status: contracts.OrderStatusFilled, SlippageBPS: &slippage,
 	}, AgentContext{}, "run-1")
-	if err != nil || math.Abs(review.Score-0.4) > 1e-12 || len(review.Lessons) != 2 || review.ProposalRef != "run-1" {
+	if err != nil || math.Abs(review.Score-0.4) > 1e-12 || len(review.Lessons) != 2 || review.ProposalRef != "run-1" || review.Kind != "entry" {
 		t.Fatalf("review = %+v, %v", review, err)
 	}
 	failure := "venue unavailable"
@@ -282,5 +296,15 @@ func TestReviewerRuleFallback(t *testing.T) {
 	}, AgentContext{}, "run-2")
 	if err != nil || review.Score != 0.2 || !strings.Contains(fmt.Sprint(review.Lessons), failure) {
 		t.Fatalf("failure review = %+v, %v", review, err)
+	}
+	price := contracts.MustDecimal("90")
+	review, err = reviewer.RunClosed(context.Background(), contracts.Position{
+		Symbol: "BTC/USDT", Side: contracts.SideLong,
+	}, contracts.ExecutionResult{
+		Status: contracts.OrderStatusFilled, AvgPrice: &price, SlippageBPS: &slippage,
+	}, contracts.MustDecimal("-11"), "run-1")
+	if err != nil || review.Kind != "close" || review.PNLQuote.String() != "-11" || math.Abs(review.Score-0.1) > 1e-12 ||
+		!strings.Contains(fmt.Sprint(review.Lessons), "亏损") {
+		t.Fatalf("close review = %+v, %v", review, err)
 	}
 }

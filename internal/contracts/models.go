@@ -258,6 +258,7 @@ type Balances struct {
 type TradeReview struct {
 	Symbol      string       `json:"symbol"`
 	ProposalRef string       `json:"proposal_ref"`
+	Kind        string       `json:"kind"`
 	Score       float64      `json:"score"`
 	PNLQuote    Decimal      `json:"pnl_quote"`
 	SlippageBPS *Decimal     `json:"slippage_bps"`

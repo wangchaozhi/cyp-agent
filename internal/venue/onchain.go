@@ -14,7 +14,7 @@ import (
 
 var (
 	ErrOnchainNotConfigured   = errors.New("链上场所未配置")
-	ErrOnchainTradingDisabled = errors.New("Go 首版链上执行默认硬禁用")
+	ErrOnchainTradingDisabled = errors.New("首版 Go 默认硬禁用链上执行")
 	ErrRouterNotWhitelisted   = errors.New("DEX router 不在白名单")
 	ErrMEVProtectionRequired  = errors.New("DEX 路由未启用 MEV 防护")
 )

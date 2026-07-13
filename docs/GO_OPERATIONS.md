@@ -147,7 +147,7 @@ go run ./cmd/cyp sweep -thresholds 0.08,0.12,0.18 -top 5
 | `CYP_EXECUTION_VENUE` | `paper` | 执行场所；非 Paper 不会下单 |
 | `CYP_DATA_SOURCE` | `synthetic` | `synthetic` 或 `cex` |
 | `CYP_CEX_ID` | `binance` | 公共/只读行情选择 `binance` 或 `okx` |
-| `CYP_APPROVAL` | `cli` | `cli`、`dashboard` 均进入人工 pending；`auto` 受白名单、风险和额度限制 |
+| `CYP_APPROVAL` | `dashboard` | 人工审批进入 pending 队列（`cli` 为废弃别名，等同 `dashboard`）；`auto` 受白名单、风险和额度限制 |
 | `CYP_KILL` | `0` | 开启后阻止新仓，仍允许平仓 |
 | `CYP_RUNTIME_AUTOSTART` | `false` | 是否启动扫描和持仓监控循环 |
 | `CYP_WATCHLIST` | `BTC/USDT` | 扫描标的，逗号分隔 |

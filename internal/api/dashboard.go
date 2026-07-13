@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"strings"
 
@@ -41,6 +40,10 @@ func (s *Server) positions(w http.ResponseWriter, request *http.Request) {
 		views = append(views, s.positionView(request.Context(), position))
 	}
 	writeJSON(w, http.StatusOK, views)
+}
+
+func (s *Server) trades(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, s.riskState.Trades())
 }
 
 func (s *Server) positionView(ctx context.Context, position contracts.Position) positionView {
@@ -123,6 +126,29 @@ func (s *Server) closePosition(w http.ResponseWriter, request *http.Request) {
 		writeError(w, http.StatusBadRequest, detail)
 		return
 	}
+	if s.riskState != nil {
+		balances, balanceErr := s.venue.Balances(request.Context())
+		if balanceErr != nil {
+			s.logger.ErrorContext(request.Context(), "risk_state_close_balance_failed", "error", balanceErr.Error())
+		} else {
+			equity := balances.TotalQuote
+			if !equity.IsPositive() {
+				equity = balances.FreeQuote
+			}
+			reference := result.ClientID
+			if opened, ok := s.riskState.OpenTrade(found.Symbol, found.Instrument); ok && opened.RunID != "" {
+				reference = opened.RunID
+			}
+			record, stateErr := s.riskState.RecordClose(request.Context(), reference, *found, result, equity)
+			if stateErr != nil {
+				s.logger.ErrorContext(request.Context(), "risk_state_close_persist_failed", "error", stateErr.Error())
+			} else if _, reviewErr := s.orchestrator.ReviewClosed(
+				request.Context(), *found, result, record.PNLQuote, reference,
+			); reviewErr != nil {
+				s.logger.ErrorContext(request.Context(), "close_review_failed", "error", reviewErr.Error())
+			}
+		}
+	}
 	writeJSON(w, http.StatusOK, result)
 }
 
@@ -156,6 +182,9 @@ type riskBoard struct {
 	Drawdown          drawdownSnapshot   `json:"drawdown"`
 	OrdersLastHour    int                `json:"orders_last_hour"`
 	ConsecutiveLosses int                `json:"consecutive_losses"`
+	RealizedPNL       contracts.Decimal  `json:"realized_pnl"`
+	PortfolioCVAR     *contracts.Decimal `json:"portfolio_cvar_quote"`
+	CVaRSamples       int                `json:"cvar_samples"`
 	MarginRatio       *contracts.Decimal `json:"margin_ratio"`
 	PerpetualNotional contracts.Decimal  `json:"perp_notional"`
 	Limits            riskLimitSnapshot  `json:"limits"`
@@ -191,10 +220,15 @@ func (s *Server) riskSnapshot(w http.ResponseWriter, request *http.Request) {
 		}
 	}
 	riskConfig := settings.Risk
+	riskState := s.riskState.Snapshot(equity)
 	writeJSON(w, http.StatusOK, riskBoard{
 		Mode: settings.Mode, Kill: settings.Kill, Equity: equity,
-		Drawdown:       drawdownSnapshot{Daily: contracts.Zero(), Weekly: contracts.Zero(), Total: contracts.Zero()},
-		OrdersLastHour: 0, ConsecutiveLosses: 0, MarginRatio: marginRatio,
+		Drawdown: drawdownSnapshot{
+			Daily: riskState.DailyDrawdown, Weekly: riskState.WeeklyDrawdown, Total: riskState.TotalDrawdown,
+		},
+		OrdersLastHour: riskState.OrdersLastHour, ConsecutiveLosses: riskState.ConsecutiveLosses,
+		RealizedPNL: riskState.RealizedPNL, PortfolioCVAR: riskState.PortfolioCVARQuote,
+		CVaRSamples: riskState.CVaRSamples, MarginRatio: marginRatio,
 		PerpetualNotional: perpetualNotional,
 		Limits: riskLimitSnapshot{
 			DailyDrawdown:        riskConfig.DailyDrawdownLimit,
@@ -234,8 +268,4 @@ func (s *Server) portfolioSnapshot(w http.ResponseWriter, request *http.Request)
 	writeJSON(w, http.StatusOK, portfolio.Build(
 		positions, marks, equity, settings.Risk.MaxCorrelatedExposure,
 	))
-}
-
-func positionKey(position contracts.Position) string {
-	return fmt.Sprintf("%s:%s", position.Symbol, position.Instrument)
 }

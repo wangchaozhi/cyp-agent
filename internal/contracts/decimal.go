@@ -85,7 +85,7 @@ func ParseDecimal(text string) (Decimal, error) {
 	mantissa := text
 	exponent := int64(0)
 	if index := strings.IndexAny(text, "eE"); index >= 0 {
-		if strings.IndexAny(text[index+1:], "eE") >= 0 {
+		if strings.ContainsAny(text[index+1:], "eE") {
 			return Decimal{}, fmt.Errorf("%w: %q", errInvalidDecimal, original)
 		}
 		mantissa = text[:index]

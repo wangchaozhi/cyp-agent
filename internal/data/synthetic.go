@@ -183,6 +183,9 @@ func (s *SyntheticMarketData) Snapshot(
 	openInterest, _ := decimalFixed(100_000_000+rng.Float64()*400_000_000, 0)
 	longShort, _ := decimalFixed(0.8+rng.Float64()*0.5, 3)
 	fearGreed := 20 + rng.Intn(61)
+	smartMoney, _ := decimalFixed(rng.NormFloat64()*500_000, 0)
+	netflow, _ := decimalFixed(rng.NormFloat64()*200_000, 0)
+	liquidity, _ := decimalFixed(5_000_000+rng.Float64()*45_000_000, 0)
 	return contracts.MarketSnapshot{
 		Symbol: symbol,
 		Venue:  "synthetic",
@@ -194,6 +197,11 @@ func (s *SyntheticMarketData) Snapshot(
 			LongShortRatio: &longShort,
 		},
 		Sentiment: &contracts.SentimentData{FearGreed: &fearGreed},
+		Onchain: &contracts.OnchainData{
+			SmartMoneyFlow:  &smartMoney,
+			ExchangeNetflow: &netflow,
+			LiquidityUSD:    &liquidity,
+		},
 	}, nil
 }
 

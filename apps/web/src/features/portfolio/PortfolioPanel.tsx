@@ -53,14 +53,14 @@ function ExposureHeatmap({ items, gross }: { items: SymbolExposure[]; gross: num
 export function PortfolioPanel({ portfolio }: { portfolio: PortfolioSnapshot | null }) {
   if (!portfolio) {
     return (
-      <Panel title="组合敞口" icon={<Blocks size={16} />}>
+      <Panel title="敞口结构" icon={<Blocks size={16} />} className="portfolio-panel">
         <EmptyState>加载中</EmptyState>
       </Panel>
     );
   }
 
   return (
-    <Panel title="组合敞口" icon={<Blocks size={16} />}>
+    <Panel title="敞口结构" icon={<Blocks size={16} />} className="portfolio-panel">
       <div className="metric-stack">
         <MetricRow label="净值 / 持仓数" value={`${formatAmount(portfolio.equity)} / ${portfolio.n_positions}`} />
         <MetricRow label="总名义敞口" value={formatAmount(portfolio.gross)} />

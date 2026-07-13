@@ -10,14 +10,14 @@ import { Panel } from "../../shared/ui/Panel";
 export function RiskPanel({ risk }: { risk: RiskSnapshot | null }) {
   if (!risk) {
     return (
-      <Panel title="风控" icon={<ShieldCheck size={16} />}>
+      <Panel title="风险雷达" icon={<ShieldCheck size={16} />} className="risk-panel">
         <EmptyState>加载中</EmptyState>
       </Panel>
     );
   }
 
   return (
-    <Panel title="风控" icon={<ShieldCheck size={16} />}>
+    <Panel title="风险雷达" icon={<ShieldCheck size={16} />} className="risk-panel">
       <div className="metric-stack">
         <MetricRow label="账户净值" value={formatAmount(risk.equity)} />
         <MetricRow
@@ -37,6 +37,24 @@ export function RiskPanel({ risk }: { risk: RiskSnapshot | null }) {
         <Meter value={risk.drawdown.total} max={risk.limits.total_dd} />
         <MetricRow label="下单 / 小时" value={`${risk.orders_last_hour} / ${risk.limits.max_orders_per_hour}`} />
         <MetricRow label="连续亏损" value={`${risk.consecutive_losses} / ${risk.limits.max_consecutive_losses}`} />
+        <MetricRow
+          label="已实现盈亏"
+          value={
+            <span className={toNumber(risk.realized_pnl) < 0 ? "tone-short" : "tone-long"}>
+              {formatAmount(risk.realized_pnl)}
+            </span>
+          }
+        />
+        <MetricRow
+          label="历史 CVaR (95%)"
+          value={
+            risk.portfolio_cvar_quote != null ? (
+              `${formatAmount(risk.portfolio_cvar_quote)} (${risk.cvar_samples} 样本)`
+            ) : (
+              <span className="tone-muted">样本不足 ({risk.cvar_samples}/20)</span>
+            )
+          }
+        />
         <MetricRow
           label="保证金健康度"
           value={

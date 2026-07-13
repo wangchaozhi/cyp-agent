@@ -1,6 +1,13 @@
 -- cyp-agent Go backend baseline schema.
 -- Monetary values use NUMERIC; secrets and raw authorization material never
 -- belong in this database.
+--
+-- Tables actively used by the current release (PostgresRepository):
+--   schema_migrations, lessons, checkpoints, ohlcv (backtest archive).
+-- The remaining tables (runs, approvals, orders, order_events,
+-- runtime_controls, reconciliations, audit_events) are reserved for the G4
+-- persistent order state machine (docs/ROADMAP.md) and stay empty until the
+-- code that writes them ships.
 
 CREATE EXTENSION IF NOT EXISTS timescaledb;
 

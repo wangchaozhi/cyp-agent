@@ -105,16 +105,21 @@ func MACD(values []float64, fast, slow, signal int) (MACDValue, bool) {
 	return MACDValue{Line: series[len(series)-1], Signal: signalLine}, true
 }
 
-// ATR returns the arithmetic mean of the latest true ranges.
+// ATR returns the arithmetic mean of the latest true ranges. It reports
+// false when any candle carries a non-convertible decimal so degraded data
+// never silently reads as a zero range.
 func ATR(candles []contracts.Candle, period int) (float64, bool) {
 	if period <= 0 || len(candles) < period+1 {
 		return 0, false
 	}
 	ranges := make([]float64, 0, len(candles)-1)
 	for index := 1; index < len(candles); index++ {
-		high, _ := candles[index].High.Float64()
-		low, _ := candles[index].Low.Float64()
-		previousClose, _ := candles[index-1].Close.Float64()
+		high, highErr := candles[index].High.Float64()
+		low, lowErr := candles[index].Low.Float64()
+		previousClose, closeErr := candles[index-1].Close.Float64()
+		if highErr != nil || lowErr != nil || closeErr != nil {
+			return 0, false
+		}
 		value := math.Max(high-low, math.Max(math.Abs(high-previousClose), math.Abs(low-previousClose)))
 		ranges = append(ranges, value)
 	}

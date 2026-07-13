@@ -30,14 +30,18 @@ type SettingsUpdateRequest struct {
 }
 
 type BacktestRequest struct {
-	Symbol    *string `json:"symbol,omitempty"`
-	Bars      int     `json:"bars"`
-	Window    int     `json:"window"`
-	Seed      int     `json:"seed"`
-	Drift     float64 `json:"drift"`
-	Vol       float64 `json:"vol"`
-	Data      string  `json:"data"`
-	Timeframe string  `json:"timeframe"`
+	Symbol      *string `json:"symbol,omitempty"`
+	Bars        int     `json:"bars"`
+	Window      int     `json:"window"`
+	Seed        int     `json:"seed"`
+	Drift       float64 `json:"drift"`
+	Vol         float64 `json:"vol"`
+	Data        string  `json:"data"`
+	Timeframe   string  `json:"timeframe"`
+	FeeRate     float64 `json:"fee_rate"`
+	SlippageBPS float64 `json:"slippage_bps"`
+	SpreadBPS   float64 `json:"spread_bps"`
+	FundingRate float64 `json:"funding_rate"`
 }
 
 type HealthStatus struct {

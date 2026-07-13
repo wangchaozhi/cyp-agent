@@ -97,9 +97,10 @@ type Settings struct {
 	OKXPassword      Secret
 	OKXDemo          bool
 
-	AlertWebhook string
-	EVMRPCURL    string
-	Signer       string
+	AlertWebhook   string
+	EVMRPCURL      string
+	Signer         string
+	OnchainDataAPI string
 
 	RuntimeAutostart bool
 	ScanInterval     int
@@ -145,7 +146,7 @@ func DefaultRiskConfig() RiskConfig {
 func DefaultSettings() Settings {
 	return Settings{
 		Mode:             "paper",
-		Approval:         "cli",
+		Approval:         "dashboard",
 		AutoMaxRiskScore: 0.5,
 		AutoMaxQuote:     contracts.MustDecimal("200"),
 		ExecutionVenue:   "paper",

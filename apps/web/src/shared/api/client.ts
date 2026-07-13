@@ -4,6 +4,7 @@ import type {
   BacktestRequest,
   ExecutionResult,
   HealthStatus,
+  MarketHistoryResponse,
   MarketSnapshotInfo,
   MetricsSnapshot,
   PendingApproval,
@@ -12,6 +13,7 @@ import type {
   RiskSnapshot,
   RuntimeSettings,
   RuntimeSettingsUpdate,
+  TradeRecord,
   VenueInfo,
 } from "./types";
 
@@ -49,12 +51,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   const response = await fetch(path, { ...init, headers });
   if (!response.ok) {
+    // The body can only be consumed once, so read it as text first and only
+    // then try to extract a structured error detail from it.
     let detail = response.statusText;
     try {
-      const body = (await response.json()) as { detail?: string };
-      detail = body.detail || detail;
+      const text = await response.text();
+      detail = text || detail;
+      const body = JSON.parse(text) as { detail?: string };
+      if (body.detail) detail = body.detail;
     } catch {
-      detail = await response.text();
+      // Keep the best detail collected so far.
     }
     throw new Error(detail || `HTTP ${response.status}`);
   }
@@ -73,6 +79,7 @@ export const cypApi = {
     }),
   pending: () => request<PendingApproval[]>("/api/pending"),
   positions: () => request<Position[]>("/api/positions"),
+  trades: () => request<TradeRecord[]>("/api/trades"),
   closePosition: (payload: { symbol: string; instrument: string }) =>
     request<ExecutionResult>("/api/positions/close", {
       method: "POST",
@@ -81,6 +88,11 @@ export const cypApi = {
   risk: () => request<RiskSnapshot>("/api/risk"),
   market: (symbol?: string) =>
     request<MarketSnapshotInfo>(`/api/market${symbol ? `?symbol=${encodeURIComponent(symbol)}` : ""}`),
+  marketHistory: (symbols: string[], timeframe: string, limit: number) => {
+    const params = new URLSearchParams({ timeframe, limit: String(limit) });
+    symbols.forEach((symbol) => params.append("symbol", symbol));
+    return request<MarketHistoryResponse>(`/api/market/history?${params.toString()}`);
+  },
   metrics: () => request<MetricsSnapshot>("/api/metrics"),
   portfolio: () => request<PortfolioSnapshot>("/api/portfolio"),
   backtest: (payload: BacktestRequest) =>

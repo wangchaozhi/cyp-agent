@@ -35,6 +35,8 @@ jobs:
           fi
       - name: Vet
         run: go vet ./...
+      - name: Staticcheck
+        run: go run honnef.co/go/tools/cmd/staticcheck@2025.1.1 ./...
       - name: Test with race detector
         run: go test -race -count=1 ./...
       - name: Build commands
@@ -68,6 +70,9 @@ jobs:
       - name: Typecheck
         working-directory: apps/web
         run: npm run typecheck
+      - name: Test
+        working-directory: apps/web
+        run: npm run test
       - name: Build
         working-directory: apps/web
         run: npm run build

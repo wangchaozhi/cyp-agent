@@ -83,6 +83,20 @@ export interface Position {
   funding_rate?: Numeric | null;
 }
 
+export interface TradeRecord {
+  client_id: string;
+  run_id?: string;
+  kind: "open" | "close";
+  symbol: string;
+  side: Exclude<Side, "flat">;
+  instrument: Instrument;
+  price: Numeric;
+  size_base: Numeric;
+  fee_quote: Numeric;
+  pnl_quote: Numeric;
+  ts: string;
+}
+
 export interface RiskSnapshot {
   mode: string;
   kill: boolean;
@@ -94,6 +108,9 @@ export interface RiskSnapshot {
   };
   orders_last_hour: number;
   consecutive_losses: number;
+  realized_pnl: Numeric;
+  portfolio_cvar_quote?: Numeric | null;
+  cvar_samples: number;
   margin_ratio?: Numeric | null;
   perp_notional?: Numeric;
   limits: {
@@ -207,6 +224,22 @@ export interface MarketSnapshotInfo {
   arb_hints: string[];
 }
 
+export interface MarketHistoryPoint {
+  ts: string;
+  close: Numeric;
+}
+
+export interface MarketHistorySeries {
+  symbol: string;
+  points: MarketHistoryPoint[];
+}
+
+export interface MarketHistoryResponse {
+  venue: string;
+  timeframe: string;
+  series: MarketHistorySeries[];
+}
+
 export interface BacktestRequest {
   symbol?: string;
   bars: number;
@@ -216,6 +249,10 @@ export interface BacktestRequest {
   vol: number;
   data?: "synthetic" | "cex";
   timeframe?: string;
+  fee_rate: number;
+  slippage_bps: number;
+  spread_bps: number;
+  funding_rate: number;
 }
 
 export interface BacktestMetrics {
@@ -227,6 +264,7 @@ export interface BacktestMetrics {
   n_trades: number;
   win_rate: number;
   profit_factor: number | null;
+  total_costs: number;
 }
 
 export interface BacktestTrade {
@@ -236,6 +274,7 @@ export interface BacktestTrade {
   pnl: number;
   bar_in: number;
   bar_out: number;
+  costs: number;
 }
 
 export interface BacktestReport {
@@ -286,6 +325,7 @@ export interface ApprovalDecision {
 export interface TradeReview {
   symbol: string;
   proposal_ref: string;
+  kind: "entry" | "close";
   score: number;
   pnl_quote: Numeric;
   slippage_bps?: Numeric | null;

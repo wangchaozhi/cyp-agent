@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/wangchaozhi/cyp-agent/internal/observability"
 	"github.com/wangchaozhi/cyp-agent/internal/orchestrator"
 	"github.com/wangchaozhi/cyp-agent/internal/persistence"
+	"github.com/wangchaozhi/cyp-agent/internal/riskstate"
 	runtimecore "github.com/wangchaozhi/cyp-agent/internal/runtime"
 	"github.com/wangchaozhi/cyp-agent/internal/venue"
 )
@@ -36,6 +38,7 @@ type Application struct {
 	Metrics        *metrics.Runs
 	RuntimeMetrics *observability.RuntimeMetrics
 	Safety         *runtimecore.SafetyState
+	RiskState      *riskstate.Tracker
 	Runtime        *runtimecore.Engine
 	Orchestrator   *orchestrator.Service
 	API            *api.Server
@@ -113,6 +116,20 @@ func New(
 			source = data.NewSyntheticMarketData(data.WithLiveTicks(true))
 		}
 	}
+	if api := strings.TrimSpace(settings.OnchainDataAPI); api != "" {
+		fetcher, fetchErr := data.NewHTTPOnchainFetcher(api, nil)
+		if fetchErr != nil {
+			_ = binance.Close()
+			_ = okx.Close()
+			return nil, fmt.Errorf("configure onchain data API: %w", fetchErr)
+		}
+		source, err = data.NewOnchainEnrichedSource(source, data.NewOnchainDataSource(fetcher))
+		if err != nil {
+			_ = binance.Close()
+			_ = okx.Close()
+			return nil, err
+		}
+	}
 	aggregator := configured.market
 	if aggregator == nil && settings.DataSource == "cex" {
 		aggregator = data.NewMarketAggregator([]data.TickerVenue{binance, okx})
@@ -128,14 +145,28 @@ func New(
 		}
 	}
 	runMetrics := metrics.NewRuns()
+	balances, err := paper.Balances(ctx)
+	if err != nil {
+		_ = repository.Close()
+		return nil, fmt.Errorf("read initial paper balance: %w", err)
+	}
+	riskTracker, err := riskstate.New(ctx, repository, balances.TotalQuote)
+	if err != nil {
+		_ = repository.Close()
+		return nil, fmt.Errorf("restore risk state: %w", err)
+	}
 	runtimeMetrics := &observability.RuntimeMetrics{}
 	timeout := time.Duration(settings.Risk.ApprovalTimeoutSeconds) * time.Second
 	gate := approval.NewPendingGate(timeout, bus)
 	safety := runtimecore.NewSafetyState()
 	baseLLM := llm.FromSettings(settings)
+	// Scanner, manual API runs, and the orchestrator itself serialize on this
+	// single per-symbol lock instance instead of maintaining separate maps.
+	locks := runtimecore.NewSymbolLocks()
 	orch := orchestrator.New(ctx, state, paper, bus, gate, runMetrics,
 		orchestrator.WithDataSource(source), orchestrator.WithRepository(repository),
-		orchestrator.WithSafety(safety), orchestrator.WithLLM(baseLLM))
+		orchestrator.WithRiskState(riskTracker), orchestrator.WithSafety(safety), orchestrator.WithLLM(baseLLM),
+		orchestrator.WithSymbolLocks(locks))
 
 	reconciler, err := runtimecore.NewVenueReconciler(paper, bus, logger)
 	if err != nil {
@@ -149,7 +180,6 @@ func New(
 		_ = repository.Close()
 		return nil, err
 	}
-	locks := runtimecore.NewSymbolLocks()
 	scanner, err := runtimecore.NewScanner(runtimecore.ScannerConfig{
 		Symbols: settings.WatchlistSymbols(), Interval: time.Duration(settings.ScanInterval) * time.Second,
 		Run: func(_ context.Context, symbol string) error {
@@ -202,7 +232,8 @@ func New(
 		Control: state, Venue: paper, Events: bus, Gate: gate, Orchestrator: orch,
 		Metrics: runMetrics, RuntimeMetrics: runtimeMetrics, Registry: registry,
 		Market: aggregator, Safety: safety, HistoricalVenue: historicalVenue,
-		WebDir: webDir, Logger: logger, APIToken: settings.APIToken.Reveal(),
+		RiskState: riskTracker,
+		WebDir:    webDir, Logger: logger, APIToken: settings.APIToken.Reveal(),
 	})
 	if err != nil {
 		stopContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -217,7 +248,8 @@ func New(
 		Control: state, Events: bus, Gate: gate, Venue: paper, Registry: registry,
 		DataSource: source, Market: aggregator, Repository: repository,
 		Metrics: runMetrics, RuntimeMetrics: runtimeMetrics, Safety: safety,
-		Runtime: runtimeEngine, Orchestrator: orch, API: server,
+		RiskState: riskTracker,
+		Runtime:   runtimeEngine, Orchestrator: orch, API: server,
 	}, nil
 }
 

@@ -24,6 +24,10 @@ const DEFAULT_REQUEST: BacktestRequest = {
   vol: 0.01,
   data: "synthetic",
   timeframe: "1h",
+  fee_rate: 0.0004,
+  slippage_bps: 5,
+  spread_bps: 2,
+  funding_rate: 0,
 };
 
 const TIMEFRAMES = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"];
@@ -42,6 +46,10 @@ const NUMBER_FIELDS: Array<{
   { name: "seed", label: "Seed", min: 0, max: 1000000, step: 1 },
   { name: "drift", label: "Drift", min: -0.05, max: 0.05, step: 0.0005 },
   { name: "vol", label: "Vol", min: 0.0001, max: 0.2, step: 0.001 },
+  { name: "fee_rate", label: "手续费率", min: 0, max: 0.01, step: 0.0001 },
+  { name: "slippage_bps", label: "滑点 bps", min: 0, max: 1000, step: 1 },
+  { name: "spread_bps", label: "点差 bps", min: 0, max: 1000, step: 1 },
+  { name: "funding_rate", label: "每周期资金费", min: -0.01, max: 0.01, step: 0.0001 },
 ];
 
 function errorMessage(error: unknown): string {
@@ -106,7 +114,7 @@ export function BacktestPanel() {
 
   return (
     <Panel
-      title="回测报告"
+      title="策略回测"
       icon={<LineChart size={16} />}
       actions={
         <button className="icon-command" type="button" onClick={reset} disabled={loading} title="重置参数">
@@ -181,6 +189,7 @@ export function BacktestPanel() {
             <MetricRow label="最大回撤" value={formatPercent(report.metrics.max_drawdown, 2)} />
             <MetricRow label="夏普" value={formatCompact(report.metrics.sharpe, 4)} />
             <MetricRow label="交易数 / 胜率" value={`${report.metrics.n_trades} / ${formatPercent(report.metrics.win_rate, 1)}`} />
+            <MetricRow label="总交易成本" value={formatAmount(report.metrics.total_costs)} />
             <MetricRow
               label="盈亏比"
               value={report.metrics.profit_factor === null ? "∞" : formatCompact(report.metrics.profit_factor, 4)}
@@ -209,6 +218,7 @@ export function BacktestPanel() {
                     <th>入场</th>
                     <th>出场</th>
                     <th>盈亏</th>
+                    <th>成本</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -221,6 +231,7 @@ export function BacktestPanel() {
                       <td className={toNumber(trade.pnl) >= 0 ? "tone-long" : "tone-short"}>
                         {formatAmount(trade.pnl)}
                       </td>
+                      <td>{formatAmount(trade.costs)}</td>
                     </tr>
                   ))}
                 </tbody>

@@ -84,13 +84,7 @@ go run ./cmd/cyp-server -web-dir apps/web/dist
 
 ## 使用闭环
 
-默认审批模式为 `cli`，服务端没有交互式终端审批器，因此 Web/API 使用时建议在 `.env` 中设置：
-
-```dotenv
-CYP_APPROVAL=dashboard
-```
-
-随后可通过仪表盘操作，或直接调用 API：
+默认审批模式为 `dashboard`（历史值 `cli` 已废弃，作为其别名继续兼容）。提案会阻塞在待审批队列，直到通过仪表盘或 API 批准/拒绝/改单。可通过仪表盘操作，或直接调用 API：
 
 ```bash
 # 发起一轮分析
@@ -113,6 +107,7 @@ curl http://127.0.0.1:8000/api/pending
 | `POST /api/approvals/{run_id}` | 批准、拒绝或修改提案 |
 | `GET /api/positions`、`POST /api/positions/close` | Paper 持仓与平仓 |
 | `GET /api/risk`、`GET /api/portfolio` | 风控和组合视图 |
+| `GET /api/trades` | 持久化 Paper 开平仓账本 |
 | `GET /api/market`、`GET /api/venues` | 市场聚合与场所能力 |
 | `POST /api/backtest` | 合成或历史 K 线回测 |
 | `GET /api/metrics` | 闭环与运行时指标 |

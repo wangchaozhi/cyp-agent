@@ -52,7 +52,8 @@
 
 下一批：
 
-- [ ] 手续费、点差、资金费和非线性冲击成本模型。
+- [x] 回测计入可配置的双边手续费、点差、线性滑点和逐周期资金费。
+- [ ] 按订单规模/深度标定非线性冲击成本模型。
 - [ ] Block/bootstrap 交易序列，输出收益和回撤置信区间。
 - [ ] 使用真实收益协方差替换静态相关簇。
 - [ ] 多资产 HRP/ERC 与约束优化。
@@ -75,6 +76,7 @@
 当前 `config.LiveExecutionSupported` 为 `false`。以下项目全部完成、独立审计并通过验收后，才可讨论修改：
 
 - [ ] 持久化 OrderIntent/Order/Ack/Fill/Cancel 状态机，所有转移可幂等重放。
+  - `internal/orders` 已提供合法转移表、append-only 事件日志、幂等重放与 Unresolved 清单，并接入 paper 执行路径；剩余工作：事件日志落库（orders/order_events 表）与真实场所对账消费。
 - [ ] Binance 与 OKX 的远端订单、成交、余额、仓位和保护单对账。
 - [ ] 下单超时后的未知状态处理，禁止盲目重试。
 - [ ] 原生止损/止盈创建失败后的确定性补救与人工告警。
@@ -90,6 +92,7 @@
 `internal/venue/onchain.go` 和签名器目前只提供安全抽象与离线测试，不在应用执行链中。后续顺序：
 
 1. 只读 RPC/索引数据和合约白名单。
+   - `CYP_ONCHAIN_DATA_API` 已接线：配置后行情快照通过只读 HTTP 拉取链上指标（`internal/data/onchain.go`），拉取失败自动降级；合约白名单硬护栏已存在于风控层。
 2. 本地开发链与测试网 preflight、精确授权、nonce、确认与 revert 恢复。
 3. KMS/硬件签名器，私钥不进入主进程和 Agent 上下文。
 4. 流动性、价格冲击、gas、MEV 私有路由和合约风险硬护栏。

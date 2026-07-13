@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -8,9 +9,12 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/wangchaozhi/cyp-agent/internal/backtest"
 	"github.com/wangchaozhi/cyp-agent/internal/config"
+	"github.com/wangchaozhi/cyp-agent/internal/contracts"
+	"github.com/wangchaozhi/cyp-agent/internal/venue"
 )
 
 var version = "dev"
@@ -62,15 +66,30 @@ func runBacktest(arguments []string) error {
 	seed := flags.Int64("seed", 7, "deterministic random seed")
 	drift := flags.Float64("drift", 0.001, "synthetic per-bar drift")
 	volatility := flags.Float64("vol", 0.01, "synthetic per-bar volatility")
+	dataKind := flags.String("data", "synthetic", "data source: synthetic or cex")
+	cexID := flags.String("cex", "binance", "public CEX for -data=cex: binance or okx")
+	timeframe := flags.String("timeframe", "1h", "candle timeframe for -data=cex")
 	jsonOutput := flags.Bool("json", false, "write the full report as JSON")
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
 	params := backtest.Params{
 		Symbol: *symbol, Bars: *bars, Window: *window, Seed: *seed,
-		Drift: *drift, Vol: *volatility, Data: "synthetic", Timeframe: "1h",
+		Drift: *drift, Vol: *volatility, Data: *dataKind, Timeframe: *timeframe,
+		FeeRate: 0.0004, SlippageBPS: 5, SpreadBPS: 2,
 	}
-	report, err := backtest.Run(params)
+	var report backtest.Report
+	var err error
+	if *dataKind == "cex" {
+		var candles []contracts.Candle
+		candles, err = fetchHistory(*cexID, *symbol, *timeframe, *bars, *window)
+		if err != nil {
+			return err
+		}
+		report, err = backtest.RunCandles(params, candles, backtest.DefaultStrategyConfig())
+	} else {
+		report, err = backtest.Run(params)
+	}
 	if err != nil {
 		return err
 	}
@@ -91,6 +110,7 @@ func runBacktest(arguments []string) error {
 	fmt.Printf("  最大回撤   %.2f%%\n", metrics.MaxDrawdown*100)
 	fmt.Printf("  夏普       %.4f\n", metrics.Sharpe)
 	fmt.Printf("  交易数     %d   胜率 %.1f%%\n", metrics.NTrades, metrics.WinRate*100)
+	fmt.Printf("  总成本     %.2f\n", metrics.TotalCosts)
 	return nil
 }
 
@@ -114,6 +134,7 @@ func runSweep(arguments []string) error {
 	params := backtest.Params{
 		Symbol: *symbol, Bars: *bars, Window: *window, Seed: *seed,
 		Drift: *drift, Vol: *volatility, Data: "synthetic", Timeframe: "1h",
+		FeeRate: 0.0004, SlippageBPS: 5, SpreadBPS: 2,
 	}
 	configs := backtest.Grid(values, []float64{1.5, 2, 3}, []float64{2, 3, 4})
 	results, err := backtest.Sweep(params, configs, nil)
@@ -143,6 +164,26 @@ func runSweep(arguments []string) error {
 	return nil
 }
 
+// fetchHistory pulls public OHLCV history from a read-only CEX venue. No API
+// keys are involved; the venue's trading methods stay hard-disabled anyway.
+func fetchHistory(cexID, symbol, timeframe string, bars, window int) ([]contracts.Candle, error) {
+	source, err := venue.NewCEXVenue(venue.CEXConfig{ExchangeID: cexID})
+	if err != nil {
+		return nil, fmt.Errorf("build %s venue: %w", cexID, err)
+	}
+	defer func() { _ = source.Close() }()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	candles, err := source.FetchOHLCV(ctx, symbol, timeframe, bars)
+	if err != nil {
+		return nil, fmt.Errorf("fetch %s %s history from %s: %w", symbol, timeframe, cexID, err)
+	}
+	if len(candles) <= window {
+		return nil, fmt.Errorf("real history too short: %d bars (need > window=%d)", len(candles), window)
+	}
+	return candles, nil
+}
+
 func parseFloatList(value string) ([]float64, error) {
 	parts := strings.Split(value, ",")
 	result := make([]float64, 0, len(parts))
@@ -165,7 +206,7 @@ func parseFloatList(value string) ([]float64, error) {
 
 func usage() {
 	fmt.Println("cyp-agent Go CLI")
-	fmt.Println("  cyp backtest [flags]  运行确定性合成回测")
+	fmt.Println("  cyp backtest [flags]  运行回测（-data=synthetic 合成 / -data=cex 真实历史K线）")
 	fmt.Println("  cyp sweep [flags]     扫参并做 OOS/PBO/DSR 验证")
 	fmt.Println("  cyp config            输出脱敏配置快照")
 	fmt.Println("  cyp version           输出版本")

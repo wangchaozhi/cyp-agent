@@ -101,8 +101,12 @@ func TestSyntheticIsDeterministicAndLiveTicksMove(t *testing.T) {
 			t.Fatalf("deterministic close changed at %d", index)
 		}
 	}
-	if first.Derivatives == nil || first.Sentiment == nil {
+	if first.Derivatives == nil || first.Sentiment == nil || first.Onchain == nil {
 		t.Fatal("synthetic dimensions are missing")
+	}
+	if first.Onchain.SmartMoneyFlow == nil || first.Onchain.LiquidityUSD == nil ||
+		first.Onchain.SmartMoneyFlow.Cmp(*second.Onchain.SmartMoneyFlow) != 0 {
+		t.Fatalf("synthetic onchain data must be deterministic: %#v", first.Onchain)
 	}
 
 	live := NewSyntheticMarketData(WithSyntheticClock(clock), WithLiveTicks(true))

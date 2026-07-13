@@ -15,7 +15,7 @@
 
 > 运行期的三条硬约束——**有仓必有保护、对账未完成不开新仓、护仓 fail-safe（超时自动保护，与开仓「超时=拒绝」方向相反）**——落地细节见 [RUNTIME.md](RUNTIME.md) §2/§3，其不变量已并入下方 §2.1 规则清单。
 
-## 2. 硬护栏规则清单（`risk/rules.py`）
+## 2. 硬护栏规则清单（`internal/risk/engine.go`）
 
 每条规则一个纯函数、一个单测（含通过/否决边界）。默认阈值可在 `RiskConfig` 覆盖；实盘阈值应比模拟更保守。
 
@@ -65,16 +65,18 @@
 | 日回撤 ≥ `daily_drawdown_limit`（默认 3%） | 冻结新开仓至次日，仅允许减仓/平仓 |
 | 周回撤 ≥ `weekly_drawdown_limit`（默认 8%） | 冻结开仓 + 强制人工复核 |
 | 总回撤 ≥ `max_drawdown_limit`（默认 15%） | 全面停手，进入只读/只减仓模式 |
-| 连亏 ≥ `max_consecutive_losses`（默认 4 笔） | 强制冷静期（默认 24h） |
+| 连亏 ≥ `max_consecutive_losses`（默认 4 笔） | 拒绝新开仓；盈利平仓后计数重置 |
 | LLM/数据异常率超阈 | 降级为纯规则 + 告警，暂停自动提案 |
 
-熔断状态持久化在 `memory/`，重启不清零；解除需人工确认或时间到期。
+风险状态由 `internal/riskstate` 写入当前配置的 Repository（memory/file/PostgreSQL）。日、周和总回撤、小时订单数、连续亏损与已实现盈亏重启后不会因进程内计数器清零；成交明细可通过 `GET /api/trades` 审计。
+
+组合 CVaR 使用持久化净值变化的 95% 历史尾部均值估计，至少需要 20 个有效变化样本。样本不足时 API 明确返回 `null`，不会用 `0` 冒充已计算结果。
 
 ## 4. Kill Switch（一键停机）
 
-- 触发方式：仪表盘按钮 `POST /killswitch` / CLI / 环境变量 `CYP_KILL=1` / 熔断自动触发。
+- 触发方式：仪表盘按钮、`POST /api/killswitch` 或环境变量 `CYP_KILL=1`。
 - 生效范围：**立即拒绝所有新提案与下单**；已挂订单按策略撤单；持仓保留（不强制平仓，避免踩踏，改为人工处置）。
-- 恢复：需人工显式 `POST /killswitch/reset` + 二次确认，且记录操作员与原因。
+- 恢复：需人工显式调用 `POST /api/killswitch` 设置 `on=false`；实盘执行仍由代码级硬门禁关闭。
 - 不变量：Kill Switch 是硬护栏最外层，任何路径都无法绕过。
 
 ## 5. 密钥与私钥安全
@@ -93,7 +95,7 @@
 | 配置 | 值 | 说明 |
 | --- | --- | --- |
 | `CYP_MODE` | `paper`（默认）/ `live` | `live` 需满足前置校验（Key 权限正确、Kill Switch 未触发、风控配置已审阅） |
-| `CYP_APPROVAL` | `cli` / `dashboard` / `auto` | `auto` 仅 M6，且受策略白名单 + 低 risk_score + 小额三重约束 |
+| `CYP_APPROVAL` | `dashboard`（默认）/ `auto`（`cli` 为废弃别名） | `auto` 仅 M6，且受策略白名单 + 低 risk_score + 小额三重约束 |
 | `RiskConfig.*` | 见 §2/§3 | 实盘阈值应显式设置且比默认更保守 |
 
 尾部风险相关新增：
@@ -104,7 +106,7 @@
 
 ## 7. 风控相关的工程纪律
 
-1. `risk/rules.py` 每条规则**必须有单测**，含通过与否决边界；未测不合并。
+1. `internal/risk/engine.go` 每条规则**必须有单测**，含通过与否决边界；未测不合并。
 2. 硬护栏是**纯函数**，不依赖 LLM、不做网络调用（数据由 preflight 预取）。
 3. 任何放宽阈值的改动需在 PR 显式标注并复核。
 4. `paper` 模式的端到端否决用例（如「无止损被拒」「超杠杆被拒」）是 CI 门禁。
