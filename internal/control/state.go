@@ -118,11 +118,17 @@ func applyAutomationUpdate(target *config.AutomationConfig, update contracts.Aut
 	if update.ScanEnabled != nil {
 		target.ScanEnabled = *update.ScanEnabled
 	}
+	if update.EntryEnabled != nil {
+		target.EntryEnabled = *update.EntryEnabled
+	}
 	if update.ApprovalEnabled != nil {
 		target.ApprovalEnabled = *update.ApprovalEnabled
 	}
 	if update.ExitEnabled != nil {
 		target.ExitEnabled = *update.ExitEnabled
+	}
+	if update.ReverseEnabled != nil {
+		target.ReverseEnabled = *update.ReverseEnabled
 	}
 	if update.MaxRiskScore != nil {
 		target.MaxRiskScore = *update.MaxRiskScore
@@ -130,11 +136,35 @@ func applyAutomationUpdate(target *config.AutomationConfig, update contracts.Aut
 	if update.MaxQuote != nil {
 		target.MaxQuote = *update.MaxQuote
 	}
+	if update.MinEntryQuote != nil {
+		target.MinEntryQuote = *update.MinEntryQuote
+	}
 	if update.MinConfidence != nil {
 		target.MinConfidence = *update.MinConfidence
 	}
 	if update.MinRewardRisk != nil {
 		target.MinRewardRisk = *update.MinRewardRisk
+	}
+	if update.KellyScale != nil {
+		target.KellyScale = *update.KellyScale
+	}
+	if update.ReverseMinConfidence != nil {
+		target.ReverseMinConfidence = *update.ReverseMinConfidence
+	}
+	if update.ReverseMinRewardRisk != nil {
+		target.ReverseMinRewardRisk = *update.ReverseMinRewardRisk
+	}
+	if update.ReverseConfirmations != nil {
+		target.ReverseConfirmations = *update.ReverseConfirmations
+	}
+	if update.ReverseSignalMinutes != nil {
+		target.ReverseSignalMinutes = *update.ReverseSignalMinutes
+	}
+	if update.ReverseCooldownMins != nil {
+		target.ReverseCooldownMins = *update.ReverseCooldownMins
+	}
+	if update.MaxReversalsPerDay != nil {
+		target.MaxReversalsPerDay = *update.MaxReversalsPerDay
 	}
 	if update.EWMALambda != nil {
 		target.EWMALambda = *update.EWMALambda

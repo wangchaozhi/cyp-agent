@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: cyp-agent HTTP API
-  version: 1.1.0
+  version: 1.2.0
   description: |
     React 仪表盘使用的 REST 与 SSE 契约。
 
@@ -817,16 +817,26 @@ components:
     AutomationSettings:
       type: object
       additionalProperties: false
-      required: [enabled, scan_enabled, approval_enabled, exit_enabled, max_risk_score, max_quote, min_confidence, min_reward_risk, ewma_lambda, volatility_multiplier, trail_activation_r, trail_giveback_r, max_holding_minutes, time_stop_min_r, exit_confirmations, exit_min_samples]
+      required: [enabled, scan_enabled, entry_enabled, approval_enabled, exit_enabled, reverse_enabled, max_risk_score, max_quote, min_entry_quote, min_confidence, min_reward_risk, kelly_scale, reverse_min_confidence, reverse_min_reward_risk, reverse_confirmations, reverse_signal_minutes, reverse_cooldown_minutes, max_reversals_per_day, ewma_lambda, volatility_multiplier, trail_activation_r, trail_giveback_r, max_holding_minutes, time_stop_min_r, exit_confirmations, exit_min_samples]
       properties:
         enabled: { type: boolean }
         scan_enabled: { type: boolean }
+        entry_enabled: { type: boolean }
         approval_enabled: { type: boolean }
         exit_enabled: { type: boolean }
+        reverse_enabled: { type: boolean }
         max_risk_score: { type: number, minimum: 0, maximum: 1 }
         max_quote: { $ref: "#/components/schemas/DecimalString" }
+        min_entry_quote: { $ref: "#/components/schemas/DecimalString" }
         min_confidence: { type: number, minimum: 0, maximum: 1 }
         min_reward_risk: { type: number, exclusiveMinimum: 0 }
+        kelly_scale: { type: number, exclusiveMinimum: 0, maximum: 1 }
+        reverse_min_confidence: { type: number, minimum: 0, maximum: 1 }
+        reverse_min_reward_risk: { type: number, exclusiveMinimum: 0 }
+        reverse_confirmations: { type: integer, minimum: 1 }
+        reverse_signal_minutes: { type: integer, minimum: 1 }
+        reverse_cooldown_minutes: { type: integer, minimum: 0 }
+        max_reversals_per_day: { type: integer, minimum: 1 }
         ewma_lambda: { type: number, exclusiveMinimum: 0, exclusiveMaximum: 1 }
         volatility_multiplier: { type: number, minimum: 0 }
         trail_activation_r: { type: number, exclusiveMinimum: 0 }
@@ -842,12 +852,22 @@ components:
       properties:
         enabled: { type: boolean }
         scan_enabled: { type: boolean }
+        entry_enabled: { type: boolean }
         approval_enabled: { type: boolean }
         exit_enabled: { type: boolean }
+        reverse_enabled: { type: boolean }
         max_risk_score: { type: number, minimum: 0, maximum: 1 }
         max_quote: { $ref: "#/components/schemas/DecimalInput" }
+        min_entry_quote: { $ref: "#/components/schemas/DecimalInput" }
         min_confidence: { type: number, minimum: 0, maximum: 1 }
         min_reward_risk: { type: number, exclusiveMinimum: 0 }
+        kelly_scale: { type: number, exclusiveMinimum: 0, maximum: 1 }
+        reverse_min_confidence: { type: number, minimum: 0, maximum: 1 }
+        reverse_min_reward_risk: { type: number, exclusiveMinimum: 0 }
+        reverse_confirmations: { type: integer, minimum: 1 }
+        reverse_signal_minutes: { type: integer, minimum: 1 }
+        reverse_cooldown_minutes: { type: integer, minimum: 0 }
+        max_reversals_per_day: { type: integer, minimum: 1 }
         ewma_lambda: { type: number, exclusiveMinimum: 0, exclusiveMaximum: 1 }
         volatility_multiplier: { type: number, minimum: 0 }
         trail_activation_r: { type: number, exclusiveMinimum: 0 }

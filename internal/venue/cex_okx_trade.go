@@ -528,6 +528,53 @@ func (venue *CEXVenue) ProtectiveOrders(ctx context.Context, symbol string) ([]c
 	return orders, nil
 }
 
+// CancelProtectiveOrders removes pending TP/SL algos only after the caller has
+// verified that the old position is flat. This prevents stale reduce-only
+// orders from attaching semantically to a newly opened reverse position.
+func (venue *CEXVenue) CancelProtectiveOrders(ctx context.Context, symbol string) error {
+	orders, err := venue.ProtectiveOrders(ctx, symbol)
+	if err != nil {
+		return err
+	}
+	seen := make(map[string]struct{}, len(orders))
+	requests := make([]map[string]string, 0, len(orders))
+	for _, order := range orders {
+		if strings.TrimSpace(order.OrderID) == "" {
+			continue
+		}
+		if _, exists := seen[order.OrderID]; exists {
+			continue
+		}
+		seen[order.OrderID] = struct{}{}
+		requests = append(requests, map[string]string{
+			"algoId": order.OrderID, "instId": okxInstrumentID(symbol),
+		})
+	}
+	for start := 0; start < len(requests); start += 10 {
+		end := min(start+10, len(requests))
+		var payload struct {
+			Code string `json:"code"`
+			Data []struct {
+				AlgoID  string `json:"algoId"`
+				Code    string `json:"sCode"`
+				Message string `json:"sMsg"`
+			} `json:"data"`
+		}
+		if err := venue.okxPrivatePOST(ctx, "/api/v5/trade/cancel-algos", requests[start:end], &payload); err != nil {
+			return err
+		}
+		if len(payload.Data) != end-start {
+			return &CEXError{Kind: CEXErrorDecode, Exchange: venue.id, Operation: "cancel_protective", Message: "incomplete OKX algo cancellation acknowledgement"}
+		}
+		for _, acknowledgement := range payload.Data {
+			if acknowledgement.Code != "" && acknowledgement.Code != "0" {
+				return &CEXError{Kind: CEXErrorUpstream, Exchange: venue.id, Operation: "cancel_protective", Code: acknowledgement.Code, Message: acknowledgement.Message}
+			}
+		}
+	}
+	return nil
+}
+
 func protectiveOrdersFromOKXAlgo(algoID string, stopLoss, takeProfit any) []contracts.ProtectiveOrder {
 	orders := make([]contracts.ProtectiveOrder, 0, 2)
 	if price, err := decimalFromAny(stopLoss); err == nil && price.IsPositive() {

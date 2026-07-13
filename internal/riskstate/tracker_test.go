@@ -71,6 +71,27 @@ func TestTrackerPersistsRiskStatisticsAndTradeLedger(t *testing.T) {
 	}
 }
 
+func TestOpenTradeStopsAtLatestClose(t *testing.T) {
+	tracker, err := New(context.Background(), nil, contracts.MustDecimal("10000"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposal := contracts.TradeProposal{Symbol: "BTC/USDT", Side: contracts.SideLong, Instrument: contracts.InstrumentSpot}
+	price := contracts.MustDecimal("100")
+	open := contracts.ExecutionResult{ClientID: "open", Status: contracts.OrderStatusFilled, AvgPrice: &price, FilledBase: contracts.MustDecimal("1")}
+	if err := tracker.RecordOpen(context.Background(), "run", proposal, open, contracts.MustDecimal("10000")); err != nil {
+		t.Fatal(err)
+	}
+	position := contracts.Position{Symbol: proposal.Symbol, Side: proposal.Side, Instrument: proposal.Instrument, EntryPrice: price, SizeBase: contracts.MustDecimal("1")}
+	closeExecution := contracts.ExecutionResult{ClientID: "close", Status: contracts.OrderStatusFilled, AvgPrice: &price, FilledBase: contracts.MustDecimal("1")}
+	if _, err := tracker.RecordClose(context.Background(), "run", position, closeExecution, contracts.MustDecimal("10000")); err != nil {
+		t.Fatal(err)
+	}
+	if trade, ok := tracker.OpenTrade(proposal.Symbol, proposal.Instrument); ok {
+		t.Fatalf("closed trade returned as open: %+v", trade)
+	}
+}
+
 func TestTrackerPublishesCVARAfterEnoughEquitySamples(t *testing.T) {
 	tracker, err := New(context.Background(), nil, contracts.MustDecimal("10000"))
 	if err != nil {

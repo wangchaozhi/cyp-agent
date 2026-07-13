@@ -142,7 +142,8 @@ go run ./cmd/cyp sweep --symbol BTC/USDT --bars 300 --top 5
 | `CYP_DATA_SOURCE` | `synthetic` | `synthetic` 或 `cex` |
 | `CYP_APPROVAL` | `dashboard` | `dashboard` 或兼容旧配置的 `auto`；`cli` 是废弃别名 |
 | `CYP_KILL` | `0` | 开启后拒绝所有新仓，仍允许减仓/平仓路径 |
-| `CYP_AUTOMATION_ENABLED` | `false` | 自动扫描、数学审批和主动退出的总开关；可在 Dashboard 运行时切换 |
+| `CYP_AUTOMATION_ENABLED` | `false` | 自动扫描、分数 Kelly 开仓、数学审批、主动退出和受控反向的总开关；可在 Dashboard 运行时切换 |
+| `CYP_AUTO_ENTRY` / `CYP_AUTO_REVERSE` | `true` / `false` | 自动开仓与自动反向独立开关；反向默认关闭，需显式启用 |
 | `CYP_RUNTIME_AUTOSTART` | `false` | 启动持仓监控等运行时循环；自动扫描仍受自动化开关控制 |
 | `CYP_PERSISTENCE` | `file` | `memory`、`file` 或 `postgres` |
 | `CYP_STATE_FILE` | `data/cyp-state.json` | 原子 JSON 状态文件 |

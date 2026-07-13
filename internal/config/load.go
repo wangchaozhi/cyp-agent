@@ -162,10 +162,22 @@ func LoadWithOptions(options LoadOptions) (Settings, error) {
 		func() error { return setDecimal("CYP_AUTO_MAX_QUOTE", &settings.Automation.MaxQuote) },
 		func() error { return setBool("CYP_AUTOMATION_ENABLED", &settings.Automation.Enabled) },
 		func() error { return setBool("CYP_AUTO_SCAN", &settings.Automation.ScanEnabled) },
+		func() error { return setBool("CYP_AUTO_ENTRY", &settings.Automation.EntryEnabled) },
 		func() error { return setBool("CYP_AUTO_APPROVE", &settings.Automation.ApprovalEnabled) },
 		func() error { return setBool("CYP_AUTO_EXIT", &settings.Automation.ExitEnabled) },
+		func() error { return setBool("CYP_AUTO_REVERSE", &settings.Automation.ReverseEnabled) },
 		func() error { return setFloat("CYP_AUTO_MIN_CONFIDENCE", &settings.Automation.MinConfidence) },
 		func() error { return setFloat("CYP_AUTO_MIN_REWARD_RISK", &settings.Automation.MinRewardRisk) },
+		func() error { return setDecimal("CYP_AUTO_MIN_ENTRY_QUOTE", &settings.Automation.MinEntryQuote) },
+		func() error { return setFloat("CYP_AUTO_KELLY_SCALE", &settings.Automation.KellyScale) },
+		func() error { return setFloat("CYP_REVERSE_MIN_CONFIDENCE", &settings.Automation.ReverseMinConfidence) },
+		func() error {
+			return setFloat("CYP_REVERSE_MIN_REWARD_RISK", &settings.Automation.ReverseMinRewardRisk)
+		},
+		func() error { return setInt("CYP_REVERSE_CONFIRMATIONS", &settings.Automation.ReverseConfirmations) },
+		func() error { return setInt("CYP_REVERSE_SIGNAL_MINUTES", &settings.Automation.ReverseSignalMinutes) },
+		func() error { return setInt("CYP_REVERSE_COOLDOWN_MINUTES", &settings.Automation.ReverseCooldownMins) },
+		func() error { return setInt("CYP_MAX_REVERSALS_PER_DAY", &settings.Automation.MaxReversalsPerDay) },
 		func() error { return setFloat("CYP_EXIT_EWMA_LAMBDA", &settings.Automation.EWMALambda) },
 		func() error {
 			return setFloat("CYP_EXIT_VOLATILITY_MULTIPLIER", &settings.Automation.VolatilityMultiplier)
@@ -219,6 +231,7 @@ func LoadWithOptions(options LoadOptions) (Settings, error) {
 	// persisted/dashboard master switch to turn automation off definitively.
 	if settings.Approval == "auto" && !automationMasterExplicit {
 		settings.Automation.Enabled = true
+		settings.Automation.EntryEnabled = true
 		settings.Automation.ApprovalEnabled = true
 	}
 
@@ -275,12 +288,18 @@ func (s Settings) Validate() error {
 	if math.IsNaN(automation.MaxRiskScore) || math.IsInf(automation.MaxRiskScore, 0) || automation.MaxRiskScore < 0 || automation.MaxRiskScore > 1 {
 		return errors.New("CYP_AUTO_MAX_RISK_SCORE must be between 0 and 1")
 	}
-	if automation.MaxQuote.IsNegative() {
-		return errors.New("CYP_AUTO_MAX_QUOTE cannot be negative")
+	if automation.MaxQuote.IsNegative() || automation.MinEntryQuote.IsNegative() {
+		return errors.New("automatic entry quote limits cannot be negative")
+	}
+	if automation.MaxQuote.IsPositive() && automation.MinEntryQuote.Cmp(automation.MaxQuote) > 0 {
+		return errors.New("CYP_AUTO_MIN_ENTRY_QUOTE cannot exceed CYP_AUTO_MAX_QUOTE")
 	}
 	for name, value := range map[string]float64{
 		"CYP_AUTO_MIN_CONFIDENCE":        automation.MinConfidence,
 		"CYP_AUTO_MIN_REWARD_RISK":       automation.MinRewardRisk,
+		"CYP_AUTO_KELLY_SCALE":           automation.KellyScale,
+		"CYP_REVERSE_MIN_CONFIDENCE":     automation.ReverseMinConfidence,
+		"CYP_REVERSE_MIN_REWARD_RISK":    automation.ReverseMinRewardRisk,
 		"CYP_EXIT_EWMA_LAMBDA":           automation.EWMALambda,
 		"CYP_EXIT_VOLATILITY_MULTIPLIER": automation.VolatilityMultiplier,
 		"CYP_EXIT_TRAIL_ACTIVATION_R":    automation.TrailActivationR,
@@ -292,6 +311,11 @@ func (s Settings) Validate() error {
 		}
 	}
 	if automation.MinConfidence < 0 || automation.MinConfidence > 1 || automation.MinRewardRisk <= 0 ||
+		automation.KellyScale <= 0 || automation.KellyScale > 1 ||
+		automation.ReverseMinConfidence < 0 || automation.ReverseMinConfidence > 1 ||
+		automation.ReverseMinRewardRisk <= 0 || automation.ReverseConfirmations <= 0 ||
+		automation.ReverseSignalMinutes <= 0 || automation.ReverseCooldownMins < 0 ||
+		automation.MaxReversalsPerDay <= 0 ||
 		automation.EWMALambda <= 0 || automation.EWMALambda >= 1 || automation.VolatilityMultiplier < 0 ||
 		automation.TrailActivationR <= 0 || automation.TrailGivebackR <= 0 || automation.MaxHoldingMinutes <= 0 ||
 		automation.ExitConfirmations <= 0 || automation.ExitMinSamples < 2 {

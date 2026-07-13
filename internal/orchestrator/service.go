@@ -56,11 +56,12 @@ type Service struct {
 	riskOfficer agents.RiskOfficer
 	reviewer    agents.Reviewer
 
-	ctx     context.Context
-	cancel  context.CancelFunc
-	sem     chan struct{}
-	locks   *runtimecore.SymbolLocks
-	journal *orders.Journal
+	ctx       context.Context
+	cancel    context.CancelFunc
+	sem       chan struct{}
+	locks     *runtimecore.SymbolLocks
+	journal   *orders.Journal
+	reversals *ReversalTracker
 
 	mu      sync.RWMutex
 	runs    map[string]contracts.RunResult
@@ -128,6 +129,7 @@ func New(
 		ctx: ctx, cancel: cancel, sem: make(chan struct{}, concurrency),
 		locks:        runtimecore.NewSymbolLocks(),
 		journal:      orders.NewJournal(),
+		reversals:    NewReversalTracker(),
 		runs:         make(map[string]contracts.RunResult),
 		marks:        make(map[string]contracts.Decimal),
 		dataSource:   data.NewSyntheticMarketData(data.WithLiveTicks(true)),
@@ -413,6 +415,12 @@ func (s *Service) run(ctx context.Context, runID, symbol string) contracts.RunRe
 		result.Status = contracts.RunNoTrade
 		return result
 	}
+	existing, relation := positionForProposal(positions, proposal)
+	if relation == positionSameSide {
+		result.Status = contracts.RunNoTrade
+		return result
+	}
+	reversing := relation == positionOppositeSide
 
 	if safetyErr := s.checkNewPosition(settings); safetyErr != nil {
 		assessment := contracts.RiskAssessment{
@@ -445,7 +453,11 @@ func (s *Service) run(ctx context.Context, runID, symbol string) contracts.RunRe
 		return result
 	}
 
-	view := portfolio.Build(positions, s.Marks(), equity, settings.Risk.MaxCorrelatedExposure)
+	riskPositions := positions
+	if reversing {
+		riskPositions = positionsWithout(riskPositions, existing)
+	}
+	view := portfolio.Build(riskPositions, s.Marks(), equity, settings.Risk.MaxCorrelatedExposure)
 	correlated := portfolio.CorrelatedDirectional(view, symbol, proposal.Side)
 	reconciling := false
 	if s.safety != nil {
@@ -487,7 +499,7 @@ func (s *Service) run(ctx context.Context, runID, symbol string) contracts.RunRe
 	}
 
 	approvalStarted := time.Now()
-	decisionResult, err := s.decide(ctx, runID, proposal, assessment, settings)
+	decisionResult, err := s.decide(ctx, runID, proposal, assessment, settings, equity, existing)
 	s.metrics.RecordApprovalLatency(time.Since(approvalStarted))
 	if err != nil {
 		return fail(result, fmt.Errorf("approval: %w", err))
@@ -525,6 +537,27 @@ func (s *Service) run(ctx context.Context, runID, symbol string) contracts.RunRe
 		return fail(result, fmt.Errorf("execution blocked by runtime safety control: %w", safetyErr))
 	}
 	result.Proposal = &finalProposal
+	if reversing {
+		if err := s.closeForReversal(ctx, runID, existing, mark); err != nil {
+			return fail(result, fmt.Errorf("reverse close: %w", err))
+		}
+		s.reversals.Reset(existing.Symbol, existing.Instrument)
+		settings = s.control.Settings()
+		if safetyErr := s.checkNewPosition(settings); safetyErr != nil {
+			return fail(result, fmt.Errorf("reverse reopen blocked by runtime safety control: %w", safetyErr))
+		}
+		refreshed, adjusted, refreshErr := s.refreshRiskAfterReversal(ctx, finalProposal, mark, settings)
+		if refreshErr != nil {
+			return fail(result, fmt.Errorf("reverse reopen risk refresh: %w", refreshErr))
+		}
+		result.Assessment = &refreshed
+		if refreshed.Verdict == contracts.VerdictRejected {
+			result.Status = contracts.RunRejected
+			return result
+		}
+		finalProposal = adjusted
+		result.Proposal = &finalProposal
+	}
 
 	orderIntent := intentFor(runID, finalProposal, finalProposal.SizeQuote)
 	if err := s.checkpoint(ctx, runID, "order_intent", orderIntent); err != nil {
@@ -542,6 +575,11 @@ func (s *Service) run(ctx context.Context, runID, symbol string) contracts.RunRe
 	s.recordExecution(runID, orderIntent.ClientID, execution)
 	result.Execution = &execution
 	s.events.Emit("executed", runID, map[string]any{"symbol": symbol, "execution": execution})
+	if reversing && execution.Status == contracts.OrderStatusFilled {
+		s.events.Emit("reversal_opened", runID, map[string]any{
+			"symbol": symbol, "side": finalProposal.Side, "execution": execution,
+		})
+	}
 	if err := s.checkpoint(ctx, runID, "execution", execution); err != nil {
 		return fail(result, err)
 	}
@@ -586,9 +624,15 @@ func (s *Service) decide(
 	proposal contracts.TradeProposal,
 	assessment contracts.RiskAssessment,
 	settings config.Settings,
+	equity contracts.Decimal,
+	existing *contracts.Position,
 ) (approval.DecisionResult, error) {
-	metrics := evaluateAutoApproval(settings, proposal, assessment)
+	metrics := evaluateAutoApproval(settings, proposal, assessment, equity)
+	if existing != nil {
+		return s.decideReversal(runID, proposal, settings, metrics, *existing), nil
+	}
 	if metrics.Allowed {
+		proposal.SizeQuote = metrics.RecommendedQuote
 		decision := contracts.ApprovalDecision{
 			Decision: contracts.ApprovalApprove, Operator: "auto-policy",
 			TS: time.Now().UTC(), Note: autoApprovalNote(metrics),
@@ -596,10 +640,6 @@ func (s *Service) decide(
 		return approval.DecisionResult{Decision: decision, FinalProposal: proposal}, nil
 	}
 	return s.gate.Decide(ctx, runID, proposal, assessment)
-}
-
-func autoAllowed(settings config.Settings, proposal contracts.TradeProposal, assessment contracts.RiskAssessment) bool {
-	return evaluateAutoApproval(settings, proposal, assessment).Allowed
 }
 
 func (s *Service) newLLMSession() agents.LLM {

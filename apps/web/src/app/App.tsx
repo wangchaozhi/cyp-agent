@@ -182,7 +182,7 @@ export default function App() {
       setNotice({
         tone: next ? "warn" : "ok",
         message: next
-          ? "策略自动化已开启：扫描、审批与主动退出将按各自开关运行"
+          ? "策略自动化已开启：扫描、Kelly 开仓、审批、主动退出与受控反向将按各自开关运行"
           : "策略自动化已关闭；交易所原生止损止盈保持有效",
       });
     } catch (error) {

@@ -82,13 +82,15 @@ CYP_MAX_CONCURRENCY=2
 
 ## 策略自动化
 
-自动化配置可通过顶部总开关或设置页运行时修改，并写入同一持久化仓储。总开关控制三个独立策略：
+自动化配置可通过顶部总开关或设置页运行时修改，并写入同一持久化仓储。总开关控制五个独立策略：
 
 - 定时扫描：按 watchlist 触发分析；
-- 数学审批：白名单、风险分、名义金额、最低置信度和最低盈亏比全部通过后，再要求 `EV = p × RR - (1-p) > 0` 且 Kelly 比例 `EV / RR > 0`；
+- 自动开仓：以置信度作为保守胜率代理，先计算 `EV = p × RR - (1-p)` 和 Kelly 比例 `EV / RR`，再使用 `min(单笔风险上限, Kelly 比例 × Kelly 使用比例)` 作为风险预算；名义仓位为 `账户权益 × 风险预算 ÷ 止损距离比例`，并受策略仓位、风险引擎调整、最小/最大金额共同约束；
+- 数学审批：白名单、风险分、最低置信度、最低盈亏比、正期望和正 Kelly 必须同时通过；
 - 主动退出：使用收益的 EWMA 波动率形成动态跟踪底线，并辅以最长持仓时间止损；价格距离全部按开仓价到原始止损的距离归一化为 `R`，且连续命中配置次数后才执行。
+- 自动反向：相反方向信号必须在窗口内连续确认，且满足更高的置信度和盈亏比阈值；随后按 `reduce-only 平旧仓 → 核验归零 → 撤销残余保护单 → 重新读取权益与持仓 → 再次风控 → 开反向仓并挂新保护单` 执行。冷却时间和每日次数上限抑制来回打脸；任何步骤失败都会停止后续开仓。
 
-主动退出只对能核验有效 reduce-only 止损的仓位工作，最终只发送 reduce-only 市价单。Live 只读模式不能开启自动化。关闭总开关会停止扫描、自动审批和主动退出并清空退出模型的短期状态，但不会撤销或关闭交易所侧原生止损止盈。
+主动退出只对能核验有效 reduce-only 止损的仓位工作，最终只发送 reduce-only 市价单。自动反向不会使用普通反向订单直接冲销旧仓。Live 只读模式不能开启自动化。关闭总开关会停止扫描、自动开仓、自动审批、主动退出和自动反向，但不会撤销或关闭交易所侧原生止损止盈。
 
 ## 检查点与恢复
 
@@ -104,7 +106,7 @@ Orchestrator 在 `proposal`、`risk`、`approval`、`order_intent`、`execution`
 
 ## 事件与指标
 
-运行阶段通过有界内存总线发布 SSE，包括 `reconciled`、`run_started`、`snapshot_ready`、`reports_ready`、`proposal_ready`、`risk_assessed`、`approval_decided`、`executed`、`reviewed`、`run_done`、`position_monitor`、`automation_evaluated` 和 `automated_exit`。
+运行阶段通过有界内存总线发布 SSE，包括 `reconciled`、`run_started`、`snapshot_ready`、`reports_ready`、`proposal_ready`、`risk_assessed`、`approval_decided`、`executed`、`reviewed`、`run_done`、`position_monitor`、`automation_evaluated`、`automated_exit`、`reversal_observed`、`reversal_closed`、`reversal_reassessed` 和 `reversal_opened`。
 
 `GET /api/metrics` 汇总 run 状态、审批时延、滑点、执行成功率，以及扫描/监控/对账/Webhook 计数。事件总线只保存有界历史，不是持久审计日志。
 

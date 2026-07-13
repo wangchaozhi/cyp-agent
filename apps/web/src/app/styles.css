@@ -593,7 +593,7 @@ td small { color: var(--muted); font-size: 7px; }
 .toggle-control input:focus-visible + span { outline: 2px solid color-mix(in srgb, var(--green) 50%, transparent); outline-offset: 2px; }
 .toggle-control:has(input:disabled) { opacity: 0.55; cursor: not-allowed; }
 .toggle-control b { min-width: 24px; color: var(--text-soft); font-size: 9px; }
-.automation-strategy-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 13px; }
+.automation-strategy-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(155px, 1fr)); gap: 8px; margin-top: 13px; }
 .automation-strategy { position: relative; display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: center; min-height: 58px; padding: 10px; border: 1px solid var(--border); border-radius: 10px; color: var(--muted); background: var(--surface); cursor: pointer; }
 .automation-strategy.is-on { border-color: color-mix(in srgb, var(--green) 30%, var(--border)); color: var(--green); background: color-mix(in srgb, var(--green) 4%, var(--surface)); }
 .automation-strategy > span { display: grid; min-width: 0; }
@@ -604,7 +604,7 @@ td small { color: var(--muted); font-size: 7px; }
 .automation-strategy.is-on i { background: color-mix(in srgb, var(--green) 22%, var(--surface-soft)); }
 .automation-strategy.is-on i::after { background: var(--green); transform: translateX(11px); }
 .automation-strategy:has(input:focus-visible) { outline: 2px solid color-mix(in srgb, var(--green) 48%, transparent); outline-offset: 2px; }
-.automation-parameter-groups { display: grid; grid-template-columns: 0.82fr 1.18fr; gap: 9px; margin-top: 10px; }
+.automation-parameter-groups { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; margin-top: 10px; }
 .automation-parameter-groups fieldset { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 0; padding: 10px; border: 1px solid var(--border); border-radius: 10px; }
 .automation-parameter-groups legend { padding: 0 5px; color: var(--text-soft); font-size: 8px; font-weight: 720; }
 .automation-parameter-groups label { display: grid; gap: 4px; min-width: 0; }

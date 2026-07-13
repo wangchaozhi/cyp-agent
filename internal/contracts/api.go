@@ -35,12 +35,22 @@ type SettingsUpdateRequest struct {
 type AutomationSettingsUpdate struct {
 	Enabled              *bool    `json:"enabled,omitempty"`
 	ScanEnabled          *bool    `json:"scan_enabled,omitempty"`
+	EntryEnabled         *bool    `json:"entry_enabled,omitempty"`
 	ApprovalEnabled      *bool    `json:"approval_enabled,omitempty"`
 	ExitEnabled          *bool    `json:"exit_enabled,omitempty"`
+	ReverseEnabled       *bool    `json:"reverse_enabled,omitempty"`
 	MaxRiskScore         *float64 `json:"max_risk_score,omitempty"`
 	MaxQuote             *Decimal `json:"max_quote,omitempty"`
+	MinEntryQuote        *Decimal `json:"min_entry_quote,omitempty"`
 	MinConfidence        *float64 `json:"min_confidence,omitempty"`
 	MinRewardRisk        *float64 `json:"min_reward_risk,omitempty"`
+	KellyScale           *float64 `json:"kelly_scale,omitempty"`
+	ReverseMinConfidence *float64 `json:"reverse_min_confidence,omitempty"`
+	ReverseMinRewardRisk *float64 `json:"reverse_min_reward_risk,omitempty"`
+	ReverseConfirmations *int     `json:"reverse_confirmations,omitempty"`
+	ReverseSignalMinutes *int     `json:"reverse_signal_minutes,omitempty"`
+	ReverseCooldownMins  *int     `json:"reverse_cooldown_minutes,omitempty"`
+	MaxReversalsPerDay   *int     `json:"max_reversals_per_day,omitempty"`
 	EWMALambda           *float64 `json:"ewma_lambda,omitempty"`
 	VolatilityMultiplier *float64 `json:"volatility_multiplier,omitempty"`
 	TrailActivationR     *float64 `json:"trail_activation_r,omitempty"`

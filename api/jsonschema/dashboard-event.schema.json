@@ -25,7 +25,11 @@
         "position_monitor",
         "reconciled",
         "automation_evaluated",
-        "automated_exit"
+        "automated_exit",
+        "reversal_observed",
+        "reversal_closed",
+        "reversal_reassessed",
+        "reversal_opened"
       ]
     },
     "run_id": {
@@ -58,6 +62,12 @@
     "decision": {
       "$ref": "#/$defs/ApprovalDecision"
     },
+    "position_side": { "$ref": "#/$defs/Side" },
+    "proposal_side": { "$ref": "#/$defs/Side" },
+    "side": { "$ref": "#/$defs/Side" },
+    "model": { "$ref": "#/$defs/AutoApprovalMetrics" },
+    "reversal": { "$ref": "#/$defs/ReversalDecision" },
+    "pnl_quote": { "$ref": "#/$defs/DecimalString" },
     "exit_decision": {
       "$ref": "#/$defs/ExitDecision"
     },
@@ -170,12 +180,32 @@
     {
       "properties": { "type": { "const": "automated_exit" } },
       "required": ["symbol", "exit_decision", "execution"]
+    },
+    {
+      "properties": { "type": { "const": "reversal_observed" } },
+      "required": ["symbol", "position_side", "proposal_side", "model", "reversal"]
+    },
+    {
+      "properties": { "type": { "const": "reversal_closed" } },
+      "required": ["symbol", "side", "execution", "pnl_quote"]
+    },
+    {
+      "properties": { "type": { "const": "reversal_reassessed" } },
+      "required": ["symbol", "assessment", "model"]
+    },
+    {
+      "properties": { "type": { "const": "reversal_opened" } },
+      "required": ["symbol", "side", "execution"]
     }
   ],
   "$defs": {
     "DecimalString": {
       "type": "string",
       "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$"
+    },
+    "Side": {
+      "type": "string",
+      "enum": ["long", "short", "flat"]
     },
     "NullableDecimalString": {
       "oneOf": [
@@ -340,6 +370,36 @@
         "samples": { "type": "integer", "minimum": 0 },
         "confirmations": { "type": "integer", "minimum": 0 },
         "holding": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "AutoApprovalMetrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allowed", "reward_risk", "expected_r", "kelly_fraction", "confidence", "risk_score", "risk_fraction", "recommended_quote", "reason"],
+      "properties": {
+        "allowed": { "type": "boolean" },
+        "reward_risk": { "type": "number" },
+        "expected_r": { "type": "number" },
+        "kelly_fraction": { "type": "number" },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "risk_score": { "type": "number", "minimum": 0, "maximum": 1 },
+        "risk_fraction": { "type": "number", "minimum": 0 },
+        "recommended_quote": { "$ref": "#/$defs/DecimalString" },
+        "reason": { "type": "string" }
+      }
+    },
+    "ReversalDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ready", "side", "confirmations", "required", "reversals_today", "reason"],
+      "properties": {
+        "ready": { "type": "boolean" },
+        "side": { "$ref": "#/$defs/Side" },
+        "confirmations": { "type": "integer", "minimum": 0 },
+        "required": { "type": "integer", "minimum": 1 },
+        "reversals_today": { "type": "integer", "minimum": 0 },
+        "cooldown_until": { "type": "string", "format": "date-time" },
+        "reason": { "type": "string" }
       }
     },
     "ProtectiveOrder": {

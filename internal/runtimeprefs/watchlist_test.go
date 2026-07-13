@@ -45,3 +45,24 @@ func TestAutomationStoreRoundTrip(t *testing.T) {
 		t.Fatalf("automation: got=%#v found=%v err=%v", got, found, err)
 	}
 }
+
+func TestAutomationStoreMergesNewSafetyDefaultsIntoLegacySnapshot(t *testing.T) {
+	ctx := context.Background()
+	repository := persistence.NewMemoryRepository(10)
+	if err := repository.SaveCheckpoint(ctx, checkpointRunID, automationStep, map[string]any{
+		"enabled": false, "scan_enabled": true, "approval_enabled": true, "exit_enabled": true,
+		"max_risk_score": 0.5, "max_quote": "200", "min_confidence": 0.65,
+		"min_reward_risk": 1.5, "ewma_lambda": 0.94, "volatility_multiplier": 3,
+		"trail_activation_r": 1, "trail_giveback_r": 0.5, "max_holding_minutes": 360,
+		"time_stop_min_r": 0, "exit_confirmations": 2, "exit_min_samples": 8,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, found, err := New(repository).LoadAutomation(ctx)
+	if err != nil || !found {
+		t.Fatalf("load found=%v err=%v", found, err)
+	}
+	if !got.EntryEnabled || got.ReverseEnabled || got.KellyScale != 0.25 || got.ReverseConfirmations != 2 || got.MinEntryQuote.String() != "20" {
+		t.Fatalf("legacy automation did not inherit safe defaults: %+v", got)
+	}
+}

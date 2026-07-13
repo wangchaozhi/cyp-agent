@@ -20,12 +20,22 @@ describe("automation strategy configuration", () => {
   const valid = {
     enabled: false,
     scan_enabled: true,
+    entry_enabled: true,
     approval_enabled: true,
     exit_enabled: true,
+    reverse_enabled: false,
     max_risk_score: 0.5,
     max_quote: 200,
+    min_entry_quote: 20,
     min_confidence: 0.65,
     min_reward_risk: 1.5,
+    kelly_scale: 0.25,
+    reverse_min_confidence: 0.75,
+    reverse_min_reward_risk: 2,
+    reverse_confirmations: 2,
+    reverse_signal_minutes: 30,
+    reverse_cooldown_minutes: 60,
+    max_reversals_per_day: 2,
     ewma_lambda: 0.94,
     volatility_multiplier: 3,
     trail_activation_r: 1,
@@ -43,5 +53,6 @@ describe("automation strategy configuration", () => {
   it("rejects unsafe probability and sample parameters", () => {
     expect(validateAutomation({ ...valid, min_confidence: 1.2 })).toContain("置信度");
     expect(validateAutomation({ ...valid, exit_min_samples: 1 })).toContain("样本数");
+    expect(validateAutomation({ ...valid, reverse_confirmations: 0 })).toContain("反向");
   });
 });

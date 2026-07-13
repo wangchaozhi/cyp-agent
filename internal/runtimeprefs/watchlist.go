@@ -32,7 +32,9 @@ func (store *Store) LoadAutomation(ctx context.Context) (config.AutomationConfig
 	if len(raw) == 0 {
 		return config.AutomationConfig{}, false, nil
 	}
-	var automation config.AutomationConfig
+	// Merge older persisted snapshots into current defaults so newly added
+	// safety controls never silently become zero-valued after an upgrade.
+	automation := config.DefaultSettings().Automation
 	if err := json.Unmarshal(raw, &automation); err != nil {
 		return config.AutomationConfig{}, false, err
 	}

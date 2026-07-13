@@ -314,6 +314,52 @@ func TestOKXDemoPlacesPerpetualWithNativeProtection(t *testing.T) {
 	}
 }
 
+func TestOKXDemoCancelsResidualProtectiveAlgos(t *testing.T) {
+	const secret = "okx-demo-secret"
+	var canceled atomic.Bool
+	var cancelCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		if request.Header.Get("x-simulated-trading") != "1" {
+			t.Error("private Demo request is missing x-simulated-trading=1")
+		}
+		switch request.URL.Path {
+		case "/api/v5/trade/orders-algo-pending":
+			if canceled.Load() || request.URL.Query().Get("ordType") == "oco" {
+				_, _ = response.Write([]byte(`{"code":"0","data":[]}`))
+				return
+			}
+			_, _ = response.Write([]byte(`{"code":"0","data":[{"algoId":"algo-1","slTriggerPx":"1800","tpTriggerPx":"2200"}]}`))
+		case "/api/v5/trade/cancel-algos":
+			cancelCalls.Add(1)
+			raw := assertOKXDemoPOSTSignature(t, request, secret)
+			var body []map[string]string
+			if err := json.Unmarshal(raw, &body); err != nil {
+				t.Fatal(err)
+			}
+			if len(body) != 1 || body[0]["algoId"] != "algo-1" || body[0]["instId"] != "ETH-USDT-SWAP" {
+				t.Errorf("cancel body=%#v", body)
+			}
+			canceled.Store(true)
+			_, _ = response.Write([]byte(`{"code":"0","data":[{"algoId":"algo-1","sCode":"0","sMsg":""}]}`))
+		default:
+			http.NotFound(response, request)
+		}
+	}))
+	defer server.Close()
+	target := newTestCEX(t, "okx", server.URL, func(config *CEXConfig) {
+		config.APIKey, config.APISecret, config.Passphrase = "okx-demo-key", secret, "pass"
+		config.Demo, config.EnableDemoTrading = true, true
+	})
+	if err := target.CancelProtectiveOrders(context.Background(), "ETH/USDT:USDT"); err != nil {
+		t.Fatal(err)
+	}
+	remaining, err := target.ProtectiveOrders(context.Background(), "ETH/USDT:USDT")
+	if err != nil || len(remaining) != 0 || cancelCalls.Load() != 1 {
+		t.Fatalf("remaining=%#v calls=%d err=%v", remaining, cancelCalls.Load(), err)
+	}
+}
+
 func assertOKXDemoPOSTSignature(t *testing.T, request *http.Request, secret string) []byte {
 	t.Helper()
 	raw, err := io.ReadAll(request.Body)

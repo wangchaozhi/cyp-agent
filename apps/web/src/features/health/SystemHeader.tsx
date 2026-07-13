@@ -97,7 +97,7 @@ export function SystemHeader({
           aria-pressed={automationEnabled}
           onClick={onToggleAutomation}
           disabled={switchingAutomation || !health || mode === "live"}
-          title={mode === "live" ? "Live 只读模式不能开启策略自动化" : automationEnabled ? "关闭自动扫描、审批与主动退出；原生保护单不受影响" : "开启已配置的自动化策略"}
+          title={mode === "live" ? "Live 只读模式不能开启策略自动化" : automationEnabled ? "关闭自动扫描、Kelly 开仓、审批、主动退出与反向；原生保护单不受影响" : "开启已配置的自动化策略"}
         >
           <Workflow size={15} />
           <span><small>策略自动化</small><strong>{switchingAutomation ? "切换中" : automationEnabled ? "运行中" : "已关闭"}</strong></span>

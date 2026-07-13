@@ -10,12 +10,22 @@ export type RuntimeMode = "paper" | "live";
 export interface AutomationSettings {
   enabled: boolean;
   scan_enabled: boolean;
+  entry_enabled: boolean;
   approval_enabled: boolean;
   exit_enabled: boolean;
+  reverse_enabled: boolean;
   max_risk_score: number;
   max_quote: Numeric;
+  min_entry_quote: Numeric;
   min_confidence: number;
   min_reward_risk: number;
+  kelly_scale: number;
+  reverse_min_confidence: number;
+  reverse_min_reward_risk: number;
+  reverse_confirmations: number;
+  reverse_signal_minutes: number;
+  reverse_cooldown_minutes: number;
+  max_reversals_per_day: number;
   ewma_lambda: number;
   volatility_multiplier: number;
   trail_activation_r: number;
@@ -368,6 +378,18 @@ export interface DashboardEvent {
   proposal?: TradeProposal;
   assessment?: RiskAssessment;
   decision?: ApprovalDecision;
+  position_side?: Side;
+  proposal_side?: Side;
+  side?: Side;
+  reversal?: {
+    ready: boolean;
+    side: Side;
+    confirmations: number;
+    required: number;
+    reversals_today: number;
+    cooldown_until?: string;
+    reason: string;
+  };
   exit_decision?: {
     trigger: boolean;
     reason: string;

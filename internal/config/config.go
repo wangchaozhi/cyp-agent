@@ -75,12 +75,22 @@ type BudgetConfig struct {
 type AutomationConfig struct {
 	Enabled              bool              `json:"enabled"`
 	ScanEnabled          bool              `json:"scan_enabled"`
+	EntryEnabled         bool              `json:"entry_enabled"`
 	ApprovalEnabled      bool              `json:"approval_enabled"`
 	ExitEnabled          bool              `json:"exit_enabled"`
+	ReverseEnabled       bool              `json:"reverse_enabled"`
 	MaxRiskScore         float64           `json:"max_risk_score"`
 	MaxQuote             contracts.Decimal `json:"max_quote"`
+	MinEntryQuote        contracts.Decimal `json:"min_entry_quote"`
 	MinConfidence        float64           `json:"min_confidence"`
 	MinRewardRisk        float64           `json:"min_reward_risk"`
+	KellyScale           float64           `json:"kelly_scale"`
+	ReverseMinConfidence float64           `json:"reverse_min_confidence"`
+	ReverseMinRewardRisk float64           `json:"reverse_min_reward_risk"`
+	ReverseConfirmations int               `json:"reverse_confirmations"`
+	ReverseSignalMinutes int               `json:"reverse_signal_minutes"`
+	ReverseCooldownMins  int               `json:"reverse_cooldown_minutes"`
+	MaxReversalsPerDay   int               `json:"max_reversals_per_day"`
 	EWMALambda           float64           `json:"ewma_lambda"`
 	VolatilityMultiplier float64           `json:"volatility_multiplier"`
 	TrailActivationR     float64           `json:"trail_activation_r"`
@@ -184,9 +194,13 @@ func DefaultSettings() Settings {
 		StateFile:       "data/cyp-state.json",
 		LogLevel:        "INFO",
 		Automation: AutomationConfig{
-			ScanEnabled: true, ApprovalEnabled: true, ExitEnabled: true,
+			ScanEnabled: true, EntryEnabled: true, ApprovalEnabled: true, ExitEnabled: true,
 			MaxRiskScore: 0.5, MaxQuote: contracts.MustDecimal("200"),
-			MinConfidence: 0.65, MinRewardRisk: 1.5, EWMALambda: 0.94,
+			MinEntryQuote: contracts.MustDecimal("20"), MinConfidence: 0.65,
+			MinRewardRisk: 1.5, KellyScale: 0.25,
+			ReverseMinConfidence: 0.75, ReverseMinRewardRisk: 2,
+			ReverseConfirmations: 2, ReverseSignalMinutes: 30,
+			ReverseCooldownMins: 60, MaxReversalsPerDay: 2, EWMALambda: 0.94,
 			VolatilityMultiplier: 3, TrailActivationR: 1, TrailGivebackR: 0.5,
 			MaxHoldingMinutes: 360, TimeStopMinR: 0, ExitConfirmations: 2, ExitMinSamples: 8,
 		},

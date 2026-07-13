@@ -195,6 +195,27 @@ func (v *PaperVenue) ProtectiveFor(symbol string) []contracts.ProtectiveOrder {
 	return orders
 }
 
+func (v *PaperVenue) ProtectiveOrders(ctx context.Context, symbol string) ([]contracts.ProtectiveOrder, error) {
+	if err := contextError(ctx); err != nil {
+		return nil, err
+	}
+	return v.ProtectiveFor(symbol), nil
+}
+
+func (v *PaperVenue) CancelProtectiveOrders(ctx context.Context, symbol string) error {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	for key := range v.protective {
+		if key.symbol == symbol {
+			delete(v.protective, key)
+		}
+	}
+	return nil
+}
+
 func (v *PaperVenue) Balances(ctx context.Context) (contracts.Balances, error) {
 	if err := contextError(ctx); err != nil {
 		return contracts.Balances{}, err

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Activity, Calculator, Radar, ShieldCheck } from "lucide-react";
+import { Activity, Calculator, Play, Radar, Repeat2, ShieldCheck } from "lucide-react";
 
 import type { AutomationSettings, RuntimeSettingsUpdate } from "../../shared/api/types";
 
@@ -9,12 +9,13 @@ interface AutomationSettingsProps {
   onSave: (payload: RuntimeSettingsUpdate) => Promise<void>;
 }
 
-interface AutomationDraft extends Omit<AutomationSettings, "max_quote"> {
+interface AutomationDraft extends Omit<AutomationSettings, "max_quote" | "min_entry_quote"> {
   max_quote: number;
+  min_entry_quote: number;
 }
 
 function toDraft(value: AutomationSettings): AutomationDraft {
-  return { ...value, max_quote: Number(value.max_quote) };
+  return { ...value, max_quote: Number(value.max_quote), min_entry_quote: Number(value.min_entry_quote) };
 }
 
 export function validateAutomation(value: AutomationDraft): string | null {
@@ -22,8 +23,15 @@ export function validateAutomation(value: AutomationDraft): string | null {
   if (finite.length) return "所有数学参数必须是有效数字";
   if (value.max_risk_score < 0 || value.max_risk_score > 1) return "风险分上限应在 0 到 1 之间";
   if (value.max_quote < 0) return "自动审批金额不能为负数";
+  if (value.min_entry_quote < 0 || (value.max_quote > 0 && value.min_entry_quote > value.max_quote)) return "最小开仓金额应在 0 到最大金额之间";
   if (value.min_confidence < 0 || value.min_confidence > 1) return "最低置信度应在 0 到 1 之间";
   if (value.min_reward_risk <= 0) return "最低盈亏比必须大于 0";
+  if (value.kelly_scale <= 0 || value.kelly_scale > 1) return "Kelly 使用比例应在 0 到 1 之间";
+  if (value.reverse_min_confidence < 0 || value.reverse_min_confidence > 1) return "反向置信度应在 0 到 1 之间";
+  if (value.reverse_min_reward_risk <= 0) return "反向盈亏比必须大于 0";
+  if (value.reverse_confirmations < 1 || value.reverse_signal_minutes < 1 || value.reverse_cooldown_minutes < 0 || value.max_reversals_per_day < 1) {
+    return "反向确认、窗口、冷却或每日次数不在安全范围内";
+  }
   if (value.ewma_lambda <= 0 || value.ewma_lambda >= 1) return "EWMA λ 应在 0 到 1 之间";
   if (value.volatility_multiplier < 0 || value.trail_activation_r <= 0 || value.trail_giveback_r <= 0) {
     return "波动率倍数不能为负，跟踪参数必须大于 0";
@@ -41,7 +49,7 @@ export function AutomationSettingsPanel({ value, liveReadOnly = false, onSave }:
 
   useEffect(() => setDraft(toDraft(value)), [value]);
 
-  const setToggle = (field: "enabled" | "scan_enabled" | "approval_enabled" | "exit_enabled", checked: boolean) => {
+  const setToggle = (field: "enabled" | "scan_enabled" | "entry_enabled" | "approval_enabled" | "exit_enabled" | "reverse_enabled", checked: boolean) => {
     setError(null);
     setDraft((current) => ({ ...current, [field]: checked }));
   };
@@ -76,7 +84,7 @@ export function AutomationSettingsPanel({ value, liveReadOnly = false, onSave }:
             <Activity size={13} /> {draft.enabled ? "自动化运行中" : "自动化已关闭"}
           </span>
           <h3>策略自动化</h3>
-          <p>自动扫描、数学审批和主动退出可独立控制；总开关关闭后，交易所原生止损止盈仍然有效。</p>
+          <p>自动扫描、分数 Kelly 开仓、数学审批、主动退出与受控反向可独立控制；总开关关闭后，交易所原生止损止盈仍然有效。</p>
         </div>
         <label className="toggle-control toggle-control--master">
           <input
@@ -97,6 +105,12 @@ export function AutomationSettingsPanel({ value, liveReadOnly = false, onSave }:
           <input type="checkbox" checked={draft.scan_enabled} onChange={(event) => setToggle("scan_enabled", event.target.checked)} />
           <i aria-hidden="true" />
         </label>
+        <label className={`automation-strategy ${draft.entry_enabled ? "is-on" : ""}`}>
+          <Play size={16} />
+          <span><strong>自动开仓</strong><small>按分数 Kelly 计算实际仓位</small></span>
+          <input type="checkbox" checked={draft.entry_enabled} onChange={(event) => setToggle("entry_enabled", event.target.checked)} />
+          <i aria-hidden="true" />
+        </label>
         <label className={`automation-strategy ${draft.approval_enabled ? "is-on" : ""}`}>
           <Calculator size={16} />
           <span><strong>数学审批</strong><small>RR、期望值与 Kelly 同时过线</small></span>
@@ -109,6 +123,12 @@ export function AutomationSettingsPanel({ value, liveReadOnly = false, onSave }:
           <input type="checkbox" checked={draft.exit_enabled} onChange={(event) => setToggle("exit_enabled", event.target.checked)} />
           <i aria-hidden="true" />
         </label>
+        <label className={`automation-strategy ${draft.reverse_enabled ? "is-on" : ""}`}>
+          <Repeat2 size={16} />
+          <span><strong>自动反向</strong><small>先平仓验空，再风控开反向仓</small></span>
+          <input type="checkbox" checked={draft.reverse_enabled} onChange={(event) => setToggle("reverse_enabled", event.target.checked)} />
+          <i aria-hidden="true" />
+        </label>
       </div>
 
       <div className="automation-parameter-groups">
@@ -116,8 +136,19 @@ export function AutomationSettingsPanel({ value, liveReadOnly = false, onSave }:
           <legend>自动审批边界</legend>
           <label><span>风险分上限</span><input type="number" min="0" max="1" step="0.01" value={draft.max_risk_score} onChange={(event) => setNumber("max_risk_score", event.target.value)} /></label>
           <label><span>最大名义金额 (USDT)</span><input type="number" min="0" step="10" value={draft.max_quote} onChange={(event) => setNumber("max_quote", event.target.value)} /></label>
+          <label><span>最小开仓金额 (USDT)</span><input type="number" min="0" step="5" value={draft.min_entry_quote} onChange={(event) => setNumber("min_entry_quote", event.target.value)} /></label>
           <label><span>最低置信度</span><input type="number" min="0" max="1" step="0.01" value={draft.min_confidence} onChange={(event) => setNumber("min_confidence", event.target.value)} /></label>
           <label><span>最低盈亏比 (RR)</span><input type="number" min="0.1" step="0.1" value={draft.min_reward_risk} onChange={(event) => setNumber("min_reward_risk", event.target.value)} /></label>
+          <label><span>Kelly 使用比例</span><input type="number" min="0.01" max="1" step="0.05" value={draft.kelly_scale} onChange={(event) => setNumber("kelly_scale", event.target.value)} /></label>
+        </fieldset>
+        <fieldset>
+          <legend>自动反向护栏</legend>
+          <label><span>最低反向置信度</span><input type="number" min="0" max="1" step="0.01" value={draft.reverse_min_confidence} onChange={(event) => setNumber("reverse_min_confidence", event.target.value)} /></label>
+          <label><span>最低反向盈亏比</span><input type="number" min="0.1" step="0.1" value={draft.reverse_min_reward_risk} onChange={(event) => setNumber("reverse_min_reward_risk", event.target.value)} /></label>
+          <label><span>连续确认次数</span><input type="number" min="1" step="1" value={draft.reverse_confirmations} onChange={(event) => setNumber("reverse_confirmations", event.target.value)} /></label>
+          <label><span>信号窗口 (分钟)</span><input type="number" min="1" step="5" value={draft.reverse_signal_minutes} onChange={(event) => setNumber("reverse_signal_minutes", event.target.value)} /></label>
+          <label><span>反向冷却 (分钟)</span><input type="number" min="0" step="15" value={draft.reverse_cooldown_minutes} onChange={(event) => setNumber("reverse_cooldown_minutes", event.target.value)} /></label>
+          <label><span>每日最多反向</span><input type="number" min="1" step="1" value={draft.max_reversals_per_day} onChange={(event) => setNumber("max_reversals_per_day", event.target.value)} /></label>
         </fieldset>
         <fieldset>
           <legend>主动退出模型</legend>
@@ -134,7 +165,7 @@ export function AutomationSettingsPanel({ value, liveReadOnly = false, onSave }:
 
       {error ? <div className="inline-alert automation-settings__error">{error}</div> : null}
       <div className="automation-settings__footer">
-        <p>主动退出只发送 reduce-only 市价单，不会反向开仓；Live 模式会锁定总开关，但仍可预先调整参数。</p>
+        <p>反向严格执行“reduce-only 平旧仓 → 核验归零 → 撤残余保护单 → 重新风控 → 开新仓”；任一步失败都停在空仓或原仓。Live 模式仍硬锁自动化。</p>
         <button className="command-button command-button--primary" type="button" disabled={saving} onClick={() => void save()}>
           {saving ? "保存中" : "保存自动化策略"}
         </button>

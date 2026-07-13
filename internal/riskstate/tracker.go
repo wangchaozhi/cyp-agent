@@ -285,7 +285,13 @@ func (tracker *Tracker) OpenTrade(symbol string, instrument contracts.Instrument
 	defer tracker.mu.RUnlock()
 	for index := len(tracker.state.Trades) - 1; index >= 0; index-- {
 		trade := tracker.state.Trades[index]
-		if trade.Kind == "open" && trade.Symbol == symbol && trade.Instrument == instrument {
+		if trade.Symbol != symbol || trade.Instrument != instrument {
+			continue
+		}
+		if trade.Kind == "close" {
+			return TradeRecord{}, false
+		}
+		if trade.Kind == "open" {
 			return trade, true
 		}
 	}

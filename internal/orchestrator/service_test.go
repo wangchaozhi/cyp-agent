@@ -14,6 +14,7 @@ import (
 	"github.com/wangchaozhi/cyp-agent/internal/events"
 	"github.com/wangchaozhi/cyp-agent/internal/metrics"
 	"github.com/wangchaozhi/cyp-agent/internal/orchestrator"
+	"github.com/wangchaozhi/cyp-agent/internal/riskstate"
 	runtimecore "github.com/wangchaozhi/cyp-agent/internal/runtime"
 	"github.com/wangchaozhi/cyp-agent/internal/venue"
 )
@@ -156,6 +157,77 @@ func TestRunOnceAutoApprovalExecutes(t *testing.T) {
 	mark, ok := harness.service.Mark("BTC/USDT")
 	if !ok || !mark.IsPositive() {
 		t.Fatalf("mark after run = %s (ok=%v)", mark, ok)
+	}
+}
+
+func TestRunOnceReversesOnlyAfterConfirmationAndFlatVerification(t *testing.T) {
+	tracker, err := riskstate.New(context.Background(), nil, contracts.MustDecimal("10000"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	harness := newHarness(t, func(settings *config.Settings) {
+		settings.Automation.Enabled = true
+		settings.Automation.EntryEnabled = true
+		settings.Automation.ApprovalEnabled = true
+		settings.Automation.ReverseEnabled = true
+		settings.Automation.MinConfidence = 0
+		settings.Automation.MinRewardRisk = 1
+		settings.Automation.ReverseMinConfidence = 0
+		settings.Automation.ReverseMinRewardRisk = 1
+		settings.Automation.ReverseConfirmations = 2
+		settings.Automation.ReverseCooldownMins = 0
+		settings.Automation.MaxReversalsPerDay = 5
+		settings.Automation.MinEntryQuote = contracts.MustDecimal("1")
+		settings.AutoSymbols = "BTC/USDT"
+		settings.Automation.MaxRiskScore = 1
+		settings.Automation.MaxQuote = contracts.MustDecimal("1000")
+	}, orchestrator.WithDataSource(bullishSource{}), orchestrator.WithRiskState(tracker))
+
+	mark := contracts.MustDecimal("6341")
+	if err := harness.venue.SetMarkPrice("BTC/USDT", mark); err != nil {
+		t.Fatal(err)
+	}
+	initial := contracts.OrderIntent{
+		ClientID: "initial-short", Symbol: "BTC/USDT", Venue: "paper", Side: contracts.SideShort,
+		Instrument: contracts.InstrumentSpot, OrderType: contracts.EntryTypeMarket,
+		SizeQuote: contracts.MustDecimal("100"), Price: &mark, Leverage: 1,
+		MarginMode: contracts.MarginModeIsolated,
+	}
+	execution, err := harness.venue.Place(context.Background(), initial)
+	if err != nil || execution.Status != contracts.OrderStatusFilled {
+		t.Fatalf("initial execution=%+v err=%v", execution, err)
+	}
+	initialProposal := contracts.TradeProposal{
+		Symbol: initial.Symbol, Venue: initial.Venue, Side: initial.Side, Instrument: initial.Instrument,
+		SizeQuote: initial.SizeQuote, Leverage: initial.Leverage, MarginMode: initial.MarginMode,
+	}
+	if err := tracker.RecordOpen(context.Background(), "initial-run", initialProposal, execution, contracts.MustDecimal("10000")); err != nil {
+		t.Fatal(err)
+	}
+
+	first := harness.service.RunOnce(context.Background(), "reverse-one", "BTC/USDT")
+	if first.Status != contracts.RunNotApproved {
+		t.Fatalf("first status=%s error=%v decision=%+v", first.Status, first.Error, first.Decision)
+	}
+	positions, _ := harness.venue.Positions(context.Background())
+	if len(positions) != 1 || positions[0].Side != contracts.SideShort {
+		t.Fatalf("first confirmation changed position: %+v", positions)
+	}
+
+	second := harness.service.RunOnce(context.Background(), "reverse-two", "BTC/USDT")
+	if second.Status != contracts.RunExecuted {
+		t.Fatalf("second status=%s error=%v assessment=%+v", second.Status, second.Error, second.Assessment)
+	}
+	positions, _ = harness.venue.Positions(context.Background())
+	if len(positions) != 1 || positions[0].Side != contracts.SideLong {
+		t.Fatalf("position was not reversed: %+v", positions)
+	}
+	if _, ok := tracker.OpenTrade("BTC/USDT", contracts.InstrumentSpot); !ok {
+		t.Fatal("new reverse position was not recorded as open")
+	}
+	trades := tracker.Trades()
+	if len(trades) != 3 || trades[1].Kind != "close" || trades[1].ClientID != "reverse-close-reverse-two" || trades[2].Side != contracts.SideLong {
+		t.Fatalf("unexpected reversal trade ledger: %+v", trades)
 	}
 }
 

@@ -34,6 +34,10 @@ const LABELS: Record<string, string> = {
   reconciled: "对账",
   automation_evaluated: "退出观察",
   automated_exit: "自动平仓",
+  reversal_observed: "反向确认",
+  reversal_closed: "反向平仓",
+  reversal_reassessed: "反向风控",
+  reversal_opened: "反向开仓",
 };
 
 const RUN_STATUS_LABELS: Record<string, string> = {
@@ -98,6 +102,22 @@ export function summarizeEvent(event: DashboardEvent): string {
     return `${event.symbol ?? "-"} ${decision.reason} 成交均价=${event.execution?.avg_price ?? "-"}`;
   }
 
+  if (event.type === "reversal_observed" && event.reversal) {
+    return `${event.symbol ?? "-"} ${sideLabel(event.position_side ?? "flat")} → ${sideLabel(event.proposal_side ?? event.reversal.side)} ${event.reversal.reason} 确认=${event.reversal.confirmations}/${event.reversal.required}`;
+  }
+
+  if (event.type === "reversal_closed" && event.execution) {
+    return `${event.symbol ?? "-"} 旧${sideLabel(event.side ?? "flat")}仓已平，均价=${event.execution.avg_price ?? "-"}`;
+  }
+
+  if (event.type === "reversal_reassessed" && event.assessment) {
+    return `${event.symbol ?? "-"} 重新风控：${verdictLabel(event.assessment.verdict)} risk=${formatConfidence(event.assessment.risk_score)}`;
+  }
+
+  if (event.type === "reversal_opened" && event.execution) {
+    return `${event.symbol ?? "-"} 新${sideLabel(event.side ?? "flat")}仓 ${event.execution.status} 均价=${event.execution.avg_price ?? "-"}`;
+  }
+
   if (event.type === "awaiting_approval" && event.proposal) {
     return `${sideLabel(event.proposal.side)} ${event.symbol ?? event.proposal.symbol} 等待人工确认`;
   }
@@ -146,8 +166,8 @@ export function eventTone(event: DashboardEvent): string {
   }
   if (event.type === "run_failed") return "event-row--bad";
   if (["risk_assessed", "awaiting_approval", "killswitch"].includes(event.type)) return "event-row--warn";
-  if (["executed", "reviewed", "automated_exit"].includes(event.type)) return "event-row--ok";
-  if (event.type === "automation_evaluated") return "event-row--warn";
+  if (["executed", "reviewed", "automated_exit", "reversal_closed", "reversal_opened"].includes(event.type)) return "event-row--ok";
+  if (["automation_evaluated", "reversal_observed", "reversal_reassessed"].includes(event.type)) return "event-row--warn";
   return "";
 }
 
