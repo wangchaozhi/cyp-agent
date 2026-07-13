@@ -27,6 +27,11 @@ func TestDefaultSettingsArePaperAndLiveExecutionIsCompileTimeDisabled(t *testing
 		t.Fatalf("OHLCV defaults: enabled=%v retention=%d",
 			settings.OHLCVArchiveEnabled, settings.OHLCVRetentionDays)
 	}
+	if !settings.TokenUsageEnabled || settings.TokenUsageRetentionDays != 90 ||
+		settings.TokenUsageTimezone != "Asia/Shanghai" || settings.Budget.DailyTokenBudget != 2_000_000 ||
+		settings.Budget.DailyCostBudgetUSD != 50 {
+		t.Fatalf("token usage defaults: runtime=%+v budget=%+v", settings.Snapshot().Runtime, settings.Budget)
+	}
 
 	settings.Mode = "live"
 	settings.LiveAck = true
@@ -140,12 +145,15 @@ func TestSettingsSerializationIsRedacted(t *testing.T) {
 func TestLoadRejectsInvalidValuesWithoutFallback(t *testing.T) {
 	t.Parallel()
 	tests := map[string]string{
-		"CYP_MODE":               "production",
-		"CYP_KILL":               "sometimes",
-		"CYP_MAX_RISK_PER_TRADE": "NaN",
-		"CYP_MAX_CONCURRENCY":    "0",
-		"CYP_MAX_MARGIN_PCT":     "1.1",
-		"CYP_LEVERAGE_STEP":      "2",
+		"CYP_MODE":                  "production",
+		"CYP_KILL":                  "sometimes",
+		"CYP_MAX_RISK_PER_TRADE":    "NaN",
+		"CYP_MAX_CONCURRENCY":       "0",
+		"CYP_MAX_MARGIN_PCT":        "1.1",
+		"CYP_LEVERAGE_STEP":         "2",
+		"CYP_TOKEN_USAGE_TIMEZONE":  "Mars/Olympus",
+		"CYP_DAILY_TOKEN_BUDGET":    "0",
+		"CYP_DAILY_COST_BUDGET_USD": "0",
 	}
 	for key, value := range tests {
 		key, value := key, value

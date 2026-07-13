@@ -18,6 +18,10 @@ func ConservativeCostEstimator(_ string, usage Usage) float64 {
 }
 
 func FromSettings(settings config.Settings) *Client {
+	return FromSettingsWithObserver(settings, nil)
+}
+
+func FromSettingsWithObserver(settings config.Settings, observer UsageObserver) *Client {
 	var provider Provider
 	enabled := settings.LLMEnabled()
 	if enabled && settings.LLMProvider == "deepseek" {
@@ -53,5 +57,6 @@ func FromSettings(settings config.Settings) *Client {
 			MaxWallTime: time.Duration(settings.Budget.MaxWallSeconds) * time.Second,
 		},
 		CostEstimator: ConservativeCostEstimator,
+		UsageObserver: observer,
 	})
 }

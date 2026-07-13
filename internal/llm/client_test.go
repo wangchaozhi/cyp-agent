@@ -13,11 +13,61 @@ import (
 	"github.com/wangchaozhi/cyp-agent/internal/config"
 )
 
+type usageObserverStub struct {
+	mu     sync.Mutex
+	events []UsageEvent
+}
+
+func (*usageObserverStub) Reserve(context.Context, UsageEvent) error { return nil }
+func (observer *usageObserverStub) Record(_ context.Context, event UsageEvent) {
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	observer.events = append(observer.events, event)
+}
+
 func testOptions() Options {
 	return Options{
 		Enabled: true, Model: "model", FastModel: "fast",
 		MaxRetries: 2, Timeout: time.Second,
 		BreakerThreshold: 10, BreakerCooldown: time.Second,
+	}
+}
+
+func TestClientRecordsProviderNeutralAttributedUsage(t *testing.T) {
+	provider := NewMockProvider(0, true)
+	provider.TextFunc = func(_ context.Context, request TextRequest) (Completion, error) {
+		return Completion{Text: "ok", Model: request.Model, Usage: Usage{InputTokens: 12, OutputTokens: 3, CostUSD: 0.01}}, nil
+	}
+	observer := &usageObserverStub{}
+	options := testOptions()
+	options.UsageObserver = observer
+	client := NewClient(provider, options)
+	ctx := WithUsageMetadata(context.Background(), UsageMetadata{
+		RunID: "run-1", Symbol: "BTC/USDT", Agent: "strategist", Source: "automatic",
+	})
+	if _, err := client.Text(ctx, "system", "user", false); err != nil {
+		t.Fatal(err)
+	}
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	if len(observer.events) != 1 {
+		t.Fatalf("events = %+v", observer.events)
+	}
+	event := observer.events[0]
+	if event.Provider != "mock" || event.Model != "model" || event.RunID != "run-1" ||
+		event.Symbol != "BTC/USDT" || event.Agent != "strategist" || event.Source != "automatic" ||
+		event.InputTokens != 12 || event.OutputTokens != 3 || event.Status != "success" || event.TokenEstimated {
+		t.Fatalf("event = %+v", event)
+	}
+}
+
+func TestDeepSeekProviderHasDistinctProviderName(t *testing.T) {
+	provider, err := NewDeepSeekProvider("key", "", "deepseek-chat", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider.Name() != "deepseek" {
+		t.Fatalf("provider name = %q", provider.Name())
 	}
 }
 

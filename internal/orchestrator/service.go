@@ -195,6 +195,16 @@ func (s *Service) ReviewClosed(
 
 // Start accepts a run immediately and executes it in a bounded goroutine.
 func (s *Service) Start(symbol string) (contracts.RunAccepted, error) {
+	return s.start(symbol, "manual")
+}
+
+// StartAutomated attributes scheduled scanner runs independently from
+// dashboard/API runs in provider-neutral LLM usage reports.
+func (s *Service) StartAutomated(symbol string) (contracts.RunAccepted, error) {
+	return s.start(symbol, "automatic")
+}
+
+func (s *Service) start(symbol, source string) (contracts.RunAccepted, error) {
 	symbol = strings.TrimSpace(symbol)
 	if symbol == "" {
 		return contracts.RunAccepted{}, ErrEmptySymbol
@@ -221,6 +231,9 @@ func (s *Service) Start(symbol string) (contracts.RunAccepted, error) {
 			return
 		}
 		err := s.locks.Do(s.ctx, symbol, func(runContext context.Context) error {
+			runContext = llm.WithUsageMetadata(runContext, llm.UsageMetadata{
+				RunID: runID, Symbol: symbol, Source: source,
+			})
 			s.runAndRecord(runContext, runID, symbol)
 			return nil
 		})
@@ -244,7 +257,9 @@ func (s *Service) RunOnce(ctx context.Context, runID, symbol string) contracts.R
 		}
 		runID = generated
 	}
-	return s.run(ctx, runID, strings.TrimSpace(symbol))
+	symbol = strings.TrimSpace(symbol)
+	ctx = llm.WithUsageMetadata(ctx, llm.UsageMetadata{RunID: runID, Symbol: symbol, Source: "manual"})
+	return s.run(ctx, runID, symbol)
 }
 
 func (s *Service) GetRun(runID string) (contracts.RunResult, bool) {

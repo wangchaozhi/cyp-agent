@@ -6,10 +6,11 @@ import (
 )
 
 var (
-	ErrDisabled        = errors.New("llm is disabled")
-	ErrCircuitOpen     = errors.New("llm circuit breaker is open")
-	ErrBudgetExceeded  = errors.New("llm budget exceeded")
-	ErrInvalidResponse = errors.New("llm returned an invalid response")
+	ErrDisabled            = errors.New("llm is disabled")
+	ErrCircuitOpen         = errors.New("llm circuit breaker is open")
+	ErrBudgetExceeded      = errors.New("llm budget exceeded")
+	ErrDailyBudgetExceeded = errors.New("daily llm budget exceeded")
+	ErrInvalidResponse     = errors.New("llm returned an invalid response")
 )
 
 // ProviderError deliberately omits response bodies, request payloads, URLs,

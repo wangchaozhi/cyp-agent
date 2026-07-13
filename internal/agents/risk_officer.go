@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/wangchaozhi/cyp-agent/internal/contracts"
+	"github.com/wangchaozhi/cyp-agent/internal/llm"
 )
 
 var riskReviewSchema = json.RawMessage(`{
@@ -48,8 +49,9 @@ func (RiskOfficer) Run(
 		drivers = append(drivers, fmt.Sprintf("%s:%s(%.2f)", report.Agent, report.Stance, report.Confidence))
 	}
 	var review riskReview
+	llmContext := llm.WithUsageMetadata(ctx, llm.UsageMetadata{Agent: "risk_officer"})
 	err := agentContext.LLM.JSON(
-		ctx,
+		llmContext,
 		"你是加密交易风控官。只能收紧不能放宽：若发现 thesis 不自洽、极端行情/事件窗口、或与已有敞口叠加同向风险，可 escalate_reject=true。置信度偏低本身不是否决理由，应体现为抬高 risk_score。给出 0-1 风险分与简短中文说明。",
 		fmt.Sprintf("提案：%s %s 仓位=%s 止损=%v 置信=%.2f\n分析：%s\n历史复盘经验：%s",
 			proposal.Side, proposal.Symbol, proposal.SizeQuote, proposal.StopLoss, proposal.Confidence,

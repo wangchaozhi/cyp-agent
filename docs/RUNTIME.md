@@ -30,7 +30,7 @@
 
 1. 加载并校验 `.env`/进程环境变量。
 2. 创建 Paper、Binance、OKX 场所注册表；只把 Paper 或显式启用的 OKX Demo 接到执行链。
-3. 创建数据源、仓储、事件总线、审批门和 Orchestrator。
+3. 创建数据源、仓储、事件总线、审批门、多供应商模型用量 Tracker 和 Orchestrator。
 4. 创建 `VenueReconciler`、`Scanner`、`PositionMonitor`、`AutomatedExitManager` 和 `Engine`。
 5. 若 `CYP_RUNTIME_AUTOSTART=true` 或自动化总开关开启，`Engine.Start` 先对账再启动后台循环。
 6. 两者都关闭时仍调用一次 `StartupReconcile`，只是不会启动循环；之后从 Dashboard 开启自动化会安全地启动运行时。
@@ -72,6 +72,12 @@ CYP_MAX_CONCURRENCY=2
 ```
 
 `CYP_MAX_CONCURRENCY` 限制 Orchestrator 同时执行的 run 数。API 会先返回已接受，超过上限的 goroutine 等待信号量；当前没有持久任务队列，因此部署层仍应限制请求速率和排队规模。
+
+## 模型调用预算与统计
+
+自动扫描使用 `source=automatic`，Dashboard 手动触发使用 `source=manual`；Strategist 与 RiskOfficer 各自写入 Agent 归因。每次调用由 Provider 返回实际输入/输出 Token，供应商缺失 usage 时才使用保守估算并设置 `token_estimated=true`；成本无法由供应商直接提供时设置 `cost_estimated=true`。
+
+自然日预算使用 `CYP_TOKEN_USAGE_TIMEZONE`（默认 `Asia/Shanghai`）切日。70% 提醒、90% 严重告警、100% 暂停新模型调用；暂停状态在下一自然日自动解除。LLM 失败或预算触顶时 Agent 回退确定性逻辑，不会关闭 PositionMonitor、AutomatedExitManager、对账或交易所原生保护单。
 
 ## 持仓监控
 

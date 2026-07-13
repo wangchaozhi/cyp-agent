@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/wangchaozhi/cyp-agent/internal/contracts"
@@ -209,6 +210,9 @@ func LoadWithOptions(options LoadOptions) (Settings, error) {
 		func() error { return setInt("CYP_MAX_CONCURRENCY", &settings.MaxConcurrency) },
 		func() error { return setBool("CYP_OHLCV_ARCHIVE_ENABLED", &settings.OHLCVArchiveEnabled) },
 		func() error { return setInt("CYP_OHLCV_RETENTION_DAYS", &settings.OHLCVRetentionDays) },
+		func() error { return setBool("CYP_TOKEN_USAGE_ENABLED", &settings.TokenUsageEnabled) },
+		func() error { return setInt("CYP_TOKEN_USAGE_RETENTION_DAYS", &settings.TokenUsageRetentionDays) },
+		func() error { setString("CYP_TOKEN_USAGE_TIMEZONE", &settings.TokenUsageTimezone); return nil },
 		func() error { return setDecimal("CYP_MAX_RISK_PER_TRADE", &settings.Risk.MaxRiskPerTrade) },
 		func() error { return setDecimal("CYP_MAX_POSITION_PCT", &settings.Risk.MaxPositionPct) },
 		func() error { return setDecimal("CYP_MAX_GROSS_EXPOSURE", &settings.Risk.MaxGrossExposure) },
@@ -240,6 +244,8 @@ func LoadWithOptions(options LoadOptions) (Settings, error) {
 		func() error { return setInt("CYP_MAX_TOKENS", &settings.Budget.MaxTokens) },
 		func() error { return setFloat("CYP_MAX_COST_USD", &settings.Budget.MaxCostUSD) },
 		func() error { return setInt("CYP_MAX_WALL_SECONDS", &settings.Budget.MaxWallSeconds) },
+		func() error { return setInt("CYP_DAILY_TOKEN_BUDGET", &settings.Budget.DailyTokenBudget) },
+		func() error { return setFloat("CYP_DAILY_COST_BUDGET_USD", &settings.Budget.DailyCostBudgetUSD) },
 	} {
 		if err := operation(); err != nil {
 			return Settings{}, err
@@ -304,6 +310,15 @@ func (s Settings) Validate() error {
 	if s.OHLCVRetentionDays < 30 || s.OHLCVRetentionDays > 3650 {
 		return errors.New("CYP_OHLCV_RETENTION_DAYS must be between 30 and 3650")
 	}
+	if s.TokenUsageEnabled && strings.TrimSpace(s.DBURL) == "" {
+		return errors.New("CYP_DB_URL is required when CYP_TOKEN_USAGE_ENABLED=true")
+	}
+	if s.TokenUsageRetentionDays < 1 || s.TokenUsageRetentionDays > 3650 {
+		return errors.New("CYP_TOKEN_USAGE_RETENTION_DAYS must be between 1 and 3650")
+	}
+	if _, err := time.LoadLocation(strings.TrimSpace(s.TokenUsageTimezone)); err != nil {
+		return fmt.Errorf("CYP_TOKEN_USAGE_TIMEZONE is invalid: %w", err)
+	}
 	if api := strings.TrimSpace(s.OnchainDataAPI); api != "" &&
 		!strings.HasPrefix(api, "http://") && !strings.HasPrefix(api, "https://") {
 		return errors.New("CYP_ONCHAIN_DATA_API must be an http(s) URL")
@@ -367,6 +382,12 @@ func (s Settings) Validate() error {
 	}
 	if s.Budget.MaxIterations <= 0 || s.Budget.MaxTokens <= 0 || s.Budget.MaxWallSeconds <= 0 || s.Budget.MaxCostUSD < 0 {
 		return errors.New("budget limits must be positive (cost may be zero)")
+	}
+	if s.Budget.DailyTokenBudget <= 0 {
+		return errors.New("CYP_DAILY_TOKEN_BUDGET must be positive")
+	}
+	if s.Budget.DailyCostBudgetUSD <= 0 {
+		return errors.New("CYP_DAILY_COST_BUDGET_USD must be positive")
 	}
 	if s.Risk.MaxOrdersPerHour <= 0 || s.Risk.MaxConsecutiveLosses <= 0 || s.Risk.ApprovalTimeoutSeconds <= 0 {
 		return errors.New("risk count and timeout limits must be positive")

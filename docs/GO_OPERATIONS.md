@@ -156,6 +156,11 @@ go run ./cmd/cyp sweep -thresholds 0.08,0.12,0.18 -top 5
 | `CYP_DB_URL` | 本地 5433 | PostgreSQL DSN，供状态或 OHLCV 归档使用 |
 | `CYP_OHLCV_ARCHIVE_ENABLED` | `true` | 异步归档、停机缺口补录和历史复用 |
 | `CYP_OHLCV_RETENTION_DAYS` | `730` | K 线保留天数，范围 30–3650 |
+| `CYP_TOKEN_USAGE_ENABLED` | `true` | 多供应商模型调用统计和自然日预算门 |
+| `CYP_TOKEN_USAGE_RETENTION_DAYS` | `90` | 调用明细保留天数；每日聚合不随明细清理 |
+| `CYP_TOKEN_USAGE_TIMEZONE` | `Asia/Shanghai` | 自然日预算与报表时区 |
+| `CYP_DAILY_TOKEN_BUDGET` | `2000000` | 全部 run 共用的每日 Token 上限 |
+| `CYP_DAILY_COST_BUDGET_USD` | `50` | 全部 run 共用的每日估算成本上限 |
 | `CYP_LOG_LEVEL` | `INFO` | `DEBUG`、`INFO`、`WARN`、`ERROR` |
 | `CYP_API_TOKEN` | 空 | 非回环监听必填；保护所有写请求 |
 
@@ -215,6 +220,16 @@ WHERE quality_status = 'validated'
 GROUP BY venue, symbol, timeframe
 ORDER BY venue, symbol, timeframe;
 ```
+
+### 多供应商模型用量
+
+默认使用同一 PostgreSQL 建立 `llm_usage_events` 和 `llm_usage_daily`。调用完成后异步写入 provider、model、Agent、币种、run、自动/人工来源、token、估算标志、成本、耗时与状态，不写 Prompt 和回复正文。Dashboard 或 API 可查询：
+
+```text
+GET /api/token-usage?days=7&bucket=hour&limit=50
+```
+
+70% 与 90% 预算水位产生 `token_budget_alert`，100% 拒绝新的 LLM Provider 调用。该门不在 Venue、PositionMonitor 或 AutomatedExitManager 路径上，所以触顶后持仓保护和平仓仍继续。数据库不可用时统计降级到进程内且交易继续；应根据 `token_usage_store_unavailable` 日志恢复数据库，避免重启后丢失降级期间明细。
 
 ## 容器运行
 

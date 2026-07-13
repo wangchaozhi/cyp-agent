@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { ListTree } from "lucide-react";
 
 import type { DashboardEvent } from "../../shared/api/types";
@@ -40,7 +41,11 @@ const LABELS: Record<string, string> = {
   reversal_closed: "反向平仓",
   reversal_reassessed: "反向风控",
   reversal_opened: "反向开仓",
+	token_budget_alert: "模型预算",
 };
+
+const INITIAL_VISIBLE_EVENTS = 60;
+const LOAD_MORE_EVENTS = 50;
 
 const RUN_STATUS_LABELS: Record<string, string> = {
   executed: "成交完成",
@@ -168,6 +173,12 @@ export function summarizeEvent(event: DashboardEvent): string {
     return `${event.symbol ?? "-"} run=${event.run_id}`;
   }
 
+	if (event.type === "token_budget_alert") {
+		return event.level === "paused"
+			? "今日模型分析预算已到上限；持仓监控与自动平仓继续运行"
+			: `模型预算使用率达到 ${((event.ratio ?? 0) * 100).toFixed(0)}%`;
+	}
+
   return event.symbol ?? "";
 }
 
@@ -182,6 +193,7 @@ export function eventTone(event: DashboardEvent): string {
   if (["executed", "reviewed", "automated_exit", "reversal_closed", "reversal_opened"].includes(event.type)) return "event-row--ok";
   if (event.type === "add_on_evaluated") return event.add_on?.allowed ? "event-row--ok" : "event-row--warn";
   if (["automation_evaluated", "reversal_observed", "reversal_reassessed"].includes(event.type)) return "event-row--warn";
+	if (event.type === "token_budget_alert") return event.level === "paused" ? "event-row--bad" : "event-row--warn";
   return "";
 }
 
@@ -196,22 +208,29 @@ function streamLabel(status: StreamStatus): string {
 }
 
 export function EventStream({ events, status }: EventStreamProps) {
+	const [visibleLimit, setVisibleLimit] = useState(INITIAL_VISIBLE_EVENTS);
+	const visibleEvents = events.slice(0, visibleLimit);
   return (
     <Panel
       className="panel--events"
       title="运行时间线"
       icon={<ListTree size={16} />}
-      actions={<span className={`stream-badge stream-badge--${status}`}>{streamLabel(status)}</span>}
+	  actions={<><span className="stream-badge">{events.length} 条</span><span className={`stream-badge stream-badge--${status}`}>{streamLabel(status)}</span></>}
     >
       {events.length ? (
         <div className="event-list">
-          {events.map((event, index) => (
+		  {visibleEvents.map((event, index) => (
             <article className={`event-row ${eventTone(event)}`} key={`${event.ts}-${event.type}-${index}`}>
               <time>{formatClock(event.ts)}</time>
               <span className="event-row__label">{LABELS[event.type] ?? event.type}</span>
               <span className="event-row__summary">{summarizeEvent(event)}</span>
             </article>
           ))}
+		  {visibleEvents.length < events.length ? (
+			  <button className="event-list__more" type="button" onClick={() => setVisibleLimit((current) => current + LOAD_MORE_EVENTS)}>
+				  加载更早事件（剩余 {events.length - visibleEvents.length} 条）
+			  </button>
+		  ) : null}
         </div>
       ) : (
         <EmptyState>等待事件</EmptyState>

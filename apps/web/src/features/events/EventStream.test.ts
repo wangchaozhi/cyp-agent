@@ -95,4 +95,10 @@ describe("event stream semantics", () => {
     expect(eventTone(event({ status: "executed" }))).toBe("event-row--ok");
     expect(eventTone(event({ status: "execution_failed" }))).toBe("event-row--bad");
   });
+
+	it("explains token budget pauses without implying position monitoring stopped", () => {
+		const alert = event({ type: "token_budget_alert", level: "paused", ratio: 1 });
+		expect(eventTone(alert)).toBe("event-row--bad");
+		expect(summarizeEvent(alert)).toContain("持仓监控与自动平仓继续运行");
+	});
 });

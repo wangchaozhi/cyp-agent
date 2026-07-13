@@ -69,10 +69,12 @@ func (r RiskConfig) ContractWhitelistSet() map[string]struct{} {
 }
 
 type BudgetConfig struct {
-	MaxIterations  int
-	MaxTokens      int
-	MaxCostUSD     float64
-	MaxWallSeconds int
+	MaxIterations      int
+	MaxTokens          int
+	MaxCostUSD         float64
+	MaxWallSeconds     int
+	DailyTokenBudget   int
+	DailyCostBudgetUSD float64
 }
 
 // AutomationConfig contains non-secret, runtime-mutable strategy controls.
@@ -151,16 +153,19 @@ type Settings struct {
 	Watchlist        string
 	MaxConcurrency   int
 
-	DBURL               string
-	Persistence         string
-	StateFile           string
-	OHLCVArchiveEnabled bool
-	OHLCVRetentionDays  int
-	LogLevel            string
-	APIToken            Secret
-	Risk                RiskConfig
-	Budget              BudgetConfig
-	Automation          AutomationConfig
+	DBURL                   string
+	Persistence             string
+	StateFile               string
+	OHLCVArchiveEnabled     bool
+	OHLCVRetentionDays      int
+	TokenUsageEnabled       bool
+	TokenUsageRetentionDays int
+	TokenUsageTimezone      string
+	LogLevel                string
+	APIToken                Secret
+	Risk                    RiskConfig
+	Budget                  BudgetConfig
+	Automation              AutomationConfig
 }
 
 func DefaultRiskConfig() RiskConfig {
@@ -196,26 +201,29 @@ func DefaultRiskConfig() RiskConfig {
 
 func DefaultSettings() Settings {
 	return Settings{
-		Mode:                "paper",
-		Approval:            "dashboard",
-		ExecutionVenue:      "paper",
-		DataSource:          "synthetic",
-		LLMProvider:         "anthropic",
-		LLMModel:            "claude-opus-4-8",
-		LLMModelFast:        "claude-haiku-4-5-20251001",
-		CEXID:               "binance",
-		OKXDemo:             true,
-		Signer:              "keystore",
-		ScanInterval:        600,
-		MonitorInterval:     5,
-		Watchlist:           "BTC/USDT",
-		MaxConcurrency:      2,
-		DBURL:               "postgresql://cyp:cyp@localhost:5433/cyp",
-		Persistence:         "file",
-		StateFile:           "data/cyp-state.json",
-		OHLCVArchiveEnabled: true,
-		OHLCVRetentionDays:  730,
-		LogLevel:            "INFO",
+		Mode:                    "paper",
+		Approval:                "dashboard",
+		ExecutionVenue:          "paper",
+		DataSource:              "synthetic",
+		LLMProvider:             "anthropic",
+		LLMModel:                "claude-opus-4-8",
+		LLMModelFast:            "claude-haiku-4-5-20251001",
+		CEXID:                   "binance",
+		OKXDemo:                 true,
+		Signer:                  "keystore",
+		ScanInterval:            600,
+		MonitorInterval:         5,
+		Watchlist:               "BTC/USDT",
+		MaxConcurrency:          2,
+		DBURL:                   "postgresql://cyp:cyp@localhost:5433/cyp",
+		Persistence:             "file",
+		StateFile:               "data/cyp-state.json",
+		OHLCVArchiveEnabled:     true,
+		OHLCVRetentionDays:      730,
+		TokenUsageEnabled:       true,
+		TokenUsageRetentionDays: 90,
+		TokenUsageTimezone:      "Asia/Shanghai",
+		LogLevel:                "INFO",
 		Automation: AutomationConfig{
 			Enabled: true, ScanEnabled: true, EntryEnabled: true, ApprovalEnabled: true,
 			ExitEnabled: true, ReverseEnabled: true, AddEnabled: true,
@@ -233,10 +241,12 @@ func DefaultSettings() Settings {
 		},
 		Risk: DefaultRiskConfig(),
 		Budget: BudgetConfig{
-			MaxIterations:  20,
-			MaxTokens:      200_000,
-			MaxCostUSD:     2.0,
-			MaxWallSeconds: 300,
+			MaxIterations:      20,
+			MaxTokens:          200_000,
+			MaxCostUSD:         2.0,
+			MaxWallSeconds:     300,
+			DailyTokenBudget:   2_000_000,
+			DailyCostBudgetUSD: 50,
 		},
 	}
 }
@@ -370,12 +380,15 @@ type IntervalSnapshot struct {
 }
 
 type RuntimeSnapshot struct {
-	MaxConcurrency      int    `json:"max_concurrency"`
-	LogLevel            string `json:"log_level"`
-	Autostart           bool   `json:"autostart"`
-	Persistence         string `json:"persistence"`
-	OHLCVArchiveEnabled bool   `json:"ohlcv_archive_enabled"`
-	OHLCVRetentionDays  int    `json:"ohlcv_retention_days"`
+	MaxConcurrency          int    `json:"max_concurrency"`
+	LogLevel                string `json:"log_level"`
+	Autostart               bool   `json:"autostart"`
+	Persistence             string `json:"persistence"`
+	OHLCVArchiveEnabled     bool   `json:"ohlcv_archive_enabled"`
+	OHLCVRetentionDays      int    `json:"ohlcv_retention_days"`
+	TokenUsageEnabled       bool   `json:"token_usage_enabled"`
+	TokenUsageRetentionDays int    `json:"token_usage_retention_days"`
+	TokenUsageTimezone      string `json:"token_usage_timezone"`
 }
 
 type RiskSnapshot struct {
@@ -404,10 +417,12 @@ type RiskSnapshot struct {
 }
 
 type BudgetSnapshot struct {
-	MaxIterations  int     `json:"max_iterations"`
-	MaxTokens      int     `json:"max_tokens"`
-	MaxCostUSD     float64 `json:"max_cost_usd"`
-	MaxWallSeconds int     `json:"max_wall_seconds"`
+	MaxIterations      int     `json:"max_iterations"`
+	MaxTokens          int     `json:"max_tokens"`
+	MaxCostUSD         float64 `json:"max_cost_usd"`
+	MaxWallSeconds     int     `json:"max_wall_seconds"`
+	DailyTokenBudget   int     `json:"daily_token_budget"`
+	DailyCostBudgetUSD float64 `json:"daily_cost_budget_usd"`
 }
 
 func optionalString(value string) *string {
@@ -431,7 +446,9 @@ func (s Settings) Snapshot() SettingsSnapshot {
 		Intervals: IntervalSnapshot{Scan: s.ScanInterval, Monitor: s.MonitorInterval},
 		Runtime: RuntimeSnapshot{MaxConcurrency: s.MaxConcurrency, LogLevel: s.LogLevel,
 			Autostart: s.RuntimeAutostart, Persistence: s.Persistence,
-			OHLCVArchiveEnabled: s.OHLCVArchiveEnabled, OHLCVRetentionDays: s.OHLCVRetentionDays},
+			OHLCVArchiveEnabled: s.OHLCVArchiveEnabled, OHLCVRetentionDays: s.OHLCVRetentionDays,
+			TokenUsageEnabled: s.TokenUsageEnabled, TokenUsageRetentionDays: s.TokenUsageRetentionDays,
+			TokenUsageTimezone: s.TokenUsageTimezone},
 		APIAuthEnabled: s.APIToken.Configured(),
 		Risk: RiskSnapshot{
 			MaxRiskPerTrade: r.MaxRiskPerTrade, MaxPositionPct: r.MaxPositionPct,
@@ -448,7 +465,8 @@ func (s Settings) Snapshot() SettingsSnapshot {
 			ApprovalTimeoutSeconds: r.ApprovalTimeoutSeconds,
 		},
 		Budget: BudgetSnapshot{MaxIterations: s.Budget.MaxIterations, MaxTokens: s.Budget.MaxTokens,
-			MaxCostUSD: s.Budget.MaxCostUSD, MaxWallSeconds: s.Budget.MaxWallSeconds},
+			MaxCostUSD: s.Budget.MaxCostUSD, MaxWallSeconds: s.Budget.MaxWallSeconds,
+			DailyTokenBudget: s.Budget.DailyTokenBudget, DailyCostBudgetUSD: s.Budget.DailyCostBudgetUSD},
 		Automation: s.Automation,
 		LiveGuard:  s.LiveGuard(),
 	}

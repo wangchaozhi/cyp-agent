@@ -37,6 +37,7 @@ import (
 	"github.com/wangchaozhi/cyp-agent/internal/orchestrator"
 	"github.com/wangchaozhi/cyp-agent/internal/riskstate"
 	runtimecore "github.com/wangchaozhi/cyp-agent/internal/runtime"
+	"github.com/wangchaozhi/cyp-agent/internal/tokenusage"
 	"github.com/wangchaozhi/cyp-agent/internal/venue"
 )
 
@@ -54,6 +55,8 @@ type Server struct {
 	marketData        *data.MarketAggregator
 	safety            *runtimecore.SafetyState
 	riskState         *riskstate.Tracker
+	tokenUsage        *tokenusage.Tracker
+	llmFactory        func(config.Settings) *llm.Client
 	historicalVenue   venue.Venue
 	historicalArchive ohlcv.Archive
 	watchlistStore    interface {
@@ -86,6 +89,8 @@ type Dependencies struct {
 	Market            *data.MarketAggregator
 	Safety            *runtimecore.SafetyState
 	RiskState         *riskstate.Tracker
+	TokenUsage        *tokenusage.Tracker
+	LLMFactory        func(config.Settings) *llm.Client
 	HistoricalVenue   venue.Venue
 	HistoricalArchive ohlcv.Archive
 	WatchlistStore    interface {
@@ -119,6 +124,8 @@ func New(dependencies Dependencies) (*Server, error) {
 		metrics: dependencies.Metrics, runtimeMetrics: dependencies.RuntimeMetrics,
 		registry: dependencies.Registry, marketData: dependencies.Market, safety: dependencies.Safety,
 		riskState:                 dependencies.RiskState,
+		tokenUsage:                dependencies.TokenUsage,
+		llmFactory:                dependencies.LLMFactory,
 		historicalVenue:           dependencies.HistoricalVenue,
 		historicalArchive:         dependencies.HistoricalArchive,
 		watchlistStore:            dependencies.WatchlistStore,
@@ -148,6 +155,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/trades", s.trades)
 	mux.HandleFunc("POST /api/positions/close", s.closePosition)
 	mux.HandleFunc("GET /api/metrics", s.metricsSnapshot)
+	mux.HandleFunc("GET /api/token-usage", s.tokenUsageReport)
 	mux.HandleFunc("GET /api/risk", s.riskSnapshot)
 	mux.HandleFunc("GET /api/pending", s.pending)
 	mux.HandleFunc("GET /api/portfolio", s.portfolioSnapshot)
@@ -252,7 +260,11 @@ func (s *Server) updateSettings(w http.ResponseWriter, request *http.Request) {
 			return
 		}
 	}
-	s.orchestrator.SetLLM(llm.FromSettings(s.control.Settings()))
+	if s.llmFactory != nil {
+		s.orchestrator.SetLLM(s.llmFactory(s.control.Settings()))
+	} else {
+		s.orchestrator.SetLLM(llm.FromSettings(s.control.Settings()))
+	}
 	writeJSON(w, http.StatusOK, s.control.Snapshot())
 }
 

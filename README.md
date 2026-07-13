@@ -152,12 +152,18 @@ go run ./cmd/cyp sweep --symbol BTC/USDT --bars 300 --top 5
 | `CYP_OHLCV_ARCHIVE_ENABLED` | `true` | 异步保存已闭合 K 线，并启动缺口补录；数据库故障时交易继续 |
 | `CYP_OHLCV_RETENTION_DAYS` | `730` | 时序历史默认保留天数，允许 30–3650 |
 | `CYP_LLM_PROVIDER` | `anthropic` | `anthropic` 或 `deepseek`；缺 key 时走规则降级 |
+| `CYP_TOKEN_USAGE_ENABLED` | `true` | 记录多供应商模型调用元数据并提供 Dashboard 趋势/明细；不保存 Prompt 或回复正文 |
+| `CYP_TOKEN_USAGE_RETENTION_DAYS` | `90` | PostgreSQL 调用明细保留天数；每日供应商/模型聚合长期保留 |
+| `CYP_DAILY_TOKEN_BUDGET` | `2000000` | 跨 run 的自然日 Token 上限；100% 后仅暂停新 LLM 分析 |
+| `CYP_DAILY_COST_BUDGET_USD` | `50` | 自然日估算成本上限（美元） |
 | `CYP_API_TOKEN` | 空 | 非回环监听必填；认证所有写请求 |
 | `CYP_CORS_ORIGINS` | `http://127.0.0.1:5173,http://localhost:5173` | 允许跨域访问的前端来源，多个来源用逗号分隔 |
 
 使用 OKX Demo 执行时，还需设置 `CYP_ALLOW_PERP=1`、`CYP_DATA_SOURCE=cex`、`CYP_CEX_ID=okx` 和 `CYP_OKX_DEMO=true`，并将 `OKX_API_KEY`、`OKX_API_SECRET`、`OKX_PASSWORD` 填为在 OKX Demo Trading 中单独创建的 API 凭据。分析标的使用 `BTC/USDT:USDT` 这类永续格式；应用会为私有请求附加 OKX 模拟交易标识，启动时读取 Demo 余额、持仓并核验止损保护单。
 
 所有密钥在配置快照和结构化日志中脱敏。`CYP_LLM_BASE_URL` 只能在启动时修改，HTTP 设置接口不能把已加载密钥重定向到其他主机。OKX Demo key 只授予读取和交易权限，必须禁用提现并配置 IP 白名单；生产交易 key 不应提供给本应用。
+
+模型用量统一记录 `provider + model + Agent + symbol + source`。Anthropic、DeepSeek 和后续实现同一 Provider 接口的供应商会自动进入相同报表；供应商返回真实 token 时直接使用，否则明确标为“估算”。预算达到 70%/90% 会发出 SSE 告警，达到 100% 只拒绝后续模型调用，确定性分析、仓位监控、交易所原生保护单与自动平仓保持运行。
 
 ## Docker
 

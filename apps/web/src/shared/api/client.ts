@@ -14,6 +14,7 @@ import type {
   RuntimeSettings,
   RuntimeSettingsUpdate,
   TradeRecord,
+	TokenUsageReport,
   VenueInfo,
 } from "./types";
 
@@ -94,6 +95,11 @@ export const cypApi = {
     return request<MarketHistoryResponse>(`/api/market/history?${params.toString()}`);
   },
   metrics: () => request<MetricsSnapshot>("/api/metrics"),
+	tokenUsage: (days = 7, bucket?: "hour" | "day", limit = 50) => {
+		const params = new URLSearchParams({ days: String(days), limit: String(limit) });
+		if (bucket) params.set("bucket", bucket);
+		return request<TokenUsageReport>(`/api/token-usage?${params.toString()}`);
+	},
   portfolio: () => request<PortfolioSnapshot>("/api/portfolio"),
   backtest: (payload: BacktestRequest) =>
     request<BacktestReport>("/api/backtest", {

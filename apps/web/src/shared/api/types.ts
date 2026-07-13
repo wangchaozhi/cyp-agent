@@ -224,13 +224,16 @@ export interface RuntimeSettings {
     scan: number;
     monitor: number;
   };
-  runtime: {
+	runtime: {
     max_concurrency: number;
     log_level: string;
     autostart: boolean;
     persistence: "memory" | "file" | "postgres";
     ohlcv_archive_enabled: boolean;
-    ohlcv_retention_days: number;
+		ohlcv_retention_days: number;
+		token_usage_enabled: boolean;
+		token_usage_retention_days: number;
+		token_usage_timezone: string;
   };
   risk: {
     max_risk_per_trade: Numeric;
@@ -260,7 +263,9 @@ export interface RuntimeSettings {
     max_iterations: number;
     max_tokens: number;
     max_cost_usd: number;
-    max_wall_seconds: number;
+		max_wall_seconds: number;
+		daily_token_budget: number;
+		daily_cost_budget_usd: number;
   };
   automation: AutomationSettings;
   live_guard: {
@@ -463,6 +468,9 @@ export interface DashboardEvent {
   on?: boolean;
   positions?: unknown;
   trace?: unknown;
+	level?: string;
+	ratio?: number;
+	summary?: TokenUsageSummary;
 }
 
 export type ApprovalRequest =
@@ -503,4 +511,80 @@ export interface MetricsSnapshot {
     ohlcv_repair_runs: number;
     ohlcv_backfilled: number;
   };
+	 token_usage?: TokenUsageSummary;
+}
+
+export interface TokenUsageSummary {
+	day: string;
+	timezone: string;
+	calls: number;
+	successes: number;
+	errors: number;
+	budget_rejections: number;
+	input_tokens: number;
+	output_tokens: number;
+	total_tokens: number;
+	cost_usd: number;
+	success_rate: number;
+	token_budget: number;
+	cost_budget_usd: number;
+	token_ratio: number;
+	cost_ratio: number;
+	utilization: number;
+	level: "normal" | "warning" | "critical" | "paused";
+	paused: boolean;
+}
+
+export interface TokenUsageTrend {
+	start: string;
+	calls: number;
+	successes: number;
+	input_tokens: number;
+	output_tokens: number;
+	total_tokens: number;
+	cost_usd: number;
+}
+
+export interface TokenUsageDimension {
+	key: string;
+	calls: number;
+	successes: number;
+	input_tokens: number;
+	output_tokens: number;
+	total_tokens: number;
+	cost_usd: number;
+}
+
+export interface TokenUsageEvent {
+	id: string;
+	ts: string;
+	run_id?: string;
+	symbol?: string;
+	agent?: string;
+	source?: string;
+	provider: string;
+	model: string;
+	operation: string;
+	status: string;
+	input_tokens: number;
+	output_tokens: number;
+	cost_usd: number;
+	duration_ms: number;
+	token_estimated: boolean;
+	cost_estimated: boolean;
+	error_kind?: string;
+}
+
+export interface TokenUsageReport {
+	generated_at: string;
+	days: number;
+	bucket: "hour" | "day";
+	today: TokenUsageSummary;
+	trend: TokenUsageTrend[];
+	by_provider: TokenUsageDimension[];
+	by_model: TokenUsageDimension[];
+	by_agent: TokenUsageDimension[];
+	by_symbol: TokenUsageDimension[];
+	by_source: TokenUsageDimension[];
+	recent: TokenUsageEvent[];
 }

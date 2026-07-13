@@ -27,6 +27,7 @@ import (
 	"github.com/wangchaozhi/cyp-agent/internal/riskstate"
 	runtimecore "github.com/wangchaozhi/cyp-agent/internal/runtime"
 	"github.com/wangchaozhi/cyp-agent/internal/runtimeprefs"
+	"github.com/wangchaozhi/cyp-agent/internal/tokenusage"
 	"github.com/wangchaozhi/cyp-agent/internal/venue"
 )
 
@@ -49,6 +50,7 @@ type Application struct {
 	OHLCVArchive    ohlcv.Archive
 	OHLCVRecorder   *ohlcv.AsyncRecorder
 	OHLCVBackfiller *ohlcv.Backfiller
+	TokenUsage      *tokenusage.Tracker
 
 	closeOnce sync.Once
 }
@@ -296,7 +298,53 @@ func New(
 	timeout := time.Duration(settings.Risk.ApprovalTimeoutSeconds) * time.Second
 	gate := approval.NewPendingGate(timeout, bus)
 	safety := runtimecore.NewSafetyState()
-	baseLLM := llm.FromSettings(settings)
+	var usageTracker *tokenusage.Tracker
+	if settings.TokenUsageEnabled {
+		location, locationErr := time.LoadLocation(settings.TokenUsageTimezone)
+		if locationErr != nil {
+			closeArchive(context.Background())
+			_ = repository.Close()
+			return nil, fmt.Errorf("configure token usage timezone: %w", locationErr)
+		}
+		var usageStore tokenusage.Store
+		connectContext, cancel := context.WithTimeout(ctx, 5*time.Second)
+		postgresUsage, usageErr := tokenusage.NewPostgresStore(connectContext, settings.DBURL)
+		cancel()
+		if usageErr != nil {
+			logger.Warn("token_usage_store_unavailable", "error", usageErr.Error(), "in_memory_tracking", true)
+		} else {
+			usageStore = postgresUsage
+		}
+		usageTracker, err = tokenusage.New(ctx, tokenusage.Config{
+			Store: usageStore, TokenBudget: settings.Budget.DailyTokenBudget,
+			CostBudgetUSD: settings.Budget.DailyCostBudgetUSD,
+			Retention:     time.Duration(settings.TokenUsageRetentionDays) * 24 * time.Hour,
+			Location:      location, Logger: logger,
+			OnAlert: func(alert tokenusage.BudgetAlert) {
+				logger.Warn("llm_daily_budget_alert", "level", alert.Level, "ratio", alert.Ratio)
+				bus.Emit("token_budget_alert", "-", map[string]any{
+					"level": alert.Level, "ratio": alert.Ratio, "summary": alert.Summary,
+				})
+			},
+		})
+		if err != nil {
+			if usageStore != nil {
+				usageStore.Close()
+			}
+			closeArchive(context.Background())
+			_ = repository.Close()
+			return nil, fmt.Errorf("configure token usage: %w", err)
+		}
+	}
+	closeTokenUsage := func(closeContext context.Context) {
+		if usageTracker != nil {
+			_ = usageTracker.Close(closeContext)
+		}
+	}
+	llmFactory := func(current config.Settings) *llm.Client {
+		return llm.FromSettingsWithObserver(current, usageTracker)
+	}
+	baseLLM := llmFactory(settings)
 	// Scanner, manual API runs, and the orchestrator itself serialize on this
 	// single per-symbol lock instance instead of maintaining separate maps.
 	locks := runtimecore.NewSymbolLocks()
@@ -307,6 +355,7 @@ func New(
 
 	reconciler, err := runtimecore.NewVenueReconciler(executionVenue, bus, logger)
 	if err != nil {
+		closeTokenUsage(context.Background())
 		closeArchive(context.Background())
 		orch.Close()
 		_ = repository.Close()
@@ -314,6 +363,7 @@ func New(
 	}
 	alerter, err := alerts.Build(logger, runtimeMetrics, settings.AlertWebhook)
 	if err != nil {
+		closeTokenUsage(context.Background())
 		closeArchive(context.Background())
 		orch.Close()
 		_ = repository.Close()
@@ -326,7 +376,7 @@ func New(
 			return time.Duration(state.Settings().ScanInterval) * time.Second
 		},
 		Run: func(_ context.Context, symbol string) error {
-			_, startErr := orch.Start(symbol)
+			_, startErr := orch.StartAutomated(symbol)
 			return startErr
 		},
 		State: func() runtimecore.RuntimeState {
@@ -343,6 +393,7 @@ func New(
 		},
 	})
 	if err != nil {
+		closeTokenUsage(context.Background())
 		closeArchive(context.Background())
 		orch.Close()
 		_ = repository.Close()
@@ -354,6 +405,7 @@ func New(
 		MinMarginRatio: settings.Risk.MinMarginRatio,
 	})
 	if err != nil {
+		closeTokenUsage(context.Background())
 		closeArchive(context.Background())
 		orch.Close()
 		_ = repository.Close()
@@ -381,6 +433,7 @@ func New(
 		Events: bus, Logger: logger,
 	})
 	if err != nil {
+		closeTokenUsage(context.Background())
 		closeArchive(context.Background())
 		orch.Close()
 		_ = repository.Close()
@@ -391,6 +444,7 @@ func New(
 		Safety: safety, Logger: logger, Metrics: runtimeMetrics, AllowDegradedStart: true,
 	})
 	if err != nil {
+		closeTokenUsage(context.Background())
 		closeArchive(context.Background())
 		orch.Close()
 		_ = repository.Close()
@@ -398,6 +452,7 @@ func New(
 	}
 	if settings.RuntimeAutostart || settings.Automation.Enabled {
 		if err := runtimeEngine.Start(ctx); err != nil {
+			closeTokenUsage(context.Background())
 			closeArchive(context.Background())
 			orch.Close()
 			_ = repository.Close()
@@ -416,6 +471,7 @@ func New(
 		Market: aggregator, Safety: safety, HistoricalVenue: historicalVenue,
 		HistoricalArchive: historicalArchive,
 		RiskState:         riskTracker, WatchlistStore: preferenceStore, AutomationStore: preferenceStore,
+		TokenUsage: usageTracker, LLMFactory: llmFactory,
 		ScanIntervalStore: preferenceStore, NotifyScanScheduleChanged: scanner.NotifyScheduleChanged,
 		EnsureRuntime: func() error {
 			if runtimeEngine.Started() {
@@ -433,6 +489,7 @@ func New(
 		stopContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = runtimeEngine.Stop(stopContext)
+		closeTokenUsage(stopContext)
 		closeArchive(stopContext)
 		orch.Close()
 		bus.Close()
@@ -446,6 +503,7 @@ func New(
 		RiskState: riskTracker,
 		Runtime:   runtimeEngine, Orchestrator: orch, API: server,
 		OHLCVArchive: historicalArchive, OHLCVRecorder: archiveRecorder, OHLCVBackfiller: archiveBackfiller,
+		TokenUsage: usageTracker,
 	}, nil
 }
 
@@ -535,6 +593,11 @@ func (application *Application) Close() {
 		defer cancel()
 		_ = application.Runtime.Stop(stopContext)
 		application.Orchestrator.Close()
+		usageContext, usageCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer usageCancel()
+		if application.TokenUsage != nil {
+			_ = application.TokenUsage.Close(usageContext)
+		}
 		archiveContext, archiveCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer archiveCancel()
 		if application.OHLCVBackfiller != nil {

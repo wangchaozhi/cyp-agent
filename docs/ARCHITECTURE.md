@@ -121,6 +121,7 @@ cmd/cyp ── backtest / sweep / config / version
 - `CYP_DATA_SOURCE=cex`：使用 `CYP_CEX_ID` 选择 Binance 或 OKX 公共行情；跨场所摘要由 MarketAggregator 聚合。
 - 无有效 LLM Key：`llm.FromSettings` 使用 Mock provider，智能体执行规则化降级。
 - 有 Key：支持 Anthropic，或使用 OpenAI-compatible 接口的 DeepSeek；调用受次数、token、成本和墙钟预算限制。
+- 所有 Provider 通过统一 `UsageObserver` 输出安全元数据；报表按 provider/model、Agent、币种和自动/人工来源聚合，新增供应商无需修改统计链路。
 - 单个分析师失败只把对应报告标为降级，保持报告顺序；父 context 取消会终止整组任务。
 
 ## 状态、对账与运行时
@@ -146,9 +147,11 @@ RuntimeEngine 包含两条可选常驻循环：
 
 OHLCV 归档与上述运行状态 Repository 解耦：即使 `CYP_PERSISTENCE=file`，也可通过 `CYP_OHLCV_ARCHIVE_ENABLED=true` 把行情写入同一 PostgreSQL/TimescaleDB。实时写入使用有界异步队列；失败只记录指标和日志，不阻塞交易、对账或主动平仓。启动及每 6 小时按 watchlist 修复默认 730 天窗口中的时间缺口，upsert 保证重复补数安全。
 
+模型用量存储同样独立于运行状态 Repository。`llm_usage_events` 是 TimescaleDB 明细流，默认保留 90 天且从不写入 Prompt/响应内容；`llm_usage_daily` 按日期、时区、供应商、模型、Agent、币种、来源与状态做幂等长期聚合。每日预算门位于 LLM Provider 调用前，触顶不会停止 Scanner 之外的持仓监控、对账、保护单或 reduce-only 平仓路径。
+
 ## HTTP 与事件契约
 
-核心接口包括健康/就绪、场所、设置、行情、持仓、组合、风控、指标、回测、run、审批、Kill Switch 和 SSE。公开业务契约与 Schema 见 [`api/openapi.yaml`](../api/openapi.yaml)，运行时另提供 `GET /api/ready` 作为安全就绪检查；Dashboard 事件见 [`api/jsonschema/dashboard-event.schema.json`](../api/jsonschema/dashboard-event.schema.json)。
+核心接口包括健康/就绪、场所、设置、行情、持仓、组合、风控、指标、模型用量、回测、run、审批、Kill Switch 和 SSE。`GET /api/token-usage` 提供不含正文的趋势、维度和最近调用。公开业务契约与 Schema 见 [`api/openapi.yaml`](../api/openapi.yaml)，运行时另提供 `GET /api/ready` 作为安全就绪检查；Dashboard 事件见 [`api/jsonschema/dashboard-event.schema.json`](../api/jsonschema/dashboard-event.schema.json)。
 
 SSE 使用 `text/event-stream`，连接建立后发送 retry 指令，每 15 秒发送 keepalive。事件来自进程内有界总线；它不是持久化事件日志，客户端断线后应重新拉取 REST 快照。
 

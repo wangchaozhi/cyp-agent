@@ -12,6 +12,7 @@ import { PortfolioPanel } from "../features/portfolio/PortfolioPanel";
 import { PositionsPanel } from "../features/positions/PositionsPanel";
 import { RiskPanel } from "../features/risk/RiskPanel";
 import { SettingsPanel } from "../features/settings/SettingsPanel";
+import { TokenUsagePanel } from "../features/token-usage/TokenUsagePanel";
 import { cypApi } from "../shared/api/client";
 import type { ApprovalRequest, DashboardEvent, Position, RuntimeMode, RuntimeSettingsUpdate } from "../shared/api/types";
 import { useEventStream } from "../shared/hooks/useEventStream";
@@ -88,8 +89,17 @@ export default function App() {
       if (["risk_assessed", "killswitch"].includes(event.type)) {
         refreshAll([health.refresh, risk.refresh, runtimeSettings.refresh]);
       }
+			if (event.type === "token_budget_alert") {
+				refreshAll([metrics.refresh]);
+				setNotice({
+					tone: event.level === "paused" ? "bad" : "warn",
+					message: event.level === "paused"
+						? "今日模型预算已到上限：新模型分析已暂停，持仓监控与自动平仓继续运行"
+						: `模型预算使用率已达到 ${((event.ratio ?? 0) * 100).toFixed(0)}%`,
+				});
+			}
     },
-    [health.refresh, pending.refresh, portfolio.refresh, positions.refresh, risk.refresh, runtimeSettings.refresh],
+    [health.refresh, metrics.refresh, pending.refresh, portfolio.refresh, positions.refresh, risk.refresh, runtimeSettings.refresh],
   );
 
   const streamStatus = useEventStream(handleEvent);
@@ -307,9 +317,18 @@ export default function App() {
               streamStatus={streamStatus}
             />
 
+			<section id="token-usage" className="workspace-section" aria-label="模型成本控制">
+				<SectionHeading
+					index="01 / AI COST CONTROL"
+					title="模型成本控制"
+					description="按供应商、模型、Agent、币种与任务来源追踪真实用量和预算。"
+				/>
+				<TokenUsagePanel />
+			</section>
+
             <section id="market" className="workspace-section" aria-label="市场情报">
               <SectionHeading
-                index="01 / MARKET INTELLIGENCE"
+				index="02 / MARKET INTELLIGENCE"
                 title="市场情报"
                 description="比较多个资产的相对强弱、实时价格与跨场所差异。"
               />
@@ -321,7 +340,7 @@ export default function App() {
 
             <section id="operations" className="workspace-section" aria-label="决策与执行">
               <SectionHeading
-                index="02 / DECISION FLOW"
+				index="03 / DECISION FLOW"
                 title="决策与执行"
                 description="先处理需要人工判断的提案，再沿时间线追踪每一轮运行。"
               />
@@ -337,7 +356,7 @@ export default function App() {
 
             <section id="portfolio" className="workspace-section" aria-label="资产与风险">
               <SectionHeading
-                index="03 / PORTFOLIO CONTROL"
+				index="04 / PORTFOLIO CONTROL"
                 title="资产与风险"
                 description="从当前持仓进入，检查风险预算、回撤与组合集中度。"
               />
@@ -350,7 +369,7 @@ export default function App() {
 
             <section id="backtest" className="workspace-section" aria-label="策略实验室">
               <SectionHeading
-                index="04 / STRATEGY LAB"
+				index="05 / STRATEGY LAB"
                 title="策略实验室"
                 description="用合成或真实历史数据验证参数，在进入决策流程前理解策略表现。"
               />

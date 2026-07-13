@@ -3,10 +3,12 @@ package api
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/wangchaozhi/cyp-agent/internal/contracts"
 	"github.com/wangchaozhi/cyp-agent/internal/portfolio"
+	"github.com/wangchaozhi/cyp-agent/internal/tokenusage"
 )
 
 type positionView struct {
@@ -153,10 +155,25 @@ func (s *Server) closePosition(w http.ResponseWriter, request *http.Request) {
 }
 
 func (s *Server) metricsSnapshot(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{
+	response := map[string]any{
 		"runs": s.metrics.Snapshot(), "llm": s.orchestrator.LLMMetrics(),
 		"runtime": s.runtimeMetrics.Snapshot(),
-	})
+	}
+	if s.tokenUsage != nil {
+		response["token_usage"] = s.tokenUsage.Snapshot()
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) tokenUsageReport(w http.ResponseWriter, request *http.Request) {
+	if s.tokenUsage == nil {
+		writeJSON(w, http.StatusOK, tokenusage.EmptyReport())
+		return
+	}
+	days, _ := strconv.Atoi(request.URL.Query().Get("days"))
+	limit, _ := strconv.Atoi(request.URL.Query().Get("limit"))
+	bucket := strings.TrimSpace(request.URL.Query().Get("bucket"))
+	writeJSON(w, http.StatusOK, s.tokenUsage.Report(days, bucket, limit))
 }
 
 type drawdownSnapshot struct {

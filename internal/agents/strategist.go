@@ -10,6 +10,7 @@ import (
 
 	"github.com/wangchaozhi/cyp-agent/internal/config"
 	"github.com/wangchaozhi/cyp-agent/internal/contracts"
+	"github.com/wangchaozhi/cyp-agent/internal/llm"
 	"github.com/wangchaozhi/cyp-agent/internal/risk"
 )
 
@@ -227,7 +228,8 @@ func (strategist *Strategist) Run(
 	if agentContext.LLMEnabled() {
 		held := heldPositions(positions)
 		lessons := recentLessons(agentContext.Lessons, 5)
-		refined, llmErr := agentContext.LLM.Text(ctx,
+		llmContext := llm.WithUsageMetadata(ctx, llm.UsageMetadata{Agent: "strategist"})
+		refined, llmErr := agentContext.LLM.Text(llmContext,
 			"你是加密交易策略官，用两句话中文说明该交易的核心逻辑。方向与仓位已由规则确定，你只解释依据：不要建议观望、不要否定或反转方向，不要给出与输入不同的价格或仓位。",
 			fmt.Sprintf("方向=%s 综合分=%.2f 当前组合持仓=%s 历史复盘经验=%s 依据=%s", side, net, held, lessons, thesis),
 			true,

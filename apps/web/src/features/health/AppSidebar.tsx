@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   ChartNoAxesCombined,
+	Cpu,
   FlaskConical,
   LayoutDashboard,
   ShieldCheck,
@@ -12,6 +13,7 @@ import type { StreamStatus } from "../../shared/hooks/useEventStream";
 
 const NAV_ITEMS = [
   { id: "overview", label: "总览", icon: LayoutDashboard },
+	{ id: "token-usage", label: "模型", icon: Cpu },
   { id: "market", label: "市场", icon: ChartNoAxesCombined },
   { id: "operations", label: "决策", icon: Workflow },
   { id: "portfolio", label: "风控", icon: ShieldCheck },

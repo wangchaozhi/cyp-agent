@@ -14,6 +14,7 @@ type OpenAICompatibleConfig struct {
 	DefaultModel string
 	MaxTokens    int
 	HTTPClient   *http.Client
+	ProviderName string
 }
 
 type OpenAICompatibleProvider struct {
@@ -22,6 +23,7 @@ type OpenAICompatibleProvider struct {
 	defaultModel string
 	maxTokens    int
 	httpClient   *http.Client
+	providerName string
 }
 
 func NewOpenAICompatibleProvider(config OpenAICompatibleConfig) (*OpenAICompatibleProvider, error) {
@@ -35,6 +37,7 @@ func NewOpenAICompatibleProvider(config OpenAICompatibleConfig) (*OpenAICompatib
 	return &OpenAICompatibleProvider{
 		apiKey: config.APIKey, baseURL: baseURL, defaultModel: config.DefaultModel,
 		maxTokens: config.MaxTokens, httpClient: config.HTTPClient,
+		providerName: strings.TrimSpace(config.ProviderName),
 	}, nil
 }
 
@@ -44,10 +47,16 @@ func NewDeepSeekProvider(apiKey, baseURL, model string, client *http.Client) (*O
 	}
 	return NewOpenAICompatibleProvider(OpenAICompatibleConfig{
 		APIKey: apiKey, BaseURL: baseURL, DefaultModel: model, HTTPClient: client,
+		ProviderName: "deepseek",
 	})
 }
 
-func (*OpenAICompatibleProvider) Name() string { return "openai-compatible" }
+func (provider *OpenAICompatibleProvider) Name() string {
+	if provider != nil && provider.providerName != "" {
+		return provider.providerName
+	}
+	return "openai-compatible"
+}
 func (*OpenAICompatibleProvider) String() string {
 	return "OpenAICompatibleProvider{api_key:[REDACTED]}"
 }

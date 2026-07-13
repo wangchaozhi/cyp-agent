@@ -6,7 +6,9 @@ import (
 	"errors"
 	"math"
 	"math/rand"
+	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -31,6 +33,7 @@ type Options struct {
 	Budget           Budget
 	Metrics          *Metrics
 	CostEstimator    CostEstimator
+	UsageObserver    UsageObserver
 }
 
 type budgetState struct {
@@ -65,9 +68,12 @@ type Client struct {
 	circuit          *circuitState
 	metrics          *Metrics
 	costEstimator    CostEstimator
+	usageObserver    UsageObserver
 	randMu           sync.Mutex
 	rand             *rand.Rand
 }
+
+var usageCallSequence atomic.Uint64
 
 // ResilientLLM is retained as a descriptive alias for callers migrating from
 // the provider-independent contract.
@@ -101,6 +107,7 @@ func NewClient(provider Provider, options Options) *Client {
 		breakerThreshold: options.BreakerThreshold, breakerCooldown: options.BreakerCooldown,
 		budget: options.Budget, budgetState: budgetState{startedAt: now}, metrics: metrics,
 		costEstimator: options.CostEstimator,
+		usageObserver: options.UsageObserver,
 		circuit:       &circuitState{},
 		rand:          rand.New(rand.NewSource(now.UnixNano())),
 	}
@@ -121,7 +128,8 @@ func (client *Client) NewSession() *Client {
 		breakerThreshold: client.breakerThreshold, breakerCooldown: client.breakerCooldown,
 		budget: client.budget, budgetState: budgetState{startedAt: now},
 		circuit: client.circuit, metrics: client.metrics, costEstimator: client.costEstimator,
-		rand: rand.New(rand.NewSource(now.UnixNano())),
+		usageObserver: client.usageObserver,
+		rand:          rand.New(rand.NewSource(now.UnixNano())),
 	}
 }
 
@@ -141,7 +149,7 @@ func (client *Client) Text(
 	fast bool,
 ) (string, error) {
 	model := client.selectedModel(fast)
-	completion, err := client.call(ctx, model, system, user, func(attempt context.Context) (Completion, error) {
+	completion, err := client.call(ctx, model, "text", system, user, func(attempt context.Context) (Completion, error) {
 		return client.provider.Text(attempt, TextRequest{System: system, User: user, Model: model})
 	})
 	if err != nil {
@@ -162,7 +170,7 @@ func (client *Client) JSON(
 		return errors.New("llm JSON output target must not be nil")
 	}
 	model := client.selectedModel(fast)
-	completion, err := client.call(ctx, model, system, user, func(attempt context.Context) (Completion, error) {
+	completion, err := client.call(ctx, model, "json", system, user, func(attempt context.Context) (Completion, error) {
 		return client.provider.JSON(attempt, JSONRequest{
 			System: system, User: user, Model: model, Schema: append(json.RawMessage(nil), schema...),
 		})
@@ -196,6 +204,7 @@ type providerCall func(context.Context) (Completion, error)
 func (client *Client) call(
 	ctx context.Context,
 	model string,
+	operation string,
 	system string,
 	user string,
 	invoke providerCall,
@@ -214,8 +223,29 @@ func (client *Client) call(
 		return Completion{}, ErrCircuitOpen
 	}
 	estimatedInput := estimateTokens(system) + estimateTokens(user)
+	metadata := usageMetadata(ctx)
+	event := UsageEvent{
+		ID: strconv.FormatInt(time.Now().UTC().UnixNano(), 36) + "-" + strconv.FormatUint(usageCallSequence.Add(1), 36),
+		TS: time.Now().UTC(), RunID: metadata.RunID, Symbol: metadata.Symbol,
+		Agent: metadata.Agent, Source: metadata.Source, Provider: client.provider.Name(),
+		Model: model, Operation: operation, InputTokens: estimatedInput, TokenEstimated: true,
+	}
+	startedAt := time.Now()
+	if client.usageObserver != nil {
+		if err := client.usageObserver.Reserve(ctx, event); err != nil {
+			event.Status, event.ErrorKind = "budget_rejected", "daily_budget"
+			event.InputTokens = 0
+			client.usageObserver.Record(ctx, event)
+			client.metrics.update(func(snapshot *MetricsSnapshot) { snapshot.BudgetRejections++ })
+			client.releaseHalfOpen()
+			return Completion{}, err
+		}
+	}
 	reservation, err := client.reserveBudget(estimatedInput)
 	if err != nil {
+		event.Status, event.ErrorKind = "budget_rejected", "run_budget"
+		event.InputTokens = 0
+		client.recordUsage(ctx, event, startedAt)
 		client.releaseHalfOpen()
 		client.metrics.update(func(snapshot *MetricsSnapshot) { snapshot.BudgetRejections++ })
 		return Completion{}, err
@@ -233,18 +263,26 @@ func (client *Client) call(
 		if callErr == nil {
 			client.recordCircuitSuccess()
 			client.completeUsage(&completion, model, estimatedInput)
+			event.Model = completion.Model
+			event.InputTokens, event.OutputTokens, event.CostUSD = completion.Usage.InputTokens, completion.Usage.OutputTokens, completion.Usage.CostUSD
+			event.TokenEstimated, event.CostEstimated = completion.Usage.TokenEstimated, completion.Usage.CostEstimated
 			client.metrics.update(func(snapshot *MetricsSnapshot) {
 				snapshot.InputTokens += uint64(completion.Usage.InputTokens)
 				snapshot.OutputTokens += uint64(completion.Usage.OutputTokens)
 				snapshot.CostUSD += completion.Usage.CostUSD
 			})
 			if err := client.settleBudget(reservation, completion.Usage); err != nil {
+				event.Status, event.ErrorKind = "budget_rejected", "run_budget_after_response"
+				client.recordUsage(ctx, event, startedAt)
 				client.metrics.update(func(snapshot *MetricsSnapshot) { snapshot.BudgetRejections++ })
 				return Completion{}, err
 			}
 			client.metrics.update(func(snapshot *MetricsSnapshot) {
 				snapshot.Successes++
 			})
+			event.Status = "success"
+			event.TokenEstimated, event.CostEstimated = completion.Usage.TokenEstimated, completion.Usage.CostEstimated
+			client.recordUsage(ctx, event, startedAt)
 			return completion, nil
 		}
 
@@ -257,21 +295,48 @@ func (client *Client) call(
 		})
 		if ctx.Err() != nil {
 			client.settleFailedBudget(reservation)
+			event.Status, event.ErrorKind = "error", "canceled"
+			client.recordUsage(ctx, event, startedAt)
 			return Completion{}, ctx.Err()
 		}
 		transient := isTransient(callErr) || errors.Is(callErr, context.DeadlineExceeded)
 		if !transient || attempt >= client.maxRetries {
 			client.settleFailedBudget(reservation)
+			event.Status, event.ErrorKind = "error", usageErrorKind(callErr)
+			client.recordUsage(ctx, event, startedAt)
 			return Completion{}, callErr
 		}
 		client.metrics.update(func(snapshot *MetricsSnapshot) { snapshot.Retries++ })
 		if err := sleepContext(ctx, client.retryDelay(attempt)); err != nil {
 			client.settleFailedBudget(reservation)
+			event.Status, event.ErrorKind = "error", "canceled"
+			client.recordUsage(ctx, event, startedAt)
 			return Completion{}, err
 		}
 	}
 	client.settleFailedBudget(reservation)
+	event.Status, event.ErrorKind = "error", "invalid_response"
+	client.recordUsage(ctx, event, startedAt)
 	return Completion{}, ErrInvalidResponse
+}
+
+func (client *Client) recordUsage(ctx context.Context, event UsageEvent, startedAt time.Time) {
+	if client == nil || client.usageObserver == nil {
+		return
+	}
+	event.DurationMS = time.Since(startedAt).Milliseconds()
+	client.usageObserver.Record(ctx, event)
+}
+
+func usageErrorKind(err error) string {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	case errors.Is(err, ErrInvalidResponse):
+		return "invalid_response"
+	default:
+		return "provider_error"
+	}
 }
 
 func (client *Client) completeUsage(completion *Completion, model string, estimatedInput int) {
@@ -280,6 +345,7 @@ func (client *Client) completeUsage(completion *Completion, model string, estima
 	}
 	if completion.Usage.InputTokens <= 0 {
 		completion.Usage.InputTokens = estimatedInput
+		completion.Usage.TokenEstimated = true
 	}
 	if completion.Usage.OutputTokens <= 0 {
 		if len(completion.JSON) > 0 {
@@ -287,6 +353,7 @@ func (client *Client) completeUsage(completion *Completion, model string, estima
 		} else {
 			completion.Usage.OutputTokens = estimateTokens(completion.Text)
 		}
+		completion.Usage.TokenEstimated = true
 	}
 	completion.Usage.InputTokens = max(0, completion.Usage.InputTokens)
 	completion.Usage.OutputTokens = max(0, completion.Usage.OutputTokens)
@@ -297,6 +364,7 @@ func (client *Client) completeUsage(completion *Completion, model string, estima
 		estimated := client.costEstimator(completion.Model, completion.Usage)
 		if !math.IsNaN(estimated) && !math.IsInf(estimated, 0) && estimated > 0 {
 			completion.Usage.CostUSD = estimated
+			completion.Usage.CostEstimated = true
 		}
 	}
 }
