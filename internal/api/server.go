@@ -60,12 +60,16 @@ type Server struct {
 	automationStore interface {
 		SaveAutomation(context.Context, config.AutomationConfig) error
 	}
-	ensureRuntime func() error
-	webDir        string
-	logger        *slog.Logger
-	authToken     string
-	corsOrigins   map[string]struct{}
-	handler       http.Handler
+	scanIntervalStore interface {
+		SaveScanInterval(context.Context, int) error
+	}
+	notifyScanScheduleChanged func()
+	ensureRuntime             func() error
+	webDir                    string
+	logger                    *slog.Logger
+	authToken                 string
+	corsOrigins               map[string]struct{}
+	handler                   http.Handler
 }
 
 type Dependencies struct {
@@ -87,10 +91,14 @@ type Dependencies struct {
 	AutomationStore interface {
 		SaveAutomation(context.Context, config.AutomationConfig) error
 	}
-	EnsureRuntime func() error
-	WebDir        string
-	Logger        *slog.Logger
-	APIToken      string
+	ScanIntervalStore interface {
+		SaveScanInterval(context.Context, int) error
+	}
+	NotifyScanScheduleChanged func()
+	EnsureRuntime             func() error
+	WebDir                    string
+	Logger                    *slog.Logger
+	APIToken                  string
 }
 
 func New(dependencies Dependencies) (*Server, error) {
@@ -107,12 +115,14 @@ func New(dependencies Dependencies) (*Server, error) {
 		gate: dependencies.Gate, orchestrator: dependencies.Orchestrator,
 		metrics: dependencies.Metrics, runtimeMetrics: dependencies.RuntimeMetrics,
 		registry: dependencies.Registry, marketData: dependencies.Market, safety: dependencies.Safety,
-		riskState:       dependencies.RiskState,
-		historicalVenue: dependencies.HistoricalVenue,
-		watchlistStore:  dependencies.WatchlistStore,
-		automationStore: dependencies.AutomationStore,
-		ensureRuntime:   dependencies.EnsureRuntime,
-		webDir:          dependencies.WebDir, logger: logger, authToken: strings.TrimSpace(dependencies.APIToken),
+		riskState:                 dependencies.RiskState,
+		historicalVenue:           dependencies.HistoricalVenue,
+		watchlistStore:            dependencies.WatchlistStore,
+		automationStore:           dependencies.AutomationStore,
+		scanIntervalStore:         dependencies.ScanIntervalStore,
+		notifyScanScheduleChanged: dependencies.NotifyScanScheduleChanged,
+		ensureRuntime:             dependencies.EnsureRuntime,
+		webDir:                    dependencies.WebDir, logger: logger, authToken: strings.TrimSpace(dependencies.APIToken),
 		corsOrigins: configuredCORSOrigins(),
 	}
 	server.handler = server.routes()
@@ -221,6 +231,16 @@ func (s *Server) updateSettings(w http.ResponseWriter, request *http.Request) {
 			writeError(w, http.StatusInternalServerError, "persist automation: "+err.Error())
 			return
 		}
+	}
+	if payload.ScanInterval != nil && s.scanIntervalStore != nil {
+		if err := s.scanIntervalStore.SaveScanInterval(request.Context(), s.control.Settings().ScanInterval); err != nil {
+			s.logger.ErrorContext(request.Context(), "persist_scan_interval_failed", "error", err.Error())
+			writeError(w, http.StatusInternalServerError, "persist scan interval: "+err.Error())
+			return
+		}
+	}
+	if payload.ScanInterval != nil && s.notifyScanScheduleChanged != nil {
+		s.notifyScanScheduleChanged()
 	}
 	if payload.Automation != nil && s.control.Settings().Automation.Enabled && s.ensureRuntime != nil {
 		if err := s.ensureRuntime(); err != nil {

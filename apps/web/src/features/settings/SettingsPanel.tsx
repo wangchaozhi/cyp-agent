@@ -9,6 +9,7 @@ import { MetricRow } from "../../shared/ui/MetricRow";
 import { Panel } from "../../shared/ui/Panel";
 import { AnalysisSymbolsSettings } from "./AnalysisSymbolsSettings";
 import { AutomationSettingsPanel } from "./AutomationSettings";
+import { ScanFrequencySettings } from "./ScanFrequencySettings";
 
 interface SettingsPanelProps {
   settings: RuntimeSettings | null;
@@ -135,6 +136,8 @@ export function SettingsPanel({ settings, venues, focusSection = "general", onSa
         </div>
 
         <AnalysisSymbolsSettings settings={settings} focus={focusSection === "symbols"} onSave={onSave} />
+
+        <ScanFrequencySettings settings={settings} onSave={onSave} />
 
         <AutomationSettingsPanel value={settings.automation} liveReadOnly={settings.mode === "live"} onSave={onSave} />
 

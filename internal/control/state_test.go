@@ -112,3 +112,21 @@ func TestRuntimeWatchlistUpdateNormalizesAndRejectsUnsafeDemoSymbols(t *testing.
 		t.Fatalf("Demo watchlist = %q", got)
 	}
 }
+
+func TestRuntimeScanIntervalUsesTokenSavingPresets(t *testing.T) {
+	state := New(config.DefaultSettings())
+	interval := 900
+	if err := state.UpdateSettings(contracts.SettingsUpdateRequest{ScanInterval: &interval}); err != nil {
+		t.Fatalf("scan interval update: %v", err)
+	}
+	if state.Settings().ScanInterval != interval {
+		t.Fatalf("scan interval=%d want=%d", state.Settings().ScanInterval, interval)
+	}
+	invalid := 90
+	if err := state.UpdateSettings(contracts.SettingsUpdateRequest{ScanInterval: &invalid}); !errors.Is(err, ErrInvalidScanInterval) {
+		t.Fatalf("invalid scan interval error=%v", err)
+	}
+	if state.Settings().ScanInterval != interval {
+		t.Fatal("invalid interval partially mutated state")
+	}
+}

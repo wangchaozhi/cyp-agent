@@ -192,6 +192,16 @@ func New(
 		}
 		state = control.New(settings)
 	}
+	if savedInterval, found, loadErr := preferenceStore.LoadScanInterval(ctx); loadErr != nil {
+		_ = repository.Close()
+		return nil, fmt.Errorf("restore runtime scan interval: %w", loadErr)
+	} else if found {
+		if updateErr := state.UpdateSettings(contracts.SettingsUpdateRequest{ScanInterval: &savedInterval}); updateErr != nil {
+			_ = repository.Close()
+			return nil, fmt.Errorf("restore runtime scan interval: %w", updateErr)
+		}
+		settings = state.Settings()
+	}
 	runMetrics := metrics.NewRuns()
 	balances, err := executionVenue.Balances(ctx)
 	if err != nil {
@@ -235,6 +245,9 @@ func New(
 	scanner, err := runtimecore.NewScanner(runtimecore.ScannerConfig{
 		Symbols: settings.WatchlistSymbols(), Interval: time.Duration(settings.ScanInterval) * time.Second,
 		SymbolProvider: func() []string { return state.Settings().WatchlistSymbols() },
+		IntervalProvider: func() time.Duration {
+			return time.Duration(state.Settings().ScanInterval) * time.Second
+		},
 		Run: func(_ context.Context, symbol string) error {
 			_, startErr := orch.Start(symbol)
 			return startErr
@@ -320,6 +333,7 @@ func New(
 		Metrics: runMetrics, RuntimeMetrics: runtimeMetrics, Registry: registry,
 		Market: aggregator, Safety: safety, HistoricalVenue: historicalVenue,
 		RiskState: riskTracker, WatchlistStore: preferenceStore, AutomationStore: preferenceStore,
+		ScanIntervalStore: preferenceStore, NotifyScanScheduleChanged: scanner.NotifyScheduleChanged,
 		EnsureRuntime: func() error {
 			if runtimeEngine.Started() {
 				return nil

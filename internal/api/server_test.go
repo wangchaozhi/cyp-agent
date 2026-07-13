@@ -117,6 +117,19 @@ func TestHealthSettingsKillAndDashboardShapes(t *testing.T) {
 		t.Fatalf("watchlist settings response = %d %s", response.StatusCode, body)
 	}
 
+	response, body = requestJSON(t, client, http.MethodPost, server.URL+"/api/settings", map[string]any{
+		"scan_interval": 900,
+	})
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), `"intervals":{"scan":900`) {
+		t.Fatalf("scan interval settings response = %d %s", response.StatusCode, body)
+	}
+	response, body = requestJSON(t, client, http.MethodPost, server.URL+"/api/settings", map[string]any{
+		"scan_interval": 90,
+	})
+	if response.StatusCode != http.StatusUnprocessableEntity || !strings.Contains(string(body), "scan_interval") {
+		t.Fatalf("invalid scan interval response = %d %s", response.StatusCode, body)
+	}
+
 	response, body = requestJSON(t, client, http.MethodPost, server.URL+"/api/killswitch", map[string]any{"on": true})
 	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), `"kill":true`) {
 		t.Fatalf("killswitch response = %d %s", response.StatusCode, body)

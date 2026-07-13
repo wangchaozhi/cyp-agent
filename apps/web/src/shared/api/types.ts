@@ -270,6 +270,7 @@ export interface RuntimeSettings {
 export interface RuntimeSettingsUpdate {
   mode?: RuntimeMode;
   watchlist?: string[];
+  scan_interval?: number;
   llm_provider?: string;
   llm_model?: string;
   llm_model_fast?: string;

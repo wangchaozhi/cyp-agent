@@ -548,6 +548,8 @@ td small { color: var(--muted); font-size: 7px; }
 .settings-form label span, .backtest-form label span { color: var(--muted); font-size: 8px; }
 .settings-form input, .settings-form select { width: 100%; padding: 8px 9px; }
 .settings-form .command-button { align-self: end; }
+.scan-frequency-form .inline-alert, .scan-frequency-form__summary { grid-column: 1 / -1; }
+.scan-frequency-form__summary { margin: 0; }
 .settings-section { padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-inset); }
 .settings-section + .settings-section { margin-top: 0; }
 .settings-section__title { display: flex; gap: 7px; align-items: center; margin-bottom: 9px; color: var(--text-soft); font-size: 10px; font-weight: 720; }

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { normalizeWatchlistSymbol } from "./AnalysisSymbolsSettings";
 import { validateAutomation } from "./AutomationSettings";
+import { estimateDailySymbolScans } from "./ScanFrequencySettings";
 
 describe("analysis symbol configuration", () => {
   it("expands a base asset for OKX Demo", () => {
@@ -63,5 +64,14 @@ describe("automation strategy configuration", () => {
     expect(validateAutomation({ ...valid, min_confidence: 1.2 })).toContain("置信度");
     expect(validateAutomation({ ...valid, exit_min_samples: 1 })).toContain("样本数");
     expect(validateAutomation({ ...valid, reverse_confirmations: 0 })).toContain("反向");
+  });
+});
+
+describe("scan frequency configuration", () => {
+  it("estimates token-driving symbol scans for the selected preset", () => {
+    expect(estimateDailySymbolScans(60, 7)).toBe(10_080);
+    expect(estimateDailySymbolScans(300, 7)).toBe(2_016);
+    expect(estimateDailySymbolScans(900, 7)).toBe(672);
+    expect(estimateDailySymbolScans(0, 7)).toBe(0);
   });
 });

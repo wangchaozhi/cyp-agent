@@ -13,9 +13,10 @@ import (
 )
 
 var (
-	ErrInvalidRuntimeMode = errors.New("mode must be paper or live")
-	ErrInvalidLLMProvider = errors.New("llm_provider must be anthropic or deepseek")
-	ErrRuntimeLLMBaseURL  = errors.New("llm_base_url is startup-only; set CYP_LLM_BASE_URL and restart")
+	ErrInvalidRuntimeMode  = errors.New("mode must be paper or live")
+	ErrInvalidLLMProvider  = errors.New("llm_provider must be anthropic or deepseek")
+	ErrRuntimeLLMBaseURL   = errors.New("llm_base_url is startup-only; set CYP_LLM_BASE_URL and restart")
+	ErrInvalidScanInterval = errors.New("scan_interval must be one of 60, 300, 900, or 1800 seconds")
 )
 
 type State struct {
@@ -72,6 +73,14 @@ func (s *State) UpdateSettings(request contracts.SettingsUpdateRequest) error {
 			return err
 		}
 		next.Watchlist = strings.Join(watchlist, ",")
+	}
+	if request.ScanInterval != nil {
+		switch *request.ScanInterval {
+		case 60, 300, 900, 1800:
+			next.ScanInterval = *request.ScanInterval
+		default:
+			return ErrInvalidScanInterval
+		}
 	}
 	if request.LLMProvider != nil {
 		provider := strings.TrimSpace(*request.LLMProvider)

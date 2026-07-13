@@ -10,9 +10,10 @@ import (
 )
 
 const (
-	checkpointRunID = "__runtime_preferences__"
-	watchlistStep   = "watchlist"
-	automationStep  = "automation"
+	checkpointRunID  = "__runtime_preferences__"
+	watchlistStep    = "watchlist"
+	automationStep   = "automation"
+	scanIntervalStep = "scan_interval"
 )
 
 type Repository interface {
@@ -46,6 +47,32 @@ func (store *Store) SaveAutomation(ctx context.Context, automation config.Automa
 		return nil
 	}
 	return store.repository.SaveCheckpoint(ctx, checkpointRunID, automationStep, automation)
+}
+
+func (store *Store) LoadScanInterval(ctx context.Context) (int, bool, error) {
+	if store == nil || store.repository == nil {
+		return 0, false, nil
+	}
+	checkpoints, err := store.repository.LoadCheckpoints(ctx, checkpointRunID)
+	if err != nil {
+		return 0, false, err
+	}
+	raw := checkpoints[scanIntervalStep]
+	if len(raw) == 0 {
+		return 0, false, nil
+	}
+	var seconds int
+	if err := json.Unmarshal(raw, &seconds); err != nil {
+		return 0, false, err
+	}
+	return seconds, true, nil
+}
+
+func (store *Store) SaveScanInterval(ctx context.Context, seconds int) error {
+	if store == nil || store.repository == nil {
+		return nil
+	}
+	return store.repository.SaveCheckpoint(ctx, checkpointRunID, scanIntervalStep, seconds)
 }
 
 type Store struct {

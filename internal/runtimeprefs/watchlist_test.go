@@ -68,3 +68,18 @@ func TestAutomationStoreMergesNewSafetyDefaultsIntoLegacySnapshot(t *testing.T) 
 		t.Fatalf("legacy automation did not inherit safe defaults: %+v", got)
 	}
 }
+
+func TestScanIntervalStoreRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	store := New(persistence.NewMemoryRepository(10))
+	if _, found, err := store.LoadScanInterval(ctx); err != nil || found {
+		t.Fatalf("empty scan interval: found=%v err=%v", found, err)
+	}
+	if err := store.SaveScanInterval(ctx, 900); err != nil {
+		t.Fatal(err)
+	}
+	seconds, found, err := store.LoadScanInterval(ctx)
+	if err != nil || !found || seconds != 900 {
+		t.Fatalf("scan interval=%d found=%v err=%v", seconds, found, err)
+	}
+}

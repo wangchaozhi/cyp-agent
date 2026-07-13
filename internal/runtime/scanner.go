@@ -15,31 +15,34 @@ type RunFunc func(ctx context.Context, symbol string) error
 type RuntimeStateProvider func() RuntimeState
 
 type ScannerConfig struct {
-	Symbols        []string
-	SymbolProvider func() []string
-	Interval       time.Duration
-	Run            RunFunc
-	State          RuntimeStateProvider
-	Safety         *SafetyState
-	Locks          *SymbolLocks
-	Logger         *slog.Logger
-	Metrics        *observability.RuntimeMetrics
-	OnError        func(error)
-	Enabled        func() bool
+	Symbols          []string
+	SymbolProvider   func() []string
+	Interval         time.Duration
+	IntervalProvider func() time.Duration
+	Run              RunFunc
+	State            RuntimeStateProvider
+	Safety           *SafetyState
+	Locks            *SymbolLocks
+	Logger           *slog.Logger
+	Metrics          *observability.RuntimeMetrics
+	OnError          func(error)
+	Enabled          func() bool
 }
 
 type Scanner struct {
-	symbols        []string
-	symbolProvider func() []string
-	interval       time.Duration
-	run            RunFunc
-	state          RuntimeStateProvider
-	safety         *SafetyState
-	locks          *SymbolLocks
-	logger         *slog.Logger
-	metrics        *observability.RuntimeMetrics
-	onError        func(error)
-	enabled        func() bool
+	symbols          []string
+	symbolProvider   func() []string
+	interval         time.Duration
+	intervalProvider func() time.Duration
+	scheduleChanged  chan struct{}
+	run              RunFunc
+	state            RuntimeStateProvider
+	safety           *SafetyState
+	locks            *SymbolLocks
+	logger           *slog.Logger
+	metrics          *observability.RuntimeMetrics
+	onError          func(error)
+	enabled          func() bool
 }
 
 func NewScanner(config ScannerConfig) (*Scanner, error) {
@@ -72,10 +75,35 @@ func NewScanner(config ScannerConfig) (*Scanner, error) {
 	}
 	return &Scanner{
 		symbols: symbols, interval: config.Interval, run: config.Run, state: config.State,
-		symbolProvider: config.SymbolProvider,
-		safety:         config.Safety, locks: config.Locks, logger: config.Logger,
+		symbolProvider: config.SymbolProvider, intervalProvider: config.IntervalProvider,
+		scheduleChanged: make(chan struct{}, 1),
+		safety:          config.Safety, locks: config.Locks, logger: config.Logger,
 		metrics: config.Metrics, onError: config.OnError, enabled: config.Enabled,
 	}, nil
+}
+
+func (scanner *Scanner) currentInterval() time.Duration {
+	if scanner != nil && scanner.intervalProvider != nil {
+		if interval := scanner.intervalProvider(); interval > 0 {
+			return interval
+		}
+	}
+	if scanner == nil {
+		return 0
+	}
+	return scanner.interval
+}
+
+// NotifyScheduleChanged resets a running scanner's timer so a dashboard
+// frequency update takes effect without triggering an extra LLM analysis.
+func (scanner *Scanner) NotifyScheduleChanged() {
+	if scanner == nil {
+		return
+	}
+	select {
+	case scanner.scheduleChanged <- struct{}{}:
+	default:
+	}
 }
 
 func uniqueSymbols(values []string) []string {
@@ -140,7 +168,7 @@ func (scanner *Scanner) Run(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("scanner context is required")
 	}
-	for {
+	runCycle := func() error {
 		if err := scanner.ScanOnce(ctx); err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return ctxErr
@@ -150,14 +178,35 @@ func (scanner *Scanner) Run(ctx context.Context) error {
 				scanner.onError(err)
 			}
 		}
-		timer := time.NewTimer(scanner.interval)
+		return nil
+	}
+	if err := runCycle(); err != nil {
+		return err
+	}
+	timer := time.NewTimer(scanner.currentInterval())
+	for {
 		select {
 		case <-ctx.Done():
 			if !timer.Stop() {
-				<-timer.C
+				select {
+				case <-timer.C:
+				default:
+				}
 			}
 			return ctx.Err()
+		case <-scanner.scheduleChanged:
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(scanner.currentInterval())
 		case <-timer.C:
+			if err := runCycle(); err != nil {
+				return err
+			}
+			timer.Reset(scanner.currentInterval())
 		}
 	}
 }

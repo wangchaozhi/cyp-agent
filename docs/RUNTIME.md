@@ -40,7 +40,7 @@
 
 ## 扫描循环
 
-`Scanner` 按当前 Dashboard watchlist 顺序扫描，间隔由 `CYP_SCAN_INTERVAL`（秒）控制；自动化总开关或“定时扫描”子开关关闭时整轮为空操作：
+`Scanner` 按当前 Dashboard watchlist 顺序扫描，默认间隔由 `CYP_SCAN_INTERVAL=900`（15 分钟）控制；设置页可在 1/5/15/30 分钟之间切换。修改会持久化、立即重置调度定时器并作用于后续周期，无需重启，也不会因保存设置额外触发一轮 LLM 分析。自动化总开关或“定时扫描”子开关关闭时整轮为空操作：
 
 ```text
 每个 symbol
@@ -53,13 +53,15 @@
 
 watchlist 会去空白、去重并保留顺序。单个 symbol 失败不会阻止其他 symbol；一轮结束后用 `errors.Join` 汇总。当前应用为单进程内锁，多实例部署不能依靠它实现全局互斥。
 
+扫描间隔直接决定每天发起的币种分析轮次：`86400 ÷ 间隔秒数 × watchlist 币种数`。以 7 个币种为例，默认 15 分钟约为 672 个币种分析轮次/天，约为 1 分钟档的 7%。这是调用轮次估算，实际 Token 还取决于模型、上下文和失败重试。
+
 配置示例：
 
 ```dotenv
 CYP_RUNTIME_AUTOSTART=true
 CYP_AUTOMATION_ENABLED=true
 CYP_WATCHLIST=BTC/USDT,ETH/USDT
-CYP_SCAN_INTERVAL=300
+CYP_SCAN_INTERVAL=900
 CYP_MAX_CONCURRENCY=2
 ```
 
@@ -67,7 +69,7 @@ CYP_MAX_CONCURRENCY=2
 
 ## 持仓监控
 
-`PositionMonitor` 每 `CYP_MONITOR_INTERVAL` 秒读取当前模拟执行场所的持仓、报价、余额和保护单，检查：
+`PositionMonitor` 默认每 `CYP_MONITOR_INTERVAL=5` 秒读取当前模拟执行场所的持仓、报价、余额和保护单，检查：
 
 - 场所是否提供原生保护单，当前持仓是否缺止损；
 - mark price 是否有效；
