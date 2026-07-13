@@ -157,12 +157,26 @@ func NewEventBus(historyLimit ...int) *EventBus {
 // Subscribe registers a subscriber with the requested channel capacity.
 // Delivery is non-blocking even when buffer is zero.
 func (b *Bus) Subscribe(buffer int) *Subscription {
+	return b.SubscribeReplay(buffer, 0, time.Time{})
+}
+
+// SubscribeReplay atomically registers a subscriber and preloads its channel
+// with the newest retained events after the supplied timestamp. Registration
+// and replay happen under one lock, so events cannot disappear in the gap
+// between reading history and subscribing to live delivery.
+func (b *Bus) SubscribeReplay(buffer, limit int, after time.Time) *Subscription {
 	if buffer < 0 {
 		buffer = 0
 	}
-	ch := make(chan Event, buffer)
+	if limit < 0 {
+		limit = 0
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	replay := b.replayLocked(limit, after)
+	// Keep the requested live-delivery headroom in addition to replayed
+	// frames; otherwise a full replay would make the first live event drop.
+	ch := make(chan Event, buffer+len(replay))
 	if b.closed {
 		close(ch)
 		return &Subscription{C: ch}
@@ -170,7 +184,27 @@ func (b *Bus) Subscribe(buffer int) *Subscription {
 	b.nextID++
 	sub := &Subscription{C: ch, bus: b, id: b.nextID}
 	b.subscribers[sub.id] = &subscriber{ch: ch, sub: sub}
+	for _, event := range replay {
+		ch <- event
+	}
 	return sub
+}
+
+func (b *Bus) replayLocked(limit int, after time.Time) []Event {
+	if limit == 0 || len(b.history) == 0 {
+		return nil
+	}
+	matched := make([]Event, 0, min(limit, len(b.history)))
+	for _, event := range b.history {
+		if !after.IsZero() && !event.TS.After(after) {
+			continue
+		}
+		matched = append(matched, cloneEvent(event))
+	}
+	if len(matched) > limit {
+		matched = matched[len(matched)-limit:]
+	}
+	return matched
 }
 
 // Emit creates and publishes an event, returning the timestamped value.

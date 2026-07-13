@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { X } from "lucide-react";
 
 import { PendingApprovals } from "../features/approvals/PendingApprovals";
@@ -44,8 +44,8 @@ export default function App() {
   const runtimeSettings = usePollingResource(cypApi.settings, 10000);
   const pending = usePollingResource(cypApi.pending, 3000);
   const positions = usePollingResource(cypApi.positions, positionPollInterval);
-  const risk = usePollingResource(cypApi.risk, 5000);
-  const portfolio = usePollingResource(cypApi.portfolio, 5000);
+  const risk = usePollingResource(cypApi.risk, positionPollInterval);
+  const portfolio = usePollingResource(cypApi.portfolio, positionPollInterval);
   const metrics = usePollingResource(cypApi.metrics, 10000);
   const [events, setEvents] = useState<DashboardEvent[]>([]);
   const [marketSymbols, setMarketSymbols] = useState<string[]>([]);
@@ -57,6 +57,10 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<"general" | "symbols">("general");
   const [notice, setNotice] = useState<Notice>(null);
+  const settingsDialogRef = useRef<HTMLElement | null>(null);
+  const settingsCloseRef = useRef<HTMLButtonElement | null>(null);
+  const queuedRefreshesRef = useRef(new Set<() => Promise<void>>());
+  const refreshTimerRef = useRef<number | null>(null);
   const apiError = [
     health.error,
     venues.error,
@@ -72,25 +76,46 @@ export default function App() {
     return [...new Set(source.map((symbol) => symbol.trim()).filter(Boolean))];
   }, [marketSymbols, runtimeSettings.data?.watchlist]);
 
+  const scheduleRefresh = useCallback((resources: Array<() => Promise<void>>) => {
+    resources.forEach((refresh) => queuedRefreshesRef.current.add(refresh));
+    if (refreshTimerRef.current !== null) return;
+    refreshTimerRef.current = window.setTimeout(() => {
+      const queued = [...queuedRefreshesRef.current];
+      queuedRefreshesRef.current.clear();
+      refreshTimerRef.current = null;
+      refreshAll(queued);
+    }, 100);
+  }, []);
+
+  useEffect(() => () => {
+    if (refreshTimerRef.current !== null) window.clearTimeout(refreshTimerRef.current);
+    queuedRefreshesRef.current.clear();
+  }, []);
+
   useEffect(() => {
     setPositionPollInterval(positionPollingInterval(positions.data?.length ?? 0));
   }, [positions.data?.length]);
 
   const handleEvent = useCallback(
     (event: DashboardEvent) => {
-      setEvents((current) => [event, ...current].slice(0, MAX_EVENTS));
+      setEvents((current) => {
+        const duplicate = current.some((item) => (
+          item.ts === event.ts && item.type === event.type && item.run_id === event.run_id
+        ));
+        return duplicate ? current : [event, ...current].slice(0, MAX_EVENTS);
+      });
 
       if (["awaiting_approval", "approval_decided"].includes(event.type)) {
-        refreshAll([pending.refresh]);
+        scheduleRefresh([pending.refresh]);
       }
       if (["run_started", "executed", "reviewed", "run_done", "automated_exit"].includes(event.type)) {
-        refreshAll([positions.refresh, risk.refresh, portfolio.refresh]);
+        scheduleRefresh([positions.refresh, risk.refresh, portfolio.refresh]);
       }
       if (["risk_assessed", "killswitch"].includes(event.type)) {
-        refreshAll([health.refresh, risk.refresh, runtimeSettings.refresh]);
+        scheduleRefresh([health.refresh, risk.refresh, runtimeSettings.refresh]);
       }
 			if (event.type === "token_budget_alert") {
-				refreshAll([metrics.refresh]);
+				scheduleRefresh([metrics.refresh]);
 				setNotice({
 					tone: event.level === "paused" ? "bad" : "warn",
 					message: event.level === "paused"
@@ -99,7 +124,7 @@ export default function App() {
 				});
 			}
     },
-    [health.refresh, metrics.refresh, pending.refresh, portfolio.refresh, positions.refresh, risk.refresh, runtimeSettings.refresh],
+    [health.refresh, metrics.refresh, pending.refresh, portfolio.refresh, positions.refresh, risk.refresh, runtimeSettings.refresh, scheduleRefresh],
   );
 
   const streamStatus = useEventStream(handleEvent);
@@ -124,15 +149,39 @@ export default function App() {
 
   useEffect(() => {
     if (!settingsOpen) return;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const focusFrame = window.requestAnimationFrame(() => settingsCloseRef.current?.focus());
 
     function closeOnEscape(event: KeyboardEvent) {
       if (event.key === "Escape") {
         setSettingsOpen(false);
+        return;
+      }
+      if (event.key !== "Tab" || !settingsDialogRef.current) return;
+      const focusable = Array.from(settingsDialogRef.current.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+      ));
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
       }
     }
 
     window.addEventListener("keydown", closeOnEscape);
-    return () => window.removeEventListener("keydown", closeOnEscape);
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      window.removeEventListener("keydown", closeOnEscape);
+      document.body.style.overflow = previousOverflow;
+      previousFocus?.focus();
+    };
   }, [settingsOpen]);
 
   const runOnce = async () => {
@@ -382,6 +431,7 @@ export default function App() {
       {settingsOpen ? (
         <div className="settings-overlay" role="presentation" onClick={() => setSettingsOpen(false)}>
           <aside
+            ref={settingsDialogRef}
             id="settings-drawer"
             className="settings-drawer"
             role="dialog"
@@ -390,6 +440,7 @@ export default function App() {
             onClick={(event) => event.stopPropagation()}
           >
             <button
+              ref={settingsCloseRef}
               className="settings-drawer__close icon-command"
               type="button"
               onClick={() => setSettingsOpen(false)}

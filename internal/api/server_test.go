@@ -107,6 +107,9 @@ func TestHealthSettingsKillAndDashboardShapes(t *testing.T) {
 		if !json.Valid(body) {
 			t.Fatalf("GET %s returned invalid JSON: %s", path, body)
 		}
+		if response.Header.Get("Cache-Control") != "no-store" || response.Header.Get("Content-Security-Policy") == "" {
+			t.Fatalf("GET %s missing API cache/security headers: %#v", path, response.Header)
+		}
 		if strings.Contains(string(body), "deepseek-secret") || strings.Contains(string(body), "okx-secret") || strings.Contains(string(body), "okx-pass") {
 			t.Fatalf("GET %s leaked a secret: %s", path, body)
 		}
@@ -280,6 +283,11 @@ func TestFullHTTPApprovalAndCloseLoop(t *testing.T) {
 	if err := json.Unmarshal(body, &accepted); err != nil || len(accepted.RunID) != 12 {
 		t.Fatalf("unexpected accepted run: %s (%v)", body, err)
 	}
+	response, body = requestJSON(t, client, http.MethodGet, server.URL+"/api/runs/"+accepted.RunID, nil)
+	if response.StatusCode != http.StatusOK ||
+		(!strings.Contains(string(body), `"status":"queued"`) && !strings.Contains(string(body), `"status":"running"`)) {
+		t.Fatalf("accepted run is not immediately queryable: %d %s", response.StatusCode, body)
+	}
 
 	deadline := time.Now().Add(2 * time.Second)
 	for {
@@ -395,5 +403,29 @@ func TestSSEUsesDefaultDataFrames(t *testing.T) {
 	}
 	if !strings.Contains(string(data), `"type":"killswitch"`) || !strings.Contains(string(data), `"run_id":"-"`) {
 		t.Fatalf("unexpected SSE data: %s", data)
+	}
+}
+
+func TestSSEReplaysLatestRetainedEvent(t *testing.T) {
+	application, server := newTestApplication(t, func(settings *config.Settings) {
+		settings.Automation.Enabled = false
+	})
+	application.Events.Emit("replay_marker", "replay-run", map[string]any{"symbol": "ETH/USDT"})
+	client := &http.Client{Timeout: 2 * time.Second}
+	response, err := client.Get(server.URL + "/api/events?replay=1")
+	if err != nil {
+		t.Fatalf("GET replay events error = %v", err)
+	}
+	defer response.Body.Close()
+	reader := bufio.NewReader(response.Body)
+	if line, err := reader.ReadString('\n'); err != nil || strings.TrimSpace(line) != "retry: 3000" {
+		t.Fatalf("first SSE line = %q, err = %v", line, err)
+	}
+	data, err := api.ReadSSEData(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"type":"replay_marker"`) || !strings.Contains(string(data), `"run_id":"replay-run"`) {
+		t.Fatalf("unexpected replay data: %s", data)
 	}
 }

@@ -229,7 +229,9 @@ ORDER BY venue, symbol, timeframe;
 GET /api/token-usage?days=7&bucket=hour&limit=50
 ```
 
-70% 与 90% 预算水位产生 `token_budget_alert`，100% 拒绝新的 LLM Provider 调用。该门不在 Venue、PositionMonitor 或 AutomatedExitManager 路径上，所以触顶后持仓保护和平仓仍继续。数据库不可用时统计降级到进程内且交易继续；应根据 `token_usage_store_unavailable` 日志恢复数据库，避免重启后丢失降级期间明细。
+70% 与 90% 预算水位产生 `token_budget_alert`，100% 拒绝新的 LLM Provider 调用。调用前会同时预留提示词、最大回复 Token 与保守估算成本，避免多个并发请求一起越过自然日边界。该门不在 Venue、PositionMonitor 或 AutomatedExitManager 路径上，所以触顶后持仓保护和平仓仍继续。
+
+明细异步写库会有限重试，可通过 `/api/metrics` 的 `token_usage_queued`、`token_usage_saved`、`token_usage_dropped`、`token_usage_errors` 判断持久化健康度。数据库不可用时统计降级到进程内且交易继续；应根据 `token_usage_store_unavailable` 或写入错误日志恢复数据库，避免重启后丢失降级期间明细。
 
 ## 容器运行
 

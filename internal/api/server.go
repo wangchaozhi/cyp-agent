@@ -56,6 +56,7 @@ type Server struct {
 	safety            *runtimecore.SafetyState
 	riskState         *riskstate.Tracker
 	tokenUsage        *tokenusage.Tracker
+	accountCache      *accountSnapshotCache
 	llmFactory        func(config.Settings) *llm.Client
 	historicalVenue   venue.Venue
 	historicalArchive ohlcv.Archive
@@ -125,6 +126,7 @@ func New(dependencies Dependencies) (*Server, error) {
 		registry: dependencies.Registry, marketData: dependencies.Market, safety: dependencies.Safety,
 		riskState:                 dependencies.RiskState,
 		tokenUsage:                dependencies.TokenUsage,
+		accountCache:              newAccountSnapshotCache(accountSnapshotTTL),
 		llmFactory:                dependencies.LLMFactory,
 		historicalVenue:           dependencies.HistoricalVenue,
 		historicalArchive:         dependencies.HistoricalArchive,
@@ -226,30 +228,34 @@ func (s *Server) updateSettings(w http.ResponseWriter, request *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
-	if err := s.control.UpdateSettings(payload); err != nil {
+	persistContext, cancelPersist := context.WithTimeout(request.Context(), 5*time.Second)
+	defer cancelPersist()
+	persist := func(next config.Settings) error {
+		if payload.Watchlist != nil && s.watchlistStore != nil {
+			if err := s.watchlistStore.SaveWatchlist(persistContext, next.WatchlistSymbols()); err != nil {
+				return fmt.Errorf("persist watchlist: %w", err)
+			}
+		}
+		if payload.Automation != nil && s.automationStore != nil {
+			if err := s.automationStore.SaveAutomation(persistContext, next.Automation); err != nil {
+				return fmt.Errorf("persist automation: %w", err)
+			}
+		}
+		if payload.ScanInterval != nil && s.scanIntervalStore != nil {
+			if err := s.scanIntervalStore.SaveScanInterval(persistContext, next.ScanInterval); err != nil {
+				return fmt.Errorf("persist scan interval: %w", err)
+			}
+		}
+		return nil
+	}
+	if err := s.control.UpdateSettingsPersist(payload, persist); err != nil {
+		if strings.HasPrefix(err.Error(), "persist ") {
+			s.logger.ErrorContext(request.Context(), "persist_runtime_settings_failed", "error", err.Error())
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
-	}
-	if payload.Watchlist != nil && s.watchlistStore != nil {
-		if err := s.watchlistStore.SaveWatchlist(request.Context(), s.control.Settings().WatchlistSymbols()); err != nil {
-			s.logger.ErrorContext(request.Context(), "persist_watchlist_failed", "error", err.Error())
-			writeError(w, http.StatusInternalServerError, "persist watchlist: "+err.Error())
-			return
-		}
-	}
-	if payload.Automation != nil && s.automationStore != nil {
-		if err := s.automationStore.SaveAutomation(request.Context(), s.control.Settings().Automation); err != nil {
-			s.logger.ErrorContext(request.Context(), "persist_automation_failed", "error", err.Error())
-			writeError(w, http.StatusInternalServerError, "persist automation: "+err.Error())
-			return
-		}
-	}
-	if payload.ScanInterval != nil && s.scanIntervalStore != nil {
-		if err := s.scanIntervalStore.SaveScanInterval(request.Context(), s.control.Settings().ScanInterval); err != nil {
-			s.logger.ErrorContext(request.Context(), "persist_scan_interval_failed", "error", err.Error())
-			writeError(w, http.StatusInternalServerError, "persist scan interval: "+err.Error())
-			return
-		}
 	}
 	if payload.ScanInterval != nil && s.notifyScanScheduleChanged != nil {
 		s.notifyScanScheduleChanged()
@@ -446,6 +452,14 @@ func (s *Server) run(w http.ResponseWriter, request *http.Request) {
 	}
 	accepted, err := s.orchestrator.Start(symbol)
 	if err != nil {
+		if errors.Is(err, orchestrator.ErrRunInProgress) {
+			writeError(w, http.StatusConflict, "该币种已有分析正在运行")
+			return
+		}
+		if errors.Is(err, orchestrator.ErrRunQueueFull) {
+			writeError(w, http.StatusTooManyRequests, "分析队列已满，请稍后重试")
+			return
+		}
 		writeError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
@@ -557,12 +571,25 @@ func (s *Server) backtest(w http.ResponseWriter, request *http.Request) {
 }
 
 func (s *Server) eventStream(w http.ResponseWriter, request *http.Request) {
-	flusher, ok := w.(http.Flusher)
+	flusher, ok := responseFlusher(w)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "streaming unsupported")
 		return
 	}
-	subscription := s.events.Subscribe(1000)
+	replay, _ := strconv.Atoi(request.URL.Query().Get("replay"))
+	if replay < 0 {
+		replay = 0
+	}
+	if replay > 200 {
+		replay = 200
+	}
+	var after time.Time
+	if raw := strings.TrimSpace(request.Header.Get("Last-Event-ID")); raw != "" {
+		if nanoseconds, err := strconv.ParseInt(raw, 10, 64); err == nil {
+			after = time.Unix(0, nanoseconds).UTC()
+		}
+	}
+	subscription := s.events.SubscribeReplay(1000, replay, after)
 	defer subscription.Cancel()
 	header := w.Header()
 	header.Set("Content-Type", "text/event-stream; charset=utf-8")
@@ -570,7 +597,9 @@ func (s *Server) eventStream(w http.ResponseWriter, request *http.Request) {
 	header.Set("Connection", "keep-alive")
 	header.Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
-	_, _ = io.WriteString(w, "retry: 3000\n\n")
+	if _, err := io.WriteString(w, "retry: 3000\n\n"); err != nil {
+		return
+	}
 	flusher.Flush()
 
 	keepalive := time.NewTicker(15 * time.Second)
@@ -586,10 +615,14 @@ func (s *Server) eventStream(w http.ResponseWriter, request *http.Request) {
 				s.logger.Error("sse_encode_failed", "error", err)
 				continue
 			}
-			_, _ = fmt.Fprintf(w, "data: %s\n\n", encoded)
+			if _, err := fmt.Fprintf(w, "id: %d\ndata: %s\n\n", event.TS.UnixNano(), encoded); err != nil {
+				return
+			}
 			flusher.Flush()
 		case <-keepalive.C:
-			_, _ = io.WriteString(w, ": keepalive\n\n")
+			if _, err := io.WriteString(w, ": keepalive\n\n"); err != nil {
+				return
+			}
 			flusher.Flush()
 		case <-request.Context().Done():
 			return
@@ -607,6 +640,7 @@ func (s *Server) assets(w http.ResponseWriter, request *http.Request) {
 		http.NotFound(w, request)
 		return
 	}
+	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	http.StripPrefix("/assets/", http.FileServer(http.Dir(assetsDir))).ServeHTTP(w, request)
 }
 
@@ -615,6 +649,7 @@ func (s *Server) index(w http.ResponseWriter, request *http.Request) {
 		http.NotFound(w, request)
 		return
 	}
+	w.Header().Set("Cache-Control", "no-cache")
 	if s.webDir != "" {
 		index := filepath.Join(s.webDir, "index.html")
 		if info, err := os.Stat(index); err == nil && !info.IsDir() {
@@ -630,6 +665,8 @@ func (s *Server) index(w http.ResponseWriter, request *http.Request) {
 
 func (s *Server) middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		stateWriter := &responseStateWriter{ResponseWriter: w}
+		w = stateWriter
 		started := time.Now()
 		requestID := strings.TrimSpace(request.Header.Get("X-Request-ID"))
 		if requestID == "" {
@@ -637,7 +674,13 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 		}
 		w.Header().Set("X-Request-ID", requestID)
 		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
+		if strings.HasPrefix(request.URL.Path, "/api/") {
+			w.Header().Set("Cache-Control", "no-store")
+		}
 		if origin := strings.TrimSpace(request.Header.Get("Origin")); origin != "" {
 			if _, allowed := s.corsOrigins[origin]; allowed {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
@@ -656,8 +699,14 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 				s.logger.Error("http_panic", "request_id", requestID, "panic", fmt.Sprint(recovered))
 				writeError(w, http.StatusInternalServerError, "内部错误")
 			}
-			s.logger.Info("http_request", "request_id", requestID, "method", request.Method,
-				"path", request.URL.Path, "duration_ms", time.Since(started).Milliseconds())
+			duration := time.Since(started)
+			attributes := []any{"request_id", requestID, "method", request.Method,
+				"path", request.URL.Path, "status", stateWriter.Status(), "duration_ms", duration.Milliseconds()}
+			if stateWriter.Status() >= 400 || isMutation(request.Method) || duration >= time.Second || request.URL.Path == "/api/events" {
+				s.logger.Info("http_request", attributes...)
+			} else {
+				s.logger.Debug("http_request", attributes...)
+			}
 		}()
 		if isMutation(request.Method) {
 			if !s.sameOriginOrNonBrowser(request) {
@@ -676,6 +725,49 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, request)
 	})
+}
+
+type responseStateWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (writer *responseStateWriter) WriteHeader(status int) {
+	if writer.status != 0 {
+		return
+	}
+	writer.status = status
+	writer.ResponseWriter.WriteHeader(status)
+}
+
+func (writer *responseStateWriter) Write(data []byte) (int, error) {
+	if writer.status == 0 {
+		writer.WriteHeader(http.StatusOK)
+	}
+	return writer.ResponseWriter.Write(data)
+}
+
+func (writer *responseStateWriter) Unwrap() http.ResponseWriter { return writer.ResponseWriter }
+
+func (writer *responseStateWriter) Status() int {
+	if writer.status == 0 {
+		return http.StatusOK
+	}
+	return writer.status
+}
+
+func responseFlusher(writer http.ResponseWriter) (http.Flusher, bool) {
+	for writer != nil {
+		if flusher, ok := writer.(http.Flusher); ok {
+			return flusher, true
+		}
+		unwrapper, ok := writer.(interface{ Unwrap() http.ResponseWriter })
+		if !ok {
+			return nil, false
+		}
+		writer = unwrapper.Unwrap()
+	}
+	return nil, false
 }
 
 func isMutation(method string) bool {

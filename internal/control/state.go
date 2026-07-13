@@ -20,6 +20,7 @@ var (
 )
 
 type State struct {
+	updateMu sync.Mutex
 	mu       sync.RWMutex
 	settings config.Settings
 }
@@ -53,9 +54,24 @@ func (s *State) SetKill(on bool) bool {
 // key values never erase an existing secret. The LLM base URL is startup-only
 // so an HTTP caller cannot redirect an already-loaded secret to another host.
 func (s *State) UpdateSettings(request contracts.SettingsUpdateRequest) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	return s.UpdateSettingsPersist(request, nil)
+}
+
+// UpdateSettingsPersist validates a candidate, persists it through the
+// supplied callback, and only then publishes it to concurrent readers. A
+// failed database write therefore cannot leave the process reporting settings
+// that will silently disappear after restart.
+func (s *State) UpdateSettingsPersist(
+	request contracts.SettingsUpdateRequest,
+	persist func(config.Settings) error,
+) error {
+	// Serialize writers without blocking the much hotter Settings() read path
+	// while durable storage is doing I/O.
+	s.updateMu.Lock()
+	defer s.updateMu.Unlock()
+	s.mu.RLock()
 	next := s.settings
+	s.mu.RUnlock()
 
 	if request.Mode != nil {
 		mode := strings.ToLower(strings.TrimSpace(*request.Mode))
@@ -96,7 +112,7 @@ func (s *State) UpdateSettings(request contracts.SettingsUpdateRequest) error {
 		next.LLMModelFast = strings.TrimSpace(*request.LLMModelFast)
 	}
 	if request.LLMBaseURL != nil {
-		if strings.TrimSpace(*request.LLMBaseURL) != s.settings.LLMBaseURL {
+		if strings.TrimSpace(*request.LLMBaseURL) != next.LLMBaseURL {
 			return ErrRuntimeLLMBaseURL
 		}
 	}
@@ -121,7 +137,17 @@ func (s *State) UpdateSettings(request contracts.SettingsUpdateRequest) error {
 	if err := next.Validate(); err != nil {
 		return err
 	}
+	if persist != nil {
+		if err := persist(next); err != nil {
+			return err
+		}
+	}
+	s.mu.Lock()
+	// Kill Switch has a dedicated endpoint and may change while persistence is
+	// in flight. Preserve its newest value when publishing this settings edit.
+	next.Kill = s.settings.Kill
 	s.settings = next
+	s.mu.Unlock()
 	return nil
 }
 

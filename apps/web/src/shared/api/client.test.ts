@@ -32,6 +32,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -63,6 +64,17 @@ describe("api client authentication", () => {
 });
 
 describe("api client error handling", () => {
+  it("times out stalled API requests", async () => {
+    vi.useFakeTimers();
+    fetchMock.mockImplementation((_path: string, init: RequestInit) => new Promise((_resolve, reject) => {
+      init.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+    }));
+    const request = cypApi.health();
+    const assertion = expect(request).rejects.toThrow("请求超时");
+    await vi.advanceTimersByTimeAsync(30_000);
+    await assertion;
+  });
+
   it("surfaces the structured detail from error responses", async () => {
     fetchMock.mockResolvedValue(jsonResponse({ detail: "窗口必须小于 bars" }, 422));
     await expect(

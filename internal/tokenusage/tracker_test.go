@@ -3,11 +3,25 @@ package tokenusage
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/wangchaozhi/cyp-agent/internal/llm"
+	"github.com/wangchaozhi/cyp-agent/internal/observability"
 )
+
+type flakyUsageStore struct{ attempts atomic.Int32 }
+
+func (*flakyUsageStore) Load(context.Context, time.Time) ([]llm.UsageEvent, error) { return nil, nil }
+func (store *flakyUsageStore) Save(context.Context, llm.UsageEvent, string, string) error {
+	if store.attempts.Add(1) < 3 {
+		return errors.New("temporary database failure")
+	}
+	return nil
+}
+func (*flakyUsageStore) Prune(context.Context, time.Time) (int64, error) { return 0, nil }
+func (*flakyUsageStore) Close()                                          {}
 
 func TestTrackerReportsMultipleProvidersAndAttribution(t *testing.T) {
 	now := time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)
@@ -90,5 +104,98 @@ func TestTrackerDoesNotCarryInflightReservationIntoNextNaturalDay(t *testing.T) 
 	now = now.Add(2 * time.Minute)
 	if err := tracker.Reserve(context.Background(), llm.UsageEvent{ID: "day-two", InputTokens: 90}); err != nil {
 		t.Fatalf("next-day reserve inherited prior-day tokens: %v", err)
+	}
+}
+
+func TestTrackerKeepsEventsSortedAndPrunesInHourlyBatches(t *testing.T) {
+	now := time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)
+	tracker, err := New(context.Background(), Config{
+		TokenBudget: 1000, CostBudgetUSD: 10, Retention: 24 * time.Hour,
+		Location: time.UTC, Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tracker.Close(context.Background())
+
+	tracker.Record(context.Background(), llm.UsageEvent{
+		ID: "newer", TS: now, Provider: "deepseek", Model: "new", Status: "success", InputTokens: 10,
+	})
+	tracker.Record(context.Background(), llm.UsageEvent{
+		ID: "older", TS: now.Add(-23 * time.Hour), Provider: "anthropic", Model: "old", Status: "success", InputTokens: 20,
+	})
+	report := tracker.Report(2, "hour", 10)
+	if len(report.Recent) != 2 || report.Recent[0].ID != "newer" || report.Recent[1].ID != "older" {
+		t.Fatalf("out-of-order events were not sorted: %+v", report.Recent)
+	}
+
+	now = now.Add(2 * time.Hour)
+	tracker.Record(context.Background(), llm.UsageEvent{
+		ID: "latest", TS: now, Provider: "deepseek", Model: "new", Status: "success", InputTokens: 5,
+	})
+	report = tracker.Report(2, "hour", 10)
+	if len(report.Recent) != 2 || report.Recent[1].ID != "newer" {
+		t.Fatalf("expired event was not pruned: %+v", report.Recent)
+	}
+}
+
+func TestTrackerReservationIncludesPredictedOutputTokens(t *testing.T) {
+	now := time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)
+	tracker, err := New(context.Background(), Config{
+		TokenBudget: 100, CostBudgetUSD: 10, Retention: 24 * time.Hour,
+		Location: time.UTC, Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tracker.Close(context.Background())
+
+	err = tracker.Reserve(context.Background(), llm.UsageEvent{ID: "predicted", InputTokens: 60, OutputTokens: 41})
+	if !errors.Is(err, llm.ErrDailyBudgetExceeded) {
+		t.Fatalf("Reserve() error = %v, want daily budget rejection", err)
+	}
+}
+
+func TestTrackerReservationIncludesPredictedCost(t *testing.T) {
+	now := time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)
+	tracker, err := New(context.Background(), Config{
+		TokenBudget: 1000, CostBudgetUSD: 1, Retention: 24 * time.Hour,
+		Location: time.UTC, Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tracker.Close(context.Background())
+
+	err = tracker.Reserve(context.Background(), llm.UsageEvent{ID: "predicted-cost", InputTokens: 1, CostUSD: 1.01})
+	if !errors.Is(err, llm.ErrDailyBudgetExceeded) {
+		t.Fatalf("Reserve() error = %v, want daily cost budget rejection", err)
+	}
+}
+
+func TestTrackerRetriesTransientPersistenceFailures(t *testing.T) {
+	now := time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)
+	store := &flakyUsageStore{}
+	metrics := &observability.RuntimeMetrics{}
+	tracker, err := New(context.Background(), Config{
+		Store: store, TokenBudget: 1000, CostBudgetUSD: 10, Retention: 24 * time.Hour,
+		Location: time.UTC, Now: func() time.Time { return now }, Metrics: metrics,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tracker.Record(context.Background(), llm.UsageEvent{
+		ID: "retry", TS: now, Provider: "deepseek", Model: "test", Status: "success", InputTokens: 1,
+	})
+	deadline := time.Now().Add(2 * time.Second)
+	for store.attempts.Load() < 3 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if err := tracker.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := metrics.Snapshot()
+	if store.attempts.Load() != 3 || snapshot.TokenUsageQueued != 1 || snapshot.TokenUsageSaved != 1 || snapshot.TokenUsageErrors != 0 {
+		t.Fatalf("attempts=%d metrics=%+v", store.attempts.Load(), snapshot)
 	}
 }

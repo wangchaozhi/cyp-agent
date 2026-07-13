@@ -28,6 +28,10 @@ type RuntimeMetricsSnapshot struct {
 	OHLCVPruned       uint64 `json:"ohlcv_pruned"`
 	OHLCVRepairRuns   uint64 `json:"ohlcv_repair_runs"`
 	OHLCVBackfilled   uint64 `json:"ohlcv_backfilled"`
+	TokenUsageQueued  uint64 `json:"token_usage_queued"`
+	TokenUsageSaved   uint64 `json:"token_usage_saved"`
+	TokenUsageDropped uint64 `json:"token_usage_dropped"`
+	TokenUsageErrors  uint64 `json:"token_usage_errors"`
 }
 
 type RuntimeMetrics struct {
@@ -45,6 +49,10 @@ type RuntimeMetrics struct {
 	ohlcvPruned       atomic.Uint64
 	ohlcvRepairRuns   atomic.Uint64
 	ohlcvBackfilled   atomic.Uint64
+	tokenUsageQueued  atomic.Uint64
+	tokenUsageSaved   atomic.Uint64
+	tokenUsageDropped atomic.Uint64
+	tokenUsageErrors  atomic.Uint64
 }
 
 func (metrics *RuntimeMetrics) RecordOHLCVQueued(count uint64) {
@@ -86,6 +94,30 @@ func (metrics *RuntimeMetrics) RecordOHLCVRepairRun() {
 func (metrics *RuntimeMetrics) RecordOHLCVBackfilled(count uint64) {
 	if metrics != nil {
 		metrics.ohlcvBackfilled.Add(count)
+	}
+}
+
+func (metrics *RuntimeMetrics) RecordTokenUsageQueued() {
+	if metrics != nil {
+		metrics.tokenUsageQueued.Add(1)
+	}
+}
+
+func (metrics *RuntimeMetrics) RecordTokenUsageSaved() {
+	if metrics != nil {
+		metrics.tokenUsageSaved.Add(1)
+	}
+}
+
+func (metrics *RuntimeMetrics) RecordTokenUsageDropped() {
+	if metrics != nil {
+		metrics.tokenUsageDropped.Add(1)
+	}
+}
+
+func (metrics *RuntimeMetrics) RecordTokenUsageError() {
+	if metrics != nil {
+		metrics.tokenUsageErrors.Add(1)
 	}
 }
 
@@ -137,6 +169,8 @@ func (metrics *RuntimeMetrics) Snapshot() RuntimeMetricsSnapshot {
 		OHLCVQueued: metrics.ohlcvQueued.Load(), OHLCVSaved: metrics.ohlcvSaved.Load(),
 		OHLCVDropped: metrics.ohlcvDropped.Load(), OHLCVErrors: metrics.ohlcvErrors.Load(),
 		OHLCVPruned: metrics.ohlcvPruned.Load(), OHLCVRepairRuns: metrics.ohlcvRepairRuns.Load(),
-		OHLCVBackfilled: metrics.ohlcvBackfilled.Load(),
+		OHLCVBackfilled:  metrics.ohlcvBackfilled.Load(),
+		TokenUsageQueued: metrics.tokenUsageQueued.Load(), TokenUsageSaved: metrics.tokenUsageSaved.Load(),
+		TokenUsageDropped: metrics.tokenUsageDropped.Load(), TokenUsageErrors: metrics.tokenUsageErrors.Load(),
 	}
 }

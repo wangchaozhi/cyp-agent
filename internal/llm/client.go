@@ -34,6 +34,7 @@ type Options struct {
 	Metrics          *Metrics
 	CostEstimator    CostEstimator
 	UsageObserver    UsageObserver
+	MaxOutputTokens  int
 }
 
 type budgetState struct {
@@ -69,6 +70,7 @@ type Client struct {
 	metrics          *Metrics
 	costEstimator    CostEstimator
 	usageObserver    UsageObserver
+	maxOutputTokens  int
 	randMu           sync.Mutex
 	rand             *rand.Rand
 }
@@ -106,10 +108,11 @@ func NewClient(provider Provider, options Options) *Client {
 		maxRetries: options.MaxRetries, baseDelay: options.BaseDelay, timeout: options.Timeout,
 		breakerThreshold: options.BreakerThreshold, breakerCooldown: options.BreakerCooldown,
 		budget: options.Budget, budgetState: budgetState{startedAt: now}, metrics: metrics,
-		costEstimator: options.CostEstimator,
-		usageObserver: options.UsageObserver,
-		circuit:       &circuitState{},
-		rand:          rand.New(rand.NewSource(now.UnixNano())),
+		costEstimator:   options.CostEstimator,
+		usageObserver:   options.UsageObserver,
+		maxOutputTokens: max(0, options.MaxOutputTokens),
+		circuit:         &circuitState{},
+		rand:            rand.New(rand.NewSource(now.UnixNano())),
 	}
 }
 
@@ -128,8 +131,9 @@ func (client *Client) NewSession() *Client {
 		breakerThreshold: client.breakerThreshold, breakerCooldown: client.breakerCooldown,
 		budget: client.budget, budgetState: budgetState{startedAt: now},
 		circuit: client.circuit, metrics: client.metrics, costEstimator: client.costEstimator,
-		usageObserver: client.usageObserver,
-		rand:          rand.New(rand.NewSource(now.UnixNano())),
+		usageObserver:   client.usageObserver,
+		maxOutputTokens: client.maxOutputTokens,
+		rand:            rand.New(rand.NewSource(now.UnixNano())),
 	}
 }
 
@@ -232,14 +236,27 @@ func (client *Client) call(
 	}
 	startedAt := time.Now()
 	if client.usageObserver != nil {
+		// Reserve the provider's maximum response allowance as well as the
+		// prompt. Concurrent calls near the daily ceiling can otherwise all
+		// pass the gate and overshoot it with their completions.
+		event.OutputTokens = client.maxOutputTokens
+		if client.costEstimator != nil {
+			event.CostUSD = client.costEstimator(model, Usage{
+				InputTokens: event.InputTokens, OutputTokens: event.OutputTokens,
+			})
+			event.CostEstimated = event.CostUSD > 0
+		}
 		if err := client.usageObserver.Reserve(ctx, event); err != nil {
 			event.Status, event.ErrorKind = "budget_rejected", "daily_budget"
-			event.InputTokens = 0
+			event.InputTokens, event.OutputTokens = 0, 0
+			event.CostUSD, event.CostEstimated = 0, false
 			client.usageObserver.Record(ctx, event)
 			client.metrics.update(func(snapshot *MetricsSnapshot) { snapshot.BudgetRejections++ })
 			client.releaseHalfOpen()
 			return Completion{}, err
 		}
+		event.OutputTokens = 0
+		event.CostUSD, event.CostEstimated = 0, false
 	}
 	reservation, err := client.reserveBudget(estimatedInput)
 	if err != nil {

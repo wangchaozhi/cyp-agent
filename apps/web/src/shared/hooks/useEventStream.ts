@@ -13,7 +13,10 @@ export function useEventStream(onEvent: (event: DashboardEvent) => void): Stream
   }, [onEvent]);
 
   useEffect(() => {
-    const source = new EventSource("/api/events");
+    // The server replays the latest bounded history on first load and resumes
+    // after Last-Event-ID on reconnect, so a brief network interruption does
+    // not leave holes in the operational timeline.
+    const source = new EventSource("/api/events?replay=160");
     setStatus("connecting");
 
     source.onopen = () => setStatus("open");

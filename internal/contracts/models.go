@@ -66,6 +66,8 @@ const (
 	ApprovalReject  ApprovalAction = "reject"
 	ApprovalModify  ApprovalAction = "modify"
 
+	RunQueued          RunStatus = "queued"
+	RunRunning         RunStatus = "running"
 	RunNoTrade         RunStatus = "no_trade"
 	RunRejected        RunStatus = "rejected"
 	RunNotApproved     RunStatus = "not_approved"

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -28,6 +29,10 @@ func NewPostgresRepository(ctx context.Context, dsn string, maxLessons int) (*Po
 	if err != nil {
 		return nil, fmt.Errorf("parse PostgreSQL config: %w", err)
 	}
+	poolConfig.MaxConns = 4
+	poolConfig.MaxConnIdleTime = 5 * time.Minute
+	poolConfig.MaxConnLifetime = time.Hour
+	poolConfig.HealthCheckPeriod = 30 * time.Second
 	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
 		return nil, fmt.Errorf("open PostgreSQL pool: %w", err)

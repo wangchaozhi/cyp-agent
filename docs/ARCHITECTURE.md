@@ -153,7 +153,11 @@ OHLCV 归档与上述运行状态 Repository 解耦：即使 `CYP_PERSISTENCE=fi
 
 核心接口包括健康/就绪、场所、设置、行情、持仓、组合、风控、指标、模型用量、回测、run、审批、Kill Switch 和 SSE。`GET /api/token-usage` 提供不含正文的趋势、维度和最近调用。公开业务契约与 Schema 见 [`api/openapi.yaml`](../api/openapi.yaml)，运行时另提供 `GET /api/ready` 作为安全就绪检查；Dashboard 事件见 [`api/jsonschema/dashboard-event.schema.json`](../api/jsonschema/dashboard-event.schema.json)。
 
-SSE 使用 `text/event-stream`，连接建立后发送 retry 指令，每 15 秒发送 keepalive。事件来自进程内有界总线；它不是持久化事件日志，客户端断线后应重新拉取 REST 快照。
+SSE 使用 `text/event-stream`，连接建立后发送 retry 指令，每 15 秒发送 keepalive。前端请求 `replay=160`，总线在同一锁内完成订阅与有界历史预装，避免“先读历史、后订阅”之间丢事件；每帧使用纳秒时间戳 ID，浏览器携带 `Last-Event-ID` 时只续传缺失部分。事件仍只保留在当前进程内，后端重启后应重新拉取 REST 快照。
+
+Dashboard 的 positions、risk 与 portfolio 共用 1 秒只读账户快照：余额、持仓和唯一币种标记价并发获取，同一轮前端刷新只访问交易所一次。下单路径、对账、自动退出和所有风控计算不读取该缓存。
+
+Orchestrator 对异步 run 执行两级准入：每个币种最多一轮在途，全局等待数量有界；真正执行仍受 `MaxConcurrency` 信号量和共享 symbol lock 双重约束。这样扫描周期、重复点击或上游延迟都不能制造无界 goroutine。API 内存查询只保留最近 2000 轮，完整步骤继续写入持久化 checkpoint。
 
 写请求必须使用 JSON，并经过浏览器同源检查。配置 `CYP_API_TOKEN` 后还必须携带 Bearer token；非回环监听缺少 token 时进程拒绝启动。开发环境默认监听 `127.0.0.1`，对外部署仍须在可信反向代理后增加 TLS、访问控制和审计。
 

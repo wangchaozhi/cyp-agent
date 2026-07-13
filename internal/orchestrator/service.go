@@ -33,9 +33,13 @@ import (
 )
 
 var (
-	ErrStopped     = errors.New("orchestrator is stopped")
-	ErrEmptySymbol = errors.New("symbol must not be empty")
+	ErrStopped       = errors.New("orchestrator is stopped")
+	ErrEmptySymbol   = errors.New("symbol must not be empty")
+	ErrRunInProgress = errors.New("a run for this symbol is already in progress")
+	ErrRunQueueFull  = errors.New("orchestrator run queue is full")
 )
+
+const defaultRunHistoryLimit = 2000
 
 type Service struct {
 	control      *control.State
@@ -59,15 +63,19 @@ type Service struct {
 	ctx       context.Context
 	cancel    context.CancelFunc
 	sem       chan struct{}
+	queueSize int
 	locks     *runtimecore.SymbolLocks
 	journal   *orders.Journal
 	reversals *ReversalTracker
 
-	mu      sync.RWMutex
-	runs    map[string]contracts.RunResult
-	marks   map[string]contracts.Decimal
-	stopped bool
-	wg      sync.WaitGroup
+	mu       sync.RWMutex
+	runs     map[string]contracts.RunResult
+	runOrder []string
+	runLimit int
+	marks    map[string]contracts.Decimal
+	inFlight map[string]string
+	stopped  bool
+	wg       sync.WaitGroup
 }
 
 type Option func(*Service)
@@ -107,6 +115,16 @@ func WithSymbolLocks(locks *runtimecore.SymbolLocks) Option {
 	}
 }
 
+// WithRunHistoryLimit bounds in-memory API lookup history. Durable
+// checkpoints remain in the configured repository.
+func WithRunHistoryLimit(limit int) Option {
+	return func(service *Service) {
+		if limit > 0 {
+			service.runLimit = limit
+		}
+	}
+}
+
 func New(
 	parent context.Context,
 	state *control.State,
@@ -126,12 +144,14 @@ func New(
 	}
 	service := &Service{
 		control: state, venue: executionVenue, events: bus, gate: gate, metrics: runMetrics,
-		ctx: ctx, cancel: cancel, sem: make(chan struct{}, concurrency),
+		ctx: ctx, cancel: cancel, sem: make(chan struct{}, concurrency), queueSize: max(16, concurrency*4),
 		locks:        runtimecore.NewSymbolLocks(),
 		journal:      orders.NewJournal(),
 		reversals:    NewReversalTracker(),
 		runs:         make(map[string]contracts.RunResult),
+		runLimit:     defaultRunHistoryLimit,
 		marks:        make(map[string]contracts.Decimal),
+		inFlight:     make(map[string]string),
 		dataSource:   data.NewSyntheticMarketData(data.WithLiveTicks(true)),
 		fallbackData: data.NewSyntheticMarketData(data.WithLiveTicks(true)),
 		llm:          llm.FromSettings(state.Settings()), analysts: agents.AllAnalysts(),
@@ -205,7 +225,7 @@ func (s *Service) StartAutomated(symbol string) (contracts.RunAccepted, error) {
 }
 
 func (s *Service) start(symbol, source string) (contracts.RunAccepted, error) {
-	symbol = strings.TrimSpace(symbol)
+	symbol = strings.ToUpper(strings.TrimSpace(symbol))
 	if symbol == "" {
 		return contracts.RunAccepted{}, ErrEmptySymbol
 	}
@@ -218,11 +238,32 @@ func (s *Service) start(symbol, source string) (contracts.RunAccepted, error) {
 		s.mu.Unlock()
 		return contracts.RunAccepted{}, ErrStopped
 	}
+	if _, running := s.inFlight[symbol]; running {
+		s.mu.Unlock()
+		return contracts.RunAccepted{}, ErrRunInProgress
+	}
+	if len(s.inFlight) >= s.queueSize {
+		s.mu.Unlock()
+		return contracts.RunAccepted{}, ErrRunQueueFull
+	}
+	s.inFlight[symbol] = runID
+	s.runs[runID] = contracts.RunResult{
+		RunID: runID, Symbol: symbol, Status: contracts.RunQueued,
+		Reports: contracts.List[contracts.AnalystReport]{},
+	}
+	s.runOrder = append(s.runOrder, runID)
+	s.pruneRunsLocked()
 	s.wg.Add(1)
 	s.mu.Unlock()
 
 	go func() {
-		defer s.wg.Done()
+		defer func() {
+			s.mu.Lock()
+			delete(s.inFlight, symbol)
+			s.pruneRunsLocked()
+			s.mu.Unlock()
+			s.wg.Done()
+		}()
 		select {
 		case s.sem <- struct{}{}:
 			defer func() { <-s.sem }()
@@ -230,6 +271,11 @@ func (s *Service) start(symbol, source string) (contracts.RunAccepted, error) {
 			s.finishCanceled(runID, symbol, s.ctx.Err())
 			return
 		}
+		s.mu.Lock()
+		progress := s.runs[runID]
+		progress.Status = contracts.RunRunning
+		s.runs[runID] = progress
+		s.mu.Unlock()
 		err := s.locks.Do(s.ctx, symbol, func(runContext context.Context) error {
 			runContext = llm.WithUsageMetadata(runContext, llm.UsageMetadata{
 				RunID: runID, Symbol: symbol, Source: source,
@@ -257,7 +303,7 @@ func (s *Service) RunOnce(ctx context.Context, runID, symbol string) contracts.R
 		}
 		runID = generated
 	}
-	symbol = strings.TrimSpace(symbol)
+	symbol = strings.ToUpper(strings.TrimSpace(symbol))
 	ctx = llm.WithUsageMetadata(ctx, llm.UsageMetadata{RunID: runID, Symbol: symbol, Source: "manual"})
 	return s.run(ctx, runID, symbol)
 }
@@ -267,6 +313,27 @@ func (s *Service) GetRun(runID string) (contracts.RunResult, bool) {
 	defer s.mu.RUnlock()
 	result, ok := s.runs[runID]
 	return result, ok
+}
+
+func (s *Service) pruneRunsLocked() {
+	for len(s.runOrder) > s.runLimit {
+		remove := -1
+		for index, runID := range s.runOrder {
+			result := s.runs[runID]
+			if result.Status != contracts.RunQueued && result.Status != contracts.RunRunning {
+				remove = index
+				break
+			}
+		}
+		if remove < 0 {
+			return
+		}
+		runID := s.runOrder[remove]
+		delete(s.runs, runID)
+		copy(s.runOrder[remove:], s.runOrder[remove+1:])
+		s.runOrder[len(s.runOrder)-1] = ""
+		s.runOrder = s.runOrder[:len(s.runOrder)-1]
+	}
 }
 
 func (s *Service) Mark(symbol string) (contracts.Decimal, bool) {

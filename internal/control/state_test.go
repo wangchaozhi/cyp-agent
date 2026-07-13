@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/wangchaozhi/cyp-agent/internal/config"
 	"github.com/wangchaozhi/cyp-agent/internal/contracts"
@@ -128,5 +130,67 @@ func TestRuntimeScanIntervalUsesTokenSavingPresets(t *testing.T) {
 	}
 	if state.Settings().ScanInterval != interval {
 		t.Fatal("invalid interval partially mutated state")
+	}
+}
+
+func TestUpdateSettingsDoesNotPublishFailedPersistence(t *testing.T) {
+	state := New(config.DefaultSettings())
+	before := state.Settings()
+	interval := 600
+	wantErr := errors.New("database unavailable")
+	err := state.UpdateSettingsPersist(
+		contracts.SettingsUpdateRequest{ScanInterval: &interval},
+		func(next config.Settings) error {
+			if next.ScanInterval != interval {
+				t.Fatalf("persist candidate interval = %d, want %d", next.ScanInterval, interval)
+			}
+			return wantErr
+		},
+	)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("UpdateSettingsPersist() error = %v", err)
+	}
+	if after := state.Settings(); after.ScanInterval != before.ScanInterval {
+		t.Fatalf("failed persistence published interval %d, want %d", after.ScanInterval, before.ScanInterval)
+	}
+}
+
+func TestSettingsReadsContinueDuringPersistenceAndPreserveKill(t *testing.T) {
+	state := New(config.DefaultSettings())
+	interval := 600
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var wait sync.WaitGroup
+	wait.Add(1)
+	go func() {
+		defer wait.Done()
+		if err := state.UpdateSettingsPersist(
+			contracts.SettingsUpdateRequest{ScanInterval: &interval},
+			func(config.Settings) error {
+				close(entered)
+				<-release
+				return nil
+			},
+		); err != nil {
+			t.Errorf("UpdateSettingsPersist() error = %v", err)
+		}
+	}()
+	<-entered
+
+	readDone := make(chan struct{})
+	go func() {
+		_ = state.Settings()
+		close(readDone)
+	}()
+	select {
+	case <-readDone:
+	case <-time.After(time.Second):
+		t.Fatal("Settings() blocked behind persistence I/O")
+	}
+	state.SetKill(true)
+	close(release)
+	wait.Wait()
+	if settings := state.Settings(); settings.ScanInterval != interval || !settings.Kill {
+		t.Fatalf("published settings lost a concurrent control: %+v", settings.Snapshot())
 	}
 }

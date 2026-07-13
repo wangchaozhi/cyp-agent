@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/wangchaozhi/cyp-agent/internal/llm"
+	"github.com/wangchaozhi/cyp-agent/internal/observability"
 )
 
 type Config struct {
@@ -24,6 +25,7 @@ type Config struct {
 	Logger        *slog.Logger
 	OnAlert       func(BudgetAlert)
 	Now           func() time.Time
+	Metrics       *observability.RuntimeMetrics
 }
 
 type Tracker struct {
@@ -35,6 +37,7 @@ type Tracker struct {
 	logger        *slog.Logger
 	onAlert       func(BudgetAlert)
 	now           func() time.Time
+	metrics       *observability.RuntimeMetrics
 	queue         chan llm.UsageEvent
 	cancel        context.CancelFunc
 	done          chan struct{}
@@ -43,14 +46,27 @@ type Tracker struct {
 
 	mu           sync.RWMutex
 	events       []llm.UsageEvent
+	daily        map[string]usageTotals
 	reservations map[string]reservation
 	alerted      map[string]map[string]bool
 	pausedDay    string
+	nextPrune    time.Time
 }
 
 type reservation struct {
 	day    string
 	tokens int
+	cost   float64
+}
+
+type usageTotals struct {
+	calls            int
+	successes        int
+	errors           int
+	budgetRejections int
+	inputTokens      int
+	outputTokens     int
+	costUSD          float64
 }
 
 func New(ctx context.Context, config Config) (*Tracker, error) {
@@ -78,8 +94,11 @@ func New(ctx context.Context, config Config) (*Tracker, error) {
 	tracker := &Tracker{
 		store: config.Store, tokenBudget: config.TokenBudget, costBudgetUSD: config.CostBudgetUSD,
 		retention: config.Retention, location: config.Location, logger: config.Logger,
-		onAlert: config.OnAlert, now: config.Now, queue: make(chan llm.UsageEvent, config.QueueSize),
-		done: make(chan struct{}), reservations: make(map[string]reservation), alerted: make(map[string]map[string]bool),
+		onAlert: config.OnAlert, now: config.Now, metrics: config.Metrics,
+		queue: make(chan llm.UsageEvent, config.QueueSize),
+		done:  make(chan struct{}), daily: make(map[string]usageTotals),
+		reservations: make(map[string]reservation), alerted: make(map[string]map[string]bool),
+		nextPrune: config.Now().UTC().Add(time.Hour),
 	}
 	if config.Store != nil {
 		loaded, err := config.Store.Load(ctx, config.Now().Add(-config.Retention))
@@ -87,6 +106,7 @@ func New(ctx context.Context, config Config) (*Tracker, error) {
 			return nil, err
 		}
 		tracker.events = validatedEvents(loaded)
+		tracker.rebuildDailyLocked()
 	}
 	workerContext, cancel := context.WithCancel(context.Background())
 	tracker.cancel = cancel
@@ -104,15 +124,28 @@ func (tracker *Tracker) Reserve(_ context.Context, event llm.UsageEvent) error {
 	if tracker.pausedDay != "" && tracker.pausedDay != day {
 		tracker.pausedDay = ""
 	}
+	for id, current := range tracker.reservations {
+		if current.day != day {
+			delete(tracker.reservations, id)
+		}
+	}
 	summary := tracker.summaryLocked(day)
+	predictedEventCost := event.CostUSD
+	if math.IsNaN(predictedEventCost) || math.IsInf(predictedEventCost, 0) || predictedEventCost < 0 {
+		predictedEventCost = 0
+	}
 	reserved := 0
+	reservedCost := 0.0
 	for _, current := range tracker.reservations {
 		if current.day == day {
 			reserved += current.tokens
+			reservedCost += current.cost
 		}
 	}
-	predictedTokens := summary.TotalTokens + reserved + maxInt(event.InputTokens, 0)
-	blocked := tracker.pausedDay == day || predictedTokens > tracker.tokenBudget || summary.CostUSD >= tracker.costBudgetUSD
+	predictedTokens := summary.TotalTokens + reserved + maxInt(event.TotalTokens(), 0)
+	predictedCost := summary.CostUSD + reservedCost + predictedEventCost
+	blocked := tracker.pausedDay == day || summary.Utilization >= 1 ||
+		predictedTokens > tracker.tokenBudget || predictedCost > tracker.costBudgetUSD
 	if blocked {
 		tracker.pausedDay = day
 		alert := tracker.pausedAlertLocked(day, summary)
@@ -122,7 +155,9 @@ func (tracker *Tracker) Reserve(_ context.Context, event llm.UsageEvent) error {
 		}
 		return llm.ErrDailyBudgetExceeded
 	}
-	tracker.reservations[event.ID] = reservation{day: day, tokens: maxInt(event.InputTokens, 0)}
+	tracker.reservations[event.ID] = reservation{
+		day: day, tokens: maxInt(event.TotalTokens(), 0), cost: predictedEventCost,
+	}
 	tracker.mu.Unlock()
 	return nil
 }
@@ -151,8 +186,13 @@ func (tracker *Tracker) Record(_ context.Context, event llm.UsageEvent) {
 
 	tracker.mu.Lock()
 	delete(tracker.reservations, event.ID)
-	tracker.events = append(tracker.events, event)
-	tracker.pruneMemoryLocked(tracker.now().UTC().Add(-tracker.retention))
+	tracker.insertEventLocked(event)
+	tracker.addDailyLocked(event)
+	now := tracker.now().UTC()
+	if !now.Before(tracker.nextPrune) {
+		tracker.pruneMemoryLocked(now.Add(-tracker.retention))
+		tracker.nextPrune = now.Add(time.Hour)
+	}
 	day := tracker.dayKey(event.TS)
 	summary := tracker.summaryLocked(day)
 	alerts := tracker.newAlertsLocked(day, summary)
@@ -161,7 +201,9 @@ func (tracker *Tracker) Record(_ context.Context, event llm.UsageEvent) {
 	if tracker.store != nil {
 		select {
 		case tracker.queue <- event:
+			tracker.metrics.RecordTokenUsageQueued()
 		default:
+			tracker.metrics.RecordTokenUsageDropped()
 			tracker.logger.Warn("token_usage_queue_full", "provider", event.Provider, "model", event.Model)
 		}
 	}
@@ -206,16 +248,12 @@ func (tracker *Tracker) Report(days int, bucket string, recentLimit int) Report 
 	now := tracker.now().UTC()
 	since := now.Add(-time.Duration(days) * 24 * time.Hour)
 	tracker.mu.RLock()
-	events := append([]llm.UsageEvent(nil), tracker.events...)
+	start := sort.Search(len(tracker.events), func(index int) bool {
+		return !tracker.events[index].TS.Before(since)
+	})
+	filtered := append([]llm.UsageEvent(nil), tracker.events[start:]...)
 	today := tracker.summaryLocked(tracker.dayKey(now))
 	tracker.mu.RUnlock()
-	filtered := make([]llm.UsageEvent, 0, len(events))
-	for _, event := range events {
-		if !event.TS.Before(since) {
-			filtered = append(filtered, event)
-		}
-	}
-	sort.Slice(filtered, func(i, j int) bool { return filtered[i].TS.Before(filtered[j].TS) })
 	return Report{
 		GeneratedAt: now, Days: days, Bucket: bucket, Today: today,
 		Trend:      tracker.trend(filtered, bucket),
@@ -229,22 +267,12 @@ func (tracker *Tracker) Report(days int, bucket string, recentLimit int) Report 
 }
 
 func (tracker *Tracker) summaryLocked(day string) Summary {
-	summary := Summary{Day: day, Timezone: tracker.location.String(), TokenBudget: tracker.tokenBudget, CostBudgetUSD: tracker.costBudgetUSD}
-	for _, event := range tracker.events {
-		if tracker.dayKey(event.TS) != day {
-			continue
-		}
-		summary.Calls++
-		if event.Status == "success" {
-			summary.Successes++
-		} else if event.Status == "budget_rejected" {
-			summary.BudgetRejections++
-		} else {
-			summary.Errors++
-		}
-		summary.InputTokens += event.InputTokens
-		summary.OutputTokens += event.OutputTokens
-		summary.CostUSD += event.CostUSD
+	totals := tracker.daily[day]
+	summary := Summary{
+		Day: day, Timezone: tracker.location.String(), TokenBudget: tracker.tokenBudget,
+		CostBudgetUSD: tracker.costBudgetUSD, Calls: totals.calls, Successes: totals.successes,
+		Errors: totals.errors, BudgetRejections: totals.budgetRejections,
+		InputTokens: totals.inputTokens, OutputTokens: totals.outputTokens, CostUSD: totals.costUSD,
 	}
 	summary.TotalTokens = summary.InputTokens + summary.OutputTokens
 	if summary.Calls > 0 {
@@ -394,9 +422,10 @@ func (tracker *Tracker) run(ctx context.Context) {
 		select {
 		case event := <-tracker.queue:
 			writeContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			err := tracker.store.Save(writeContext, event, tracker.dayKey(event.TS), tracker.location.String())
+			err := tracker.saveEvent(writeContext, event)
 			cancel()
 			if err != nil {
+				tracker.metrics.RecordTokenUsageError()
 				tracker.logger.Error("token_usage_write_failed", "error", err.Error(), "provider", event.Provider, "model", event.Model)
 			}
 		case <-pruneTicker.C:
@@ -406,14 +435,43 @@ func (tracker *Tracker) run(ctx context.Context) {
 				select {
 				case event := <-tracker.queue:
 					writeContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-					_ = tracker.store.Save(writeContext, event, tracker.dayKey(event.TS), tracker.location.String())
+					err := tracker.saveEvent(writeContext, event)
 					cancel()
+					if err != nil {
+						tracker.metrics.RecordTokenUsageError()
+					}
 				default:
 					return
 				}
 			}
 		}
 	}
+}
+
+func (tracker *Tracker) saveEvent(ctx context.Context, event llm.UsageEvent) error {
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		lastErr = tracker.store.Save(ctx, event, tracker.dayKey(event.TS), tracker.location.String())
+		if lastErr == nil {
+			tracker.metrics.RecordTokenUsageSaved()
+			return nil
+		}
+		if attempt == 2 {
+			break
+		}
+		delay := time.Duration(attempt+1) * 100 * time.Millisecond
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return lastErr
 }
 
 func (tracker *Tracker) pruneStore() {
@@ -458,13 +516,61 @@ func (tracker *Tracker) dayKey(timestamp time.Time) string {
 }
 
 func (tracker *Tracker) pruneMemoryLocked(before time.Time) {
-	kept := tracker.events[:0]
+	start := sort.Search(len(tracker.events), func(index int) bool {
+		return !tracker.events[index].TS.Before(before)
+	})
+	if start > 0 {
+		copy(tracker.events, tracker.events[start:])
+		for index := len(tracker.events) - start; index < len(tracker.events); index++ {
+			tracker.events[index] = llm.UsageEvent{}
+		}
+		tracker.events = tracker.events[:len(tracker.events)-start]
+	}
+	tracker.rebuildDailyLocked()
+}
+
+func (tracker *Tracker) insertEventLocked(event llm.UsageEvent) {
+	count := len(tracker.events)
+	if count == 0 || !event.TS.Before(tracker.events[count-1].TS) {
+		tracker.events = append(tracker.events, event)
+		return
+	}
+	index := sort.Search(count, func(index int) bool {
+		return tracker.events[index].TS.After(event.TS)
+	})
+	tracker.events = append(tracker.events, llm.UsageEvent{})
+	copy(tracker.events[index+1:], tracker.events[index:])
+	tracker.events[index] = event
+}
+
+func (tracker *Tracker) addDailyLocked(event llm.UsageEvent) {
+	day := tracker.dayKey(event.TS)
+	totals := tracker.daily[day]
+	totals.calls++
+	switch event.Status {
+	case "success":
+		totals.successes++
+	case "budget_rejected":
+		totals.budgetRejections++
+	default:
+		totals.errors++
+	}
+	totals.inputTokens += event.InputTokens
+	totals.outputTokens += event.OutputTokens
+	totals.costUSD += event.CostUSD
+	tracker.daily[day] = totals
+}
+
+func (tracker *Tracker) rebuildDailyLocked() {
+	tracker.daily = make(map[string]usageTotals)
 	for _, event := range tracker.events {
-		if !event.TS.Before(before) {
-			kept = append(kept, event)
+		tracker.addDailyLocked(event)
+	}
+	for day := range tracker.alerted {
+		if _, retained := tracker.daily[day]; !retained && day != tracker.pausedDay {
+			delete(tracker.alerted, day)
 		}
 	}
-	tracker.events = kept
 }
 
 func validatedEvents(events []llm.UsageEvent) []llm.UsageEvent {

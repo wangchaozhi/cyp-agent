@@ -126,6 +126,32 @@ func TestPositionMonitorReportsProtectionAndMovement(t *testing.T) {
 	}
 }
 
+func TestPositionMonitorDoesNotEmitEmptyHealthyPoll(t *testing.T) {
+	t.Parallel()
+	target := venue.NewPaperVenue()
+	bus := events.NewBus(4)
+	subscription := bus.Subscribe(1)
+	defer subscription.Cancel()
+	monitor, err := NewPositionMonitor(PositionMonitorConfig{
+		Venue: target, Interval: time.Second, Events: bus,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := monitor.CheckOnce(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Positions) != 0 || len(report.Alerts) != 0 {
+		t.Fatalf("empty report = %#v", report)
+	}
+	select {
+	case event := <-subscription.C:
+		t.Fatalf("unexpected empty monitor event = %#v", event)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 func containsAlert(alerts []string, fragment string) bool {
 	for _, alert := range alerts {
 		if strings.Contains(alert, fragment) {

@@ -144,7 +144,10 @@ func (monitor *PositionMonitor) CheckOnce(ctx context.Context) (report MonitorRe
 	} else if marginAlert != "" {
 		report.Alerts = append(report.Alerts, marginAlert)
 	}
-	if monitor.events != nil {
+	// An empty healthy poll has no user-visible state change. Suppressing it
+	// keeps the SSE timeline and browser rendering quiet while there are no
+	// positions, without changing the monitor cadence or alerting behavior.
+	if monitor.events != nil && (len(report.Positions) > 0 || len(report.Alerts) > 0) {
 		monitor.events.Emit("position_monitor", "-", map[string]any{
 			"positions": report.Positions, "alerts": report.Alerts,
 		})

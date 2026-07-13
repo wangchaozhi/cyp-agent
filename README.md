@@ -61,6 +61,9 @@ Windows 下可同时启动后端和 Vite 开发服务器：
 # 可选：指定端口，或保留已有端口进程
 .\start-dev.bat -BackendPort 8001 -FrontendPort 5174
 .\start-dev.bat -NoKill
+
+# 只有明确需要隔离实例时才允许多个后端；默认会拒绝，防止重复自动扫描/下单
+.\start-dev.bat -BackendPort 8001 -FrontendPort 5174 -AllowMultipleBackends
 ```
 
 其他平台可分别启动：
@@ -85,7 +88,7 @@ go run ./cmd/cyp-server -web-dir apps/web/dist
 
 ## 使用闭环
 
-默认审批模式为 `dashboard`（历史值 `cli` 已废弃，作为其别名继续兼容）。提案会阻塞在待审批队列，直到通过仪表盘或 API 批准/拒绝/改单。可通过仪表盘操作，或直接调用 API：
+默认审批通道仍为 `dashboard`（历史值 `cli` 已废弃，作为其别名继续兼容），但默认开启数学自动审批：满足币种白名单、风险、金额、置信度、盈亏比和 Kelly 正期望边界时自动批准，否则自动拒绝，不进入人工队列。只有关闭“数学自动审批”后，提案才会等待仪表盘或 API 批准、拒绝或改单。可通过仪表盘操作，或直接调用 API：
 
 ```bash
 # 发起一轮分析
@@ -103,7 +106,7 @@ curl http://127.0.0.1:8000/api/pending
 | --- | --- |
 | `GET /api/health`、`GET /api/ready` | 存活状态、执行就绪和对账冻结原因 |
 | `POST /api/run`、`GET /api/runs/{run_id}` | 启动和查询一次闭环 |
-| `GET /api/events` | SSE 实时事件流 |
+| `GET /api/events?replay=160` | SSE 实时事件流；支持有界历史回放和断线续传 |
 | `GET /api/pending` | 待人工审批列表 |
 | `POST /api/approvals/{run_id}` | 批准、拒绝或修改提案 |
 | `GET /api/positions`、`POST /api/positions/close` | 当前执行场所的持仓与平仓 |

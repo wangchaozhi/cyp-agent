@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"net/http"
 	"strconv"
 	"strings"
@@ -32,14 +31,14 @@ type positionView struct {
 }
 
 func (s *Server) positions(w http.ResponseWriter, request *http.Request) {
-	positions, err := s.venue.Positions(request.Context())
+	snapshot, err := s.accountCache.Load(request.Context(), s.venue)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	views := make([]positionView, 0, len(positions))
-	for _, position := range positions {
-		views = append(views, s.positionView(request.Context(), position))
+	views := make([]positionView, 0, len(snapshot.positions))
+	for _, position := range snapshot.positions {
+		views = append(views, positionViewAtMark(position, snapshot.marks[position.Symbol]))
 	}
 	writeJSON(w, http.StatusOK, views)
 }
@@ -48,9 +47,8 @@ func (s *Server) trades(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, s.riskState.Trades())
 }
 
-func (s *Server) positionView(ctx context.Context, position contracts.Position) positionView {
-	mark, err := s.venue.FetchTicker(ctx, position.Symbol)
-	if err != nil || !mark.IsPositive() {
+func positionViewAtMark(position contracts.Position, mark contracts.Decimal) positionView {
+	if !mark.IsPositive() {
 		mark = position.EntryPrice
 	}
 	direction := contracts.NewDecimalFromInt64(1)
@@ -128,6 +126,7 @@ func (s *Server) closePosition(w http.ResponseWriter, request *http.Request) {
 		writeError(w, http.StatusBadRequest, detail)
 		return
 	}
+	s.accountCache.Invalidate()
 	if s.riskState != nil {
 		balances, balanceErr := s.venue.Balances(request.Context())
 		if balanceErr != nil {
@@ -213,22 +212,17 @@ type riskBoard struct {
 
 func (s *Server) riskSnapshot(w http.ResponseWriter, request *http.Request) {
 	settings := s.control.Settings()
-	balances, err := s.venue.Balances(request.Context())
+	snapshot, err := s.accountCache.Load(request.Context(), s.venue)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	equity := balances.TotalQuote
+	equity := snapshot.balances.TotalQuote
 	if !equity.IsPositive() {
-		equity = balances.FreeQuote
-	}
-	positions, err := s.venue.Positions(request.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
+		equity = snapshot.balances.FreeQuote
 	}
 	perpetualNotional := contracts.Zero()
-	for _, position := range positions {
+	for _, position := range snapshot.positions {
 		if position.Instrument == contracts.InstrumentPerp {
 			perpetualNotional = perpetualNotional.Add(position.NotionalAt(position.EntryPrice))
 		}
@@ -268,27 +262,20 @@ func (s *Server) riskSnapshot(w http.ResponseWriter, request *http.Request) {
 
 func (s *Server) portfolioSnapshot(w http.ResponseWriter, request *http.Request) {
 	settings := s.control.Settings()
-	balances, err := s.venue.Balances(request.Context())
+	snapshot, err := s.accountCache.Load(request.Context(), s.venue)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	equity := balances.TotalQuote
+	equity := snapshot.balances.TotalQuote
 	if !equity.IsPositive() {
-		equity = balances.FreeQuote
-	}
-	positions, err := s.venue.Positions(request.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
+		equity = snapshot.balances.FreeQuote
 	}
 	marks := s.orchestrator.Marks()
-	for _, position := range positions {
-		if mark, err := s.venue.FetchTicker(request.Context(), position.Symbol); err == nil {
-			marks[position.Symbol] = mark
-		}
+	for symbol, mark := range snapshot.marks {
+		marks[symbol] = mark
 	}
 	writeJSON(w, http.StatusOK, portfolio.Build(
-		positions, marks, equity, settings.Risk.MaxCorrelatedExposure,
+		snapshot.positions, marks, equity, settings.Risk.MaxCorrelatedExposure,
 	))
 }

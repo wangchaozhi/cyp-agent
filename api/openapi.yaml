@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: cyp-agent HTTP API
-  version: 1.6.1
+  version: 1.7.0
   description: |
     React 仪表盘使用的 REST 与 SSE 契约。
 
@@ -388,7 +388,13 @@ paths:
               schema:
                 $ref: "#/components/schemas/RunAccepted"
         "409":
-          description: Kill Switch、未配置的执行模式或运行状态禁止触发
+          description: 同一币种已有分析正在运行
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          description: 后台分析队列已满
           content:
             application/json:
               schema:
@@ -504,7 +510,18 @@ paths:
         `data: <dashboard-event-json>\n\n`，不得改为命名 `event:`，因为现有前端只监听
         `EventSource.onmessage`。建议首帧发送 `retry: 3000`，空闲约 15 秒发送注释 keepalive。
 
-        data JSON 必须符合 `api/jsonschema/dashboard-event.schema.json`。
+        设置 `replay` 可原子回放最多 200 条最近事件；服务端为业务帧写入纳秒时间戳 `id`，
+        浏览器重连时可通过 `Last-Event-ID` 只续传缺失部分。data JSON 必须符合
+        `api/jsonschema/dashboard-event.schema.json`。
+      parameters:
+        - name: replay
+          in: query
+          description: 首次连接回放的最近事件数
+          schema: { type: integer, minimum: 0, maximum: 200, default: 0 }
+        - name: Last-Event-ID
+          in: header
+          description: 上次收到的 SSE 纳秒时间戳 ID
+          schema: { type: string }
       responses:
         "200":
           description: 持续的 SSE 字节流
@@ -1164,7 +1181,7 @@ components:
         symbol: { type: string }
         status:
           type: string
-          enum: [no_trade, rejected, not_approved, executed, execution_failed, error]
+          enum: [queued, running, no_trade, rejected, not_approved, executed, execution_failed, error]
         reports:
           type: array
           items:
@@ -1553,7 +1570,7 @@ components:
         runtime:
           type: object
           additionalProperties: false
-          required: [scan_cycles, scan_errors, monitor_cycles, monitor_errors, reconcile_attempts, reconcile_failures, alerts, ohlcv_queued, ohlcv_saved, ohlcv_dropped, ohlcv_errors, ohlcv_pruned, ohlcv_repair_runs, ohlcv_backfilled]
+          required: [scan_cycles, scan_errors, monitor_cycles, monitor_errors, reconcile_attempts, reconcile_failures, alerts, ohlcv_queued, ohlcv_saved, ohlcv_dropped, ohlcv_errors, ohlcv_pruned, ohlcv_repair_runs, ohlcv_backfilled, token_usage_queued, token_usage_saved, token_usage_dropped, token_usage_errors]
           properties:
             scan_cycles: { type: integer, minimum: 0 }
             scan_errors: { type: integer, minimum: 0 }
@@ -1569,6 +1586,10 @@ components:
             ohlcv_pruned: { type: integer, minimum: 0 }
             ohlcv_repair_runs: { type: integer, minimum: 0 }
             ohlcv_backfilled: { type: integer, minimum: 0 }
+            token_usage_queued: { type: integer, minimum: 0 }
+            token_usage_saved: { type: integer, minimum: 0 }
+            token_usage_dropped: { type: integer, minimum: 0 }
+            token_usage_errors: { type: integer, minimum: 0 }
         token_usage:
           $ref: "#/components/schemas/TokenUsageSummary"
 

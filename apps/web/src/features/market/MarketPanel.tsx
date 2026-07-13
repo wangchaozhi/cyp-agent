@@ -67,6 +67,43 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "行情请求失败";
 }
 
+function startVisiblePolling(load: () => Promise<void>, intervalMs: number): () => void {
+  let active = true;
+  let running = false;
+  let timer = 0;
+  const schedule = () => {
+    if (!active) return;
+    timer = window.setTimeout(() => void run(), intervalMs);
+  };
+  const run = async () => {
+    if (!active || running) return;
+    if (document.visibilityState === "hidden" || !navigator.onLine) {
+      return;
+    }
+    running = true;
+    try {
+      await load();
+    } finally {
+      running = false;
+      schedule();
+    }
+  };
+  const resume = () => {
+    if (document.visibilityState === "hidden" || !navigator.onLine || running) return;
+    window.clearTimeout(timer);
+    void run();
+  };
+  document.addEventListener("visibilitychange", resume);
+  window.addEventListener("online", resume);
+  void run();
+  return () => {
+    active = false;
+    window.clearTimeout(timer);
+    document.removeEventListener("visibilitychange", resume);
+    window.removeEventListener("online", resume);
+  };
+}
+
 interface MarketPanelProps {
   watchlist: string[] | null;
   onSelectionChange?: (symbols: string[]) => void;
@@ -115,11 +152,10 @@ export function MarketPanel({ watchlist, onSelectionChange }: MarketPanelProps) 
       setQuotesError(Object.keys(next).length ? null : firstError);
       setQuotesLoading(false);
     };
-    void loadQuotes();
-    const timer = window.setInterval(() => void loadQuotes(), 15_000);
+    const stop = startVisiblePolling(loadQuotes, 15_000);
     return () => {
       active = false;
-      window.clearInterval(timer);
+      stop();
     };
   }, [selected]);
 
@@ -141,11 +177,10 @@ export function MarketPanel({ watchlist, onSelectionChange }: MarketPanelProps) 
         if (active) setHistoryLoading(false);
       }
     };
-    void loadHistory();
-    const timer = window.setInterval(() => void loadHistory(), 60_000);
+    const stop = startVisiblePolling(loadHistory, 60_000);
     return () => {
       active = false;
-      window.clearInterval(timer);
+      stop();
     };
   }, [rangeKey, selected]);
 

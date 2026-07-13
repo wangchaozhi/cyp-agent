@@ -5,6 +5,7 @@ param(
   [string]$FrontendHost = "127.0.0.1",
   [int]$FrontendPort = 5173,
   [switch]$NoKill,
+  [switch]$AllowMultipleBackends,
   [switch]$SkipInstall
 )
 
@@ -115,6 +116,22 @@ New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 
 if (-not $NoKill) {
   Stop-PortListeners -Ports @($BackendPort, $FrontendPort)
+}
+
+if (-not $AllowMultipleBackends) {
+  $listenerProcessIds = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
+    Select-Object -ExpandProperty OwningProcess -Unique
+  $otherBackends = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+    Where-Object {
+      $listenerProcessIds -contains $_.ProcessId -and $_.ProcessId -ne $PID -and (
+        $_.Name -like "cyp-server*.exe" -or
+        $_.CommandLine -match '(?i)go(?:\.exe)?\s+run\s+\.\/cmd\/cyp-server'
+      )
+    }
+  if ($otherBackends) {
+    $details = ($otherBackends | ForEach-Object { "PID=$($_.ProcessId) $($_.Name)" }) -join ", "
+    throw "Another cyp-agent backend is already running ($details). Stop it first or pass -AllowMultipleBackends explicitly. Multiple automation runtimes can duplicate analysis and orders."
+  }
 }
 
 if (-not $SkipInstall -and -not (Test-Path -LiteralPath (Join-Path $WebRoot "node_modules"))) {

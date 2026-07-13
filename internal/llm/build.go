@@ -56,7 +56,8 @@ func FromSettingsWithObserver(settings config.Settings, observer UsageObserver) 
 			MaxCostUSD:  settings.Budget.MaxCostUSD,
 			MaxWallTime: time.Duration(settings.Budget.MaxWallSeconds) * time.Second,
 		},
-		CostEstimator: ConservativeCostEstimator,
-		UsageObserver: observer,
+		CostEstimator:   ConservativeCostEstimator,
+		UsageObserver:   observer,
+		MaxOutputTokens: 2048,
 	})
 }

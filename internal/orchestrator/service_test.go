@@ -413,6 +413,10 @@ func TestStartAsyncLifecycleAndClose(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		if result, ok := harness.service.GetRun(accepted.RunID); ok {
+			if result.Status == contracts.RunQueued || result.Status == contracts.RunRunning {
+				time.Sleep(5 * time.Millisecond)
+				continue
+			}
 			if result.Status != contracts.RunNoTrade {
 				t.Fatalf("async run status = %s, error = %v", result.Status, result.Error)
 			}
@@ -495,8 +499,9 @@ func TestStartSerializesOnSharedSymbolLocks(t *testing.T) {
 		t.Fatalf("Start() error = %v", err)
 	}
 	time.Sleep(50 * time.Millisecond)
-	if _, ok := harness.service.GetRun(accepted.RunID); ok {
-		t.Fatal("run completed while the shared symbol lock was still held")
+	if result, ok := harness.service.GetRun(accepted.RunID); !ok ||
+		(result.Status != contracts.RunQueued && result.Status != contracts.RunRunning) {
+		t.Fatalf("run state while symbol lock is held = %+v, found=%t", result, ok)
 	}
 
 	close(release)
@@ -506,6 +511,10 @@ func TestStartSerializesOnSharedSymbolLocks(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		if result, ok := harness.service.GetRun(accepted.RunID); ok {
+			if result.Status == contracts.RunQueued || result.Status == contracts.RunRunning {
+				time.Sleep(5 * time.Millisecond)
+				continue
+			}
 			if result.Status != contracts.RunNoTrade {
 				t.Fatalf("run status = %s, error = %v", result.Status, result.Error)
 			}
@@ -515,5 +524,80 @@ func TestStartSerializesOnSharedSymbolLocks(t *testing.T) {
 			t.Fatal("run never completed after the lock was released")
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestStartRejectsDuplicateSymbolWhileRunIsQueued(t *testing.T) {
+	locks := runtimecore.NewSymbolLocks()
+	harness := newHarness(t, nil,
+		orchestrator.WithDataSource(emptySource{}), orchestrator.WithSymbolLocks(locks))
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	holderDone := make(chan error, 1)
+	go func() {
+		holderDone <- locks.Do(context.Background(), "BTC/USDT", func(context.Context) error {
+			close(entered)
+			<-release
+			return nil
+		})
+	}()
+	<-entered
+
+	accepted, err := harness.service.Start("BTC/USDT")
+	if err != nil || accepted.RunID == "" {
+		t.Fatalf("first Start() = %+v, err = %v", accepted, err)
+	}
+	if _, err := harness.service.Start("BTC/USDT"); !errors.Is(err, orchestrator.ErrRunInProgress) {
+		t.Fatalf("duplicate Start() error = %v, want ErrRunInProgress", err)
+	}
+	// A different symbol is still admitted; deduplication is scoped to the
+	// symbol and does not serialize the entire portfolio.
+	if _, err := harness.service.Start("ETH/USDT"); err != nil {
+		t.Fatalf("different-symbol Start() error = %v", err)
+	}
+
+	close(release)
+	if err := <-holderDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRunLookupHistoryIsBounded(t *testing.T) {
+	harness := newHarness(t, nil,
+		orchestrator.WithDataSource(emptySource{}), orchestrator.WithRunHistoryLimit(2))
+	runIDs := make([]string, 0, 3)
+	for _, symbol := range []string{"BTC/USDT", "ETH/USDT", "SOL/USDT"} {
+		accepted, err := harness.service.Start(symbol)
+		if err != nil {
+			t.Fatal(err)
+		}
+		runIDs = append(runIDs, accepted.RunID)
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			result, ok := harness.service.GetRun(accepted.RunID)
+			if ok && result.Status != contracts.RunQueued && result.Status != contracts.RunRunning {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("run %s did not finish", accepted.RunID)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		if _, found := harness.service.GetRun(runIDs[0]); !found {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("oldest completed run was retained past the history limit")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	for _, runID := range runIDs[1:] {
+		if _, found := harness.service.GetRun(runID); !found {
+			t.Fatalf("recent run %s was pruned", runID)
+		}
 	}
 }

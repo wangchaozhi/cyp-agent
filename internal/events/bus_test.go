@@ -122,6 +122,33 @@ func TestHistoryIsBoundedFilteredAndCopied(t *testing.T) {
 	}
 }
 
+func TestSubscribeReplayIsOrderedBoundedAndGapFree(t *testing.T) {
+	bus := NewBus(8)
+	base := time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)
+	bus.now = func() time.Time { return base }
+	bus.Emit("step", "r1", map[string]any{"n": 1})
+	base = base.Add(time.Nanosecond)
+	bus.Emit("step", "r1", map[string]any{"n": 2})
+	resumeAfter := base
+	base = base.Add(time.Nanosecond)
+	bus.Emit("step", "r1", map[string]any{"n": 3})
+
+	sub := bus.SubscribeReplay(1, 8, resumeAfter)
+	defer sub.Cancel()
+	bus.Emit("step", "r1", map[string]any{"n": 4})
+
+	for _, want := range []int{3, 4} {
+		select {
+		case event := <-sub.C:
+			if event.Data["n"] != want {
+				t.Fatalf("replayed/live event n=%v, want %d", event.Data["n"], want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for event %d", want)
+		}
+	}
+}
+
 func TestConcurrentPublishAndSubscription(t *testing.T) {
 	bus := NewBus(32)
 	var wg sync.WaitGroup

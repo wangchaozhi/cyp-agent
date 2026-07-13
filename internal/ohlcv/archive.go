@@ -199,7 +199,15 @@ func NewPostgresArchive(ctx context.Context, dsn string) (*PostgresArchive, erro
 	if strings.TrimSpace(dsn) == "" {
 		return nil, errors.New("PostgreSQL DSN is required")
 	}
-	pool, err := pgxpool.New(ctx, dsn)
+	poolConfig, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("parse OHLCV archive config: %w", err)
+	}
+	poolConfig.MaxConns = 4
+	poolConfig.MaxConnIdleTime = 5 * time.Minute
+	poolConfig.MaxConnLifetime = time.Hour
+	poolConfig.HealthCheckPeriod = 30 * time.Second
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
 		return nil, fmt.Errorf("open OHLCV archive: %w", err)
 	}

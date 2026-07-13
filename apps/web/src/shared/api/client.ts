@@ -19,6 +19,7 @@ import type {
 } from "./types";
 
 const apiTokenStorageKey = "cyp-agent.api-token";
+const apiTimeoutMs = 30_000;
 
 function storedApiToken(): string {
   try {
@@ -50,7 +51,23 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     if (token) headers.set("Authorization", `Bearer ${token}`);
   }
 
-  const response = await fetch(path, { ...init, headers });
+  const controller = new AbortController();
+  const abortFromCaller = () => controller.abort(init?.signal?.reason);
+  if (init?.signal?.aborted) abortFromCaller();
+  else init?.signal?.addEventListener("abort", abortFromCaller, { once: true });
+  const timeout = globalThis.setTimeout(() => controller.abort("timeout"), apiTimeoutMs);
+  let response: Response;
+  try {
+    response = await fetch(path, { ...init, headers, signal: controller.signal });
+  } catch (error) {
+    if (controller.signal.aborted && !init?.signal?.aborted) {
+      throw new Error("请求超时，请检查后端或网络状态");
+    }
+    throw error;
+  } finally {
+    globalThis.clearTimeout(timeout);
+    init?.signal?.removeEventListener("abort", abortFromCaller);
+  }
   if (!response.ok) {
     // The body can only be consumed once, so read it as text first and only
     // then try to extract a structured error detail from it.

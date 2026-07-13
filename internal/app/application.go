@@ -115,6 +115,13 @@ func New(
 		_ = binance.Close()
 		return nil, fmt.Errorf("build OKX venue: %w", err)
 	}
+	keepVenues := false
+	defer func() {
+		if !keepVenues {
+			_ = binance.Close()
+			_ = okx.Close()
+		}
+	}()
 	registry := venue.NewVenueRegistry(paper, binance, okx)
 	historicalVenue, _ := registry.Get(settings.CEXID)
 	executionVenue, executionVenueFound := registry.Get(settings.ExecutionVenue)
@@ -320,6 +327,7 @@ func New(
 			CostBudgetUSD: settings.Budget.DailyCostBudgetUSD,
 			Retention:     time.Duration(settings.TokenUsageRetentionDays) * 24 * time.Hour,
 			Location:      location, Logger: logger,
+			Metrics: runtimeMetrics,
 			OnAlert: func(alert tokenusage.BudgetAlert) {
 				logger.Warn("llm_daily_budget_alert", "level", alert.Level, "ratio", alert.Ratio)
 				bus.Emit("token_budget_alert", "-", map[string]any{
@@ -377,6 +385,9 @@ func New(
 		},
 		Run: func(_ context.Context, symbol string) error {
 			_, startErr := orch.StartAutomated(symbol)
+			if errors.Is(startErr, orchestrator.ErrRunInProgress) {
+				return nil
+			}
 			return startErr
 		},
 		State: func() runtimecore.RuntimeState {
@@ -496,7 +507,7 @@ func New(
 		_ = repository.Close()
 		return nil, err
 	}
-	return &Application{
+	application := &Application{
 		Control: state, Events: bus, Gate: gate, Venue: executionVenue, Registry: registry,
 		DataSource: source, Market: aggregator, Repository: repository,
 		Metrics: runMetrics, RuntimeMetrics: runtimeMetrics, Safety: safety,
@@ -504,7 +515,9 @@ func New(
 		Runtime:   runtimeEngine, Orchestrator: orch, API: server,
 		OHLCVArchive: historicalArchive, OHLCVRecorder: archiveRecorder, OHLCVBackfiller: archiveBackfiller,
 		TokenUsage: usageTracker,
-	}, nil
+	}
+	keepVenues = true
+	return application, nil
 }
 
 func buildRepository(ctx context.Context, settings config.Settings) (persistence.Repository, error) {

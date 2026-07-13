@@ -510,6 +510,10 @@ export interface MetricsSnapshot {
     ohlcv_pruned: number;
     ohlcv_repair_runs: number;
     ohlcv_backfilled: number;
+		token_usage_queued: number;
+		token_usage_saved: number;
+		token_usage_dropped: number;
+		token_usage_errors: number;
   };
 	 token_usage?: TokenUsageSummary;
 }

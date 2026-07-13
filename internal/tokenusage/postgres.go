@@ -20,7 +20,15 @@ func NewPostgresStore(ctx context.Context, dsn string) (*PostgresStore, error) {
 	if strings.TrimSpace(dsn) == "" {
 		return nil, errors.New("PostgreSQL DSN is required")
 	}
-	pool, err := pgxpool.New(ctx, dsn)
+	poolConfig, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("parse token usage store config: %w", err)
+	}
+	poolConfig.MaxConns = 2
+	poolConfig.MaxConnIdleTime = 5 * time.Minute
+	poolConfig.MaxConnLifetime = time.Hour
+	poolConfig.HealthCheckPeriod = 30 * time.Second
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
 		return nil, fmt.Errorf("open token usage store: %w", err)
 	}
