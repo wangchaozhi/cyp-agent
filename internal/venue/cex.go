@@ -157,6 +157,16 @@ func NewOKXVenue(config CEXConfig) (*CEXVenue, error) {
 
 func (venue *CEXVenue) ID() string { return venue.id }
 func (*CEXVenue) Kind() Kind       { return KindCEX }
+func (venue *CEXVenue) ExecutionIdentity() ExecutionIdentity {
+	environment := EnvironmentLive
+	if venue.Demo() {
+		environment = EnvironmentDemo
+	}
+	return ExecutionIdentity{
+		VenueID: venue.ID(), Kind: venue.Kind(), Environment: environment,
+		Writable: venue.DemoTradingEnabled(),
+	}
+}
 func (venue *CEXVenue) Caps() Caps {
 	return Caps{Spot: true, Perp: true, NativeProtectiveOrders: true, ReadOnly: !venue.DemoTradingEnabled()}
 }

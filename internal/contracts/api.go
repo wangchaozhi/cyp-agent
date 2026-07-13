@@ -21,13 +21,14 @@ type ClosePositionRequest struct {
 }
 
 type SettingsUpdateRequest struct {
-	Mode            *string `json:"mode,omitempty"`
-	LLMProvider     *string `json:"llm_provider,omitempty"`
-	LLMModel        *string `json:"llm_model,omitempty"`
-	LLMModelFast    *string `json:"llm_model_fast,omitempty"`
-	LLMBaseURL      *string `json:"llm_base_url,omitempty"`
-	AnthropicAPIKey *string `json:"anthropic_api_key,omitempty"`
-	DeepSeekAPIKey  *string `json:"deepseek_api_key,omitempty"`
+	Mode            *string   `json:"mode,omitempty"`
+	Watchlist       *[]string `json:"watchlist,omitempty"`
+	LLMProvider     *string   `json:"llm_provider,omitempty"`
+	LLMModel        *string   `json:"llm_model,omitempty"`
+	LLMModelFast    *string   `json:"llm_model_fast,omitempty"`
+	LLMBaseURL      *string   `json:"llm_base_url,omitempty"`
+	AnthropicAPIKey *string   `json:"anthropic_api_key,omitempty"`
+	DeepSeekAPIKey  *string   `json:"deepseek_api_key,omitempty"`
 }
 
 type BacktestRequest struct {

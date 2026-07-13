@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: cyp-agent HTTP API
-  version: 0.2.0
+  version: 1.0.0
   description: |
     React 仪表盘使用的 REST 与 SSE 契约。
 
@@ -783,6 +783,15 @@ components:
           type: string
           enum: [paper, live]
           description: 运行时模式；paper 可使用本地 Paper 或 OKX Demo，live 仅开放只读分析并硬禁真实执行。
+        watchlist:
+          type: array
+          minItems: 1
+          maxItems: 12
+          uniqueItems: true
+          description: 顶部“分析币种”下拉使用的币种池；OKX Demo 仅接受 BTC/USDT:USDT 这类 USDT 永续格式。
+          items:
+            type: string
+            pattern: '^[A-Za-z0-9]{2,20}/[A-Za-z0-9]{2,12}(:[A-Za-z0-9]{2,12})?$'
         llm_provider:
           type: string
           enum: [anthropic, deepseek]
@@ -790,6 +799,9 @@ components:
           type: string
         llm_model_fast:
           type: string
+        llm_base_url:
+          type: string
+          description: 仅允许回传当前值；修改地址必须重启服务。
         anthropic_api_key:
           type: string
           writeOnly: true

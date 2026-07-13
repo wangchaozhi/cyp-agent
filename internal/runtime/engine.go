@@ -16,21 +16,23 @@ type loop interface {
 }
 
 type EngineConfig struct {
-	Reconciler Reconciler
-	Scanner    *Scanner
-	Monitor    *PositionMonitor
-	Safety     *SafetyState
-	Logger     *slog.Logger
-	Metrics    *observability.RuntimeMetrics
+	Reconciler         Reconciler
+	Scanner            *Scanner
+	Monitor            *PositionMonitor
+	Safety             *SafetyState
+	Logger             *slog.Logger
+	Metrics            *observability.RuntimeMetrics
+	AllowDegradedStart bool
 }
 
 type Engine struct {
-	reconciler Reconciler
-	scanner    *Scanner
-	monitor    *PositionMonitor
-	safety     *SafetyState
-	logger     *slog.Logger
-	metrics    *observability.RuntimeMetrics
+	reconciler         Reconciler
+	scanner            *Scanner
+	monitor            *PositionMonitor
+	safety             *SafetyState
+	logger             *slog.Logger
+	metrics            *observability.RuntimeMetrics
+	allowDegradedStart bool
 
 	mu        sync.Mutex
 	starting  bool
@@ -57,7 +59,8 @@ func NewEngine(config EngineConfig) (*Engine, error) {
 	return &Engine{
 		reconciler: config.Reconciler, scanner: config.Scanner, monitor: config.Monitor,
 		safety: config.Safety, logger: config.Logger, metrics: config.Metrics,
-		errors: make(chan error, 16),
+		allowDegradedStart: config.AllowDegradedStart,
+		errors:             make(chan error, 16),
 	}, nil
 }
 
@@ -96,13 +99,18 @@ func (engine *Engine) Start(ctx context.Context) error {
 	engine.mu.Unlock()
 	defer close(startDone)
 
-	if _, err := engine.StartupReconcile(runContext); err != nil {
-		cancel()
-		engine.mu.Lock()
-		engine.starting = false
-		engine.cancel = nil
-		engine.mu.Unlock()
-		return err
+	_, reconcileErr := engine.StartupReconcile(runContext)
+	if reconcileErr != nil {
+		if !engine.allowDegradedStart {
+			cancel()
+			engine.mu.Lock()
+			engine.starting = false
+			engine.cancel = nil
+			engine.mu.Unlock()
+			return reconcileErr
+		}
+		engine.logger.WarnContext(ctx, "runtime_degraded_start",
+			"error", reconcileErr.Error(), "new_positions_frozen", true)
 	}
 	if err := runContext.Err(); err != nil {
 		cancel()
@@ -115,7 +123,7 @@ func (engine *Engine) Start(ctx context.Context) error {
 	}
 
 	loops := make([]loop, 0, 2)
-	if engine.scanner != nil {
+	if engine.scanner != nil && !engine.safety.Snapshot().Frozen {
 		loops = append(loops, engine.scanner)
 	}
 	if engine.monitor != nil {

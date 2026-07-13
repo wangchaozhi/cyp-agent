@@ -46,6 +46,7 @@ export default function App() {
   const [switchingMode, setSwitchingMode] = useState(false);
   const [switchingKill, setSwitchingKill] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsSection, setSettingsSection] = useState<"general" | "symbols">("general");
   const [notice, setNotice] = useState<Notice>(null);
   const apiError = [
     health.error,
@@ -57,7 +58,8 @@ export default function App() {
     portfolio.error,
   ].find(Boolean);
   const analysisSymbols = useMemo(() => {
-    const source = marketSymbols.length ? marketSymbols : (runtimeSettings.data?.watchlist ?? []);
+    const configured = runtimeSettings.data?.watchlist ?? [];
+    const source = configured.length ? configured : marketSymbols;
     return [...new Set(source.map((symbol) => symbol.trim()).filter(Boolean))];
   }, [marketSymbols, runtimeSettings.data?.watchlist]);
 
@@ -171,7 +173,7 @@ export default function App() {
     try {
       await cypApi.updateSettings(payload);
       await Promise.all([runtimeSettings.refresh(), health.refresh()]);
-      setNotice({ tone: "ok", message: "设置已保存，LLM 配置已更新" });
+      setNotice({ tone: "ok", message: payload.watchlist ? "分析币种已更新" : "设置已保存" });
     } catch (error) {
       setNotice({ tone: "bad", message: `保存设置失败：${errorMessage(error)}` });
       throw error;
@@ -230,10 +232,17 @@ export default function App() {
             analysisSymbols={analysisSymbols}
             runDisabledReason={runDisabledReason}
             onAnalysisSymbolChange={setAnalysisSymbol}
+            onManageAnalysisSymbols={() => {
+              setSettingsSection("symbols");
+              setSettingsOpen(true);
+            }}
             onModeChange={(mode) => void switchMode(mode)}
             onRun={() => void runOnce()}
             onToggleKill={() => void toggleKill()}
-            onOpenSettings={() => setSettingsOpen(true)}
+            onOpenSettings={() => {
+              setSettingsSection("general");
+              setSettingsOpen(true);
+            }}
           />
 
           <div className="toast-stack" aria-live="polite">
@@ -333,6 +342,7 @@ export default function App() {
             <SettingsPanel
               settings={runtimeSettings.data}
               venues={venues.data ?? []}
+              focusSection={settingsSection}
               onSave={saveSettings}
             />
           </aside>

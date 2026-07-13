@@ -10,6 +10,7 @@ import (
 	"math"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -82,10 +83,23 @@ type Tracker struct {
 	mu         sync.RWMutex
 	repository Repository
 	now        func() time.Time
+	step       string
 	state      persistedState
 }
 
 func New(ctx context.Context, repository Repository, initialEquity contracts.Decimal) (*Tracker, error) {
+	return NewScoped(ctx, repository, initialEquity, "")
+}
+
+// NewScoped isolates durable risk baselines between execution accounts. The
+// local Paper scope may import the legacy unscoped checkpoint; Demo and Live
+// scopes deliberately have no fallback, so Paper equity can never pollute them.
+func NewScoped(
+	ctx context.Context,
+	repository Repository,
+	initialEquity contracts.Decimal,
+	scope string,
+) (*Tracker, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -93,7 +107,12 @@ func New(ctx context.Context, repository Repository, initialEquity contracts.Dec
 		return nil, errors.New("risk state initial equity must be positive")
 	}
 	now := time.Now().UTC()
-	tracker := &Tracker{repository: repository, now: time.Now}
+	normalizedScope := normalizeScope(scope)
+	step := checkpointStep
+	if normalizedScope != "" {
+		step += ":" + normalizedScope
+	}
+	tracker := &Tracker{repository: repository, now: time.Now, step: step}
 	tracker.state = newState(initialEquity, now)
 	if repository == nil {
 		return tracker, nil
@@ -102,7 +121,11 @@ func New(ctx context.Context, repository Repository, initialEquity contracts.Dec
 	if err != nil {
 		return nil, err
 	}
-	if raw := checkpoints[checkpointStep]; len(raw) > 0 {
+	raw := checkpoints[step]
+	if len(raw) == 0 && normalizedScope == "paper" {
+		raw = checkpoints[checkpointStep]
+	}
+	if len(raw) > 0 {
 		var restored persistedState
 		if err := json.Unmarshal(raw, &restored); err != nil {
 			return nil, err
@@ -112,6 +135,19 @@ func New(ctx context.Context, repository Repository, initialEquity contracts.Dec
 		}
 	}
 	return tracker, nil
+}
+
+func normalizeScope(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	var result strings.Builder
+	for _, character := range value {
+		if character >= 'a' && character <= 'z' || character >= '0' && character <= '9' || character == '-' || character == '_' {
+			result.WriteRune(character)
+		} else if result.Len() > 0 {
+			result.WriteByte('-')
+		}
+	}
+	return strings.Trim(result.String(), "-")
 }
 
 func newState(initial contracts.Decimal, now time.Time) persistedState {
@@ -357,7 +393,7 @@ func (tracker *Tracker) persistLocked(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return tracker.repository.SaveCheckpoint(ctx, checkpointRunID, checkpointStep, tracker.state)
+	return tracker.repository.SaveCheckpoint(ctx, checkpointRunID, tracker.step, tracker.state)
 }
 
 func drawdown(baseline, equity contracts.Decimal) contracts.Decimal {

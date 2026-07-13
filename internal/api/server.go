@@ -4,6 +4,7 @@ package api
 
 import (
 	"bufio"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -52,11 +53,14 @@ type Server struct {
 	safety          *runtimecore.SafetyState
 	riskState       *riskstate.Tracker
 	historicalVenue venue.Venue
-	webDir          string
-	logger          *slog.Logger
-	authToken       string
-	corsOrigins     map[string]struct{}
-	handler         http.Handler
+	watchlistStore  interface {
+		SaveWatchlist(context.Context, []string) error
+	}
+	webDir      string
+	logger      *slog.Logger
+	authToken   string
+	corsOrigins map[string]struct{}
+	handler     http.Handler
 }
 
 type Dependencies struct {
@@ -72,9 +76,12 @@ type Dependencies struct {
 	Safety          *runtimecore.SafetyState
 	RiskState       *riskstate.Tracker
 	HistoricalVenue venue.Venue
-	WebDir          string
-	Logger          *slog.Logger
-	APIToken        string
+	WatchlistStore  interface {
+		SaveWatchlist(context.Context, []string) error
+	}
+	WebDir   string
+	Logger   *slog.Logger
+	APIToken string
 }
 
 func New(dependencies Dependencies) (*Server, error) {
@@ -93,6 +100,7 @@ func New(dependencies Dependencies) (*Server, error) {
 		registry: dependencies.Registry, marketData: dependencies.Market, safety: dependencies.Safety,
 		riskState:       dependencies.RiskState,
 		historicalVenue: dependencies.HistoricalVenue,
+		watchlistStore:  dependencies.WatchlistStore,
 		webDir:          dependencies.WebDir, logger: logger, authToken: strings.TrimSpace(dependencies.APIToken),
 		corsOrigins: configuredCORSOrigins(),
 	}
@@ -188,6 +196,13 @@ func (s *Server) updateSettings(w http.ResponseWriter, request *http.Request) {
 	if err := s.control.UpdateSettings(payload); err != nil {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
+	}
+	if payload.Watchlist != nil && s.watchlistStore != nil {
+		if err := s.watchlistStore.SaveWatchlist(request.Context(), s.control.Settings().WatchlistSymbols()); err != nil {
+			s.logger.ErrorContext(request.Context(), "persist_watchlist_failed", "error", err.Error())
+			writeError(w, http.StatusInternalServerError, "persist watchlist: "+err.Error())
+			return
+		}
 	}
 	s.orchestrator.SetLLM(llm.FromSettings(s.control.Settings()))
 	writeJSON(w, http.StatusOK, s.control.Snapshot())

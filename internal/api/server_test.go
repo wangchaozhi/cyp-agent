@@ -110,7 +110,14 @@ func TestHealthSettingsKillAndDashboardShapes(t *testing.T) {
 		}
 	}
 
-	response, body := requestJSON(t, client, http.MethodPost, server.URL+"/api/killswitch", map[string]any{"on": true})
+	response, body := requestJSON(t, client, http.MethodPost, server.URL+"/api/settings", map[string]any{
+		"watchlist": []string{"BTC/USDT", "ETH/USDT"},
+	})
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), `"watchlist":["BTC/USDT","ETH/USDT"]`) {
+		t.Fatalf("watchlist settings response = %d %s", response.StatusCode, body)
+	}
+
+	response, body = requestJSON(t, client, http.MethodPost, server.URL+"/api/killswitch", map[string]any{"on": true})
 	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), `"kill":true`) {
 		t.Fatalf("killswitch response = %d %s", response.StatusCode, body)
 	}

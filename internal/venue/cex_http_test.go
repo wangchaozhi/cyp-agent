@@ -198,6 +198,8 @@ func TestOKXPublicMarketAndDemoSignature(t *testing.T) {
 func TestOKXDemoPlacesPerpetualWithNativeProtection(t *testing.T) {
 	const secret = "okx-demo-secret"
 	var placed atomic.Int32
+	var conditionalQueries atomic.Int32
+	var ocoQueries atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		response.Header().Set("Content-Type", "application/json")
 		if strings.HasPrefix(request.URL.Path, "/api/v5/account/") || strings.HasPrefix(request.URL.Path, "/api/v5/trade/") {
@@ -246,6 +248,14 @@ func TestOKXDemoPlacesPerpetualWithNativeProtection(t *testing.T) {
 			}
 			_, _ = response.Write([]byte(`{"code":"0","data":[{"ordId":"demo-order-1","clOrdId":"runethdemo","state":"filled","avgPx":"2001","accFillSz":"10","fee":"-2","feeCcy":"USDT"}]}`))
 		case "/api/v5/trade/orders-algo-pending":
+			switch request.URL.Query().Get("ordType") {
+			case "conditional":
+				conditionalQueries.Add(1)
+			case "oco":
+				ocoQueries.Add(1)
+			default:
+				t.Errorf("unexpected protective ordType=%q", request.URL.Query().Get("ordType"))
+			}
 			_, _ = response.Write([]byte(`{"code":"0","data":[{"algoId":"protect-1","slTriggerPx":"1800","tpTriggerPx":"2200"}]}`))
 		case "/api/v5/account/positions":
 			_, _ = response.Write([]byte(`{"code":"0","data":[{"instId":"ETH-USDT-SWAP","pos":"10","posSide":"long","avgPx":"2001","lever":"2","liqPx":"1100","mgnMode":"isolated"}]}`))
@@ -290,6 +300,10 @@ func TestOKXDemoPlacesPerpetualWithNativeProtection(t *testing.T) {
 	protective, err := target.ProtectiveOrders(context.Background(), intent.Symbol)
 	if err != nil || !hasProtectiveKind(protective, "stop_loss") || !hasProtectiveKind(protective, "take_profit") {
 		t.Fatalf("protective=%#v err=%v", protective, err)
+	}
+	if conditionalQueries.Load() != 1 || ocoQueries.Load() != 1 || len(protective) != 2 {
+		t.Fatalf("protective queries: conditional=%d oco=%d orders=%#v",
+			conditionalQueries.Load(), ocoQueries.Load(), protective)
 	}
 	positions, err := target.Positions(context.Background())
 	if err != nil || len(positions) != 1 || positions[0].SizeBase.Cmp(contracts.MustDecimal("1")) != 0 {

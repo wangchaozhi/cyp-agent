@@ -32,6 +32,65 @@ type Caps struct {
 // VenueCaps is retained as an explicit alias for public interfaces and docs.
 type VenueCaps = Caps
 
+// Environment identifies the account boundary behind a venue adapter. It is
+// intentionally separate from Kind: both OKX Demo and OKX Live are CEX venues,
+// but they must never share balances, risk baselines, or execution policy.
+type Environment string
+
+const (
+	EnvironmentPaper Environment = "paper"
+	EnvironmentDemo  Environment = "demo"
+	EnvironmentLive  Environment = "live"
+)
+
+// ExecutionIdentity is the stable input consumed by runtime mode policies.
+type ExecutionIdentity struct {
+	VenueID     string
+	Kind        Kind
+	Environment Environment
+	Writable    bool
+}
+
+// ExecutionIdentityProvider is a venue capability. Keeping it separate from
+// Venue lets read-only/test adapters remain compatible while real execution
+// adapters can explicitly identify their account environment.
+type ExecutionIdentityProvider interface {
+	ExecutionIdentity() ExecutionIdentity
+}
+
+type demoExecutionCapability interface {
+	DemoTradingEnabled() bool
+}
+
+type executionMetadata interface {
+	ID() string
+	Kind() Kind
+	Caps() Caps
+}
+
+// IdentifyExecution centralizes environment discovery instead of scattering
+// concrete Paper/CEX type checks through risk and orchestration code.
+func IdentifyExecution(target executionMetadata) ExecutionIdentity {
+	if target == nil {
+		return ExecutionIdentity{Environment: EnvironmentLive}
+	}
+	if provider, ok := target.(ExecutionIdentityProvider); ok {
+		return provider.ExecutionIdentity()
+	}
+	environment := EnvironmentLive
+	writable := !target.Caps().ReadOnly
+	if target.Kind() == KindPaper {
+		environment = EnvironmentPaper
+	} else if demo, ok := target.(demoExecutionCapability); ok && demo.DemoTradingEnabled() {
+		environment = EnvironmentDemo
+		writable = true
+	}
+	return ExecutionIdentity{
+		VenueID: target.ID(), Kind: target.Kind(), Environment: environment,
+		Writable: writable,
+	}
+}
+
 // PreflightReport is a deterministic estimate consumed by the risk engine
 // before an order may be placed.
 type PreflightReport struct {

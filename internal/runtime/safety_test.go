@@ -48,6 +48,36 @@ func TestSafetyStateRequiresSuccessfulReconcileAndRejectsLive(t *testing.T) {
 	}
 }
 
+func TestModePolicySeparatesPaperDemoAndLiveRiskScopes(t *testing.T) {
+	t.Parallel()
+	policy, err := ResolveModePolicy("paper")
+	if err != nil {
+		t.Fatal(err)
+	}
+	local := ExecutionTarget{
+		VenueID: "paper", Kind: "paper", Environment: "paper", Writable: true,
+	}
+	demo := ExecutionTarget{
+		VenueID: "okx", Kind: "cex", Environment: "demo", Writable: true,
+	}
+	if err := policy.ValidateExecution(local); err != nil {
+		t.Fatalf("local Paper rejected: %v", err)
+	}
+	if err := policy.ValidateExecution(demo); err != nil {
+		t.Fatalf("OKX Demo rejected: %v", err)
+	}
+	if paperScope, demoScope := policy.RiskStateScope(local), policy.RiskStateScope(demo); paperScope != "paper" || demoScope != "demo:okx" || paperScope == demoScope {
+		t.Fatalf("unsafe scopes: paper=%q demo=%q", paperScope, demoScope)
+	}
+	live, err := ResolveModePolicy("live")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := live.ValidateExecution(demo); !errors.Is(err, ErrLiveExecutionDisabled) {
+		t.Fatalf("live policy unexpectedly allowed execution: %v", err)
+	}
+}
+
 func TestSymbolLocksSerializeAndWaitingIsCancelable(t *testing.T) {
 	t.Parallel()
 	locks := NewSymbolLocks()

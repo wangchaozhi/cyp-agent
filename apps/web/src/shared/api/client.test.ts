@@ -114,4 +114,14 @@ describe("api client error handling", () => {
     expect(init.method).toBe("POST");
     expect(JSON.parse(String(init.body))).toEqual({ mode: "live" });
   });
+
+  it("persists the configured analysis watchlist", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ watchlist: ["BTC/USDT:USDT", "ETH/USDT:USDT"] }));
+
+    await cypApi.updateSettings({ watchlist: ["BTC/USDT:USDT", "ETH/USDT:USDT"] });
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/settings");
+    expect(JSON.parse(String(init.body))).toEqual({ watchlist: ["BTC/USDT:USDT", "ETH/USDT:USDT"] });
+  });
 });

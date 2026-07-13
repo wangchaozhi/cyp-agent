@@ -13,6 +13,7 @@ import (
 	"github.com/wangchaozhi/cyp-agent/internal/api"
 	"github.com/wangchaozhi/cyp-agent/internal/approval"
 	"github.com/wangchaozhi/cyp-agent/internal/config"
+	"github.com/wangchaozhi/cyp-agent/internal/contracts"
 	"github.com/wangchaozhi/cyp-agent/internal/control"
 	"github.com/wangchaozhi/cyp-agent/internal/data"
 	"github.com/wangchaozhi/cyp-agent/internal/events"
@@ -23,6 +24,7 @@ import (
 	"github.com/wangchaozhi/cyp-agent/internal/persistence"
 	"github.com/wangchaozhi/cyp-agent/internal/riskstate"
 	runtimecore "github.com/wangchaozhi/cyp-agent/internal/runtime"
+	"github.com/wangchaozhi/cyp-agent/internal/runtimeprefs"
 	"github.com/wangchaozhi/cyp-agent/internal/venue"
 )
 
@@ -80,7 +82,6 @@ func New(
 	for _, option := range options {
 		option(&configured)
 	}
-	state := control.New(settings)
 	bus := events.NewBus(1000)
 	paper := venue.NewPaperVenue()
 
@@ -101,20 +102,26 @@ func New(
 	}
 	registry := venue.NewVenueRegistry(paper, binance, okx)
 	historicalVenue, _ := registry.Get(settings.CEXID)
-	executionVenue := venue.Venue(paper)
-	switch settings.ExecutionVenue {
-	case "paper":
-	case "okx":
-		if !okx.DemoTradingEnabled() {
-			_ = binance.Close()
-			_ = okx.Close()
-			return nil, fmt.Errorf("OKX execution requires mode=paper, CYP_OKX_DEMO=true, and complete Demo credentials")
-		}
-		executionVenue = okx
-	default:
+	executionVenue, executionVenueFound := registry.Get(settings.ExecutionVenue)
+	if !executionVenueFound {
 		_ = binance.Close()
 		_ = okx.Close()
-		return nil, fmt.Errorf("execution venue %q is hard-disabled; use paper or OKX Demo", settings.ExecutionVenue)
+		return nil, fmt.Errorf("execution venue %q is unavailable", settings.ExecutionVenue)
+	}
+	modePolicy, err := runtimecore.ResolveModePolicy(settings.Mode)
+	if err != nil {
+		_ = binance.Close()
+		_ = okx.Close()
+		return nil, err
+	}
+	executionIdentity := venue.IdentifyExecution(executionVenue)
+	if err := modePolicy.ValidateExecution(runtimecore.ExecutionTarget{
+		VenueID: executionIdentity.VenueID, Kind: executionIdentity.Kind,
+		Environment: executionIdentity.Environment, Writable: executionIdentity.Writable,
+	}); err != nil {
+		_ = binance.Close()
+		_ = okx.Close()
+		return nil, fmt.Errorf("execution mode policy rejected configuration: %w", err)
 	}
 
 	source := configured.dataSource
@@ -160,13 +167,29 @@ func New(
 			return nil, err
 		}
 	}
+	preferenceStore := runtimeprefs.New(repository)
+	state := control.New(settings)
+	if savedWatchlist, found, loadErr := preferenceStore.LoadWatchlist(ctx); loadErr != nil {
+		_ = repository.Close()
+		return nil, fmt.Errorf("restore runtime watchlist: %w", loadErr)
+	} else if found {
+		if updateErr := state.UpdateSettings(contracts.SettingsUpdateRequest{Watchlist: &savedWatchlist}); updateErr != nil {
+			_ = repository.Close()
+			return nil, fmt.Errorf("restore runtime watchlist: %w", updateErr)
+		}
+		settings = state.Settings()
+	}
 	runMetrics := metrics.NewRuns()
 	balances, err := executionVenue.Balances(ctx)
 	if err != nil {
 		_ = repository.Close()
 		return nil, fmt.Errorf("read initial %s balance: %w", executionVenue.ID(), err)
 	}
-	riskTracker, err := riskstate.New(ctx, repository, balances.TotalQuote)
+	riskScope := modePolicy.RiskStateScope(runtimecore.ExecutionTarget{
+		VenueID: executionIdentity.VenueID, Kind: executionIdentity.Kind,
+		Environment: executionIdentity.Environment, Writable: executionIdentity.Writable,
+	})
+	riskTracker, err := riskstate.NewScoped(ctx, repository, balances.TotalQuote, riskScope)
 	if err != nil {
 		_ = repository.Close()
 		return nil, fmt.Errorf("restore risk state: %w", err)
@@ -228,7 +251,7 @@ func New(
 	}
 	runtimeEngine, err := runtimecore.NewEngine(runtimecore.EngineConfig{
 		Reconciler: reconciler, Scanner: scanner, Monitor: monitor,
-		Safety: safety, Logger: logger, Metrics: runtimeMetrics,
+		Safety: safety, Logger: logger, Metrics: runtimeMetrics, AllowDegradedStart: true,
 	})
 	if err != nil {
 		orch.Close()
@@ -242,17 +265,18 @@ func New(
 			return nil, fmt.Errorf("start runtime: %w", err)
 		}
 	} else if _, err := runtimeEngine.StartupReconcile(ctx); err != nil {
-		orch.Close()
-		_ = repository.Close()
-		return nil, fmt.Errorf("startup reconcile: %w", err)
+		// Keep the API and reduce-only controls available while SafetyState
+		// remains frozen. A reconciliation gap must block new positions, not
+		// make an already-open account impossible to inspect or close.
+		logger.Warn("startup_reconcile_degraded", "error", err.Error(), "new_positions_frozen", true)
 	}
 
 	server, err := api.New(api.Dependencies{
 		Control: state, Venue: executionVenue, Events: bus, Gate: gate, Orchestrator: orch,
 		Metrics: runMetrics, RuntimeMetrics: runtimeMetrics, Registry: registry,
 		Market: aggregator, Safety: safety, HistoricalVenue: historicalVenue,
-		RiskState: riskTracker,
-		WebDir:    webDir, Logger: logger, APIToken: settings.APIToken.Reveal(),
+		RiskState: riskTracker, WatchlistStore: preferenceStore,
+		WebDir: webDir, Logger: logger, APIToken: settings.APIToken.Reveal(),
 	})
 	if err != nil {
 		stopContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)

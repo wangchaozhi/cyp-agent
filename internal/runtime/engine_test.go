@@ -44,6 +44,42 @@ func TestEngineReconcileFailureKeepsFrozenAndDoesNotStartScanner(t *testing.T) {
 	}
 }
 
+func TestEngineCanStartDegradedWithoutOpeningScanner(t *testing.T) {
+	t.Parallel()
+	var calls atomic.Int32
+	scanner, err := NewScanner(ScannerConfig{
+		Symbols: []string{"BTC/USDT"}, Interval: time.Millisecond,
+		Run: func(context.Context, string) error { calls.Add(1); return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine, err := NewEngine(EngineConfig{
+		Reconciler: reconcileFunc(func(context.Context) (ReconcileReport, error) {
+			return ReconcileReport{
+				Positions:      []contracts.Position{{Symbol: "BTC/USDT"}},
+				ProtectiveGaps: []string{"BTC/USDT missing stop"}, OK: false,
+			}, nil
+		}),
+		Scanner: scanner, AllowDegradedStart: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.Start(context.Background()); err != nil {
+		t.Fatalf("degraded start failed: %v", err)
+	}
+	if !engine.Started() || !engine.Safety().Snapshot().Frozen || calls.Load() != 0 {
+		t.Fatalf("unsafe degraded state: started=%v frozen=%v calls=%d",
+			engine.Started(), engine.Safety().Snapshot().Frozen, calls.Load())
+	}
+	stopContext, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := engine.Stop(stopContext); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestEngineStartsAfterReconcileAndStopsOnContext(t *testing.T) {
 	t.Parallel()
 	var calls atomic.Int32

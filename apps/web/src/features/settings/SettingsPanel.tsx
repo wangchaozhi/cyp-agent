@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { KeyRound, ServerCog, Settings as SettingsIcon, ShieldCheck, SlidersHorizontal } from "lucide-react";
+import { KeyRound, ServerCog, Settings as SettingsIcon, ShieldCheck } from "lucide-react";
 
 import type { RuntimeSettings, RuntimeSettingsUpdate, VenueInfo } from "../../shared/api/types";
 import { setApiToken } from "../../shared/api/client";
@@ -7,10 +7,12 @@ import { formatAmount, formatCompact, formatPercent } from "../../shared/lib/for
 import { EmptyState } from "../../shared/ui/EmptyState";
 import { MetricRow } from "../../shared/ui/MetricRow";
 import { Panel } from "../../shared/ui/Panel";
+import { AnalysisSymbolsSettings } from "./AnalysisSymbolsSettings";
 
 interface SettingsPanelProps {
   settings: RuntimeSettings | null;
   venues: VenueInfo[];
+  focusSection?: "general" | "symbols";
   onSave: (payload: RuntimeSettingsUpdate) => Promise<void>;
 }
 
@@ -61,7 +63,7 @@ function formFromSettings(settings: RuntimeSettings): SettingsFormState {
   };
 }
 
-export function SettingsPanel({ settings, venues, onSave }: SettingsPanelProps) {
+export function SettingsPanel({ settings, venues, focusSection = "general", onSave }: SettingsPanelProps) {
   const [form, setForm] = useState<SettingsFormState | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -127,6 +129,8 @@ export function SettingsPanel({ settings, venues, onSave }: SettingsPanelProps) 
           </SettingsChip>
           <SettingsChip tone={guard.ok ? "ok" : "bad"}>{guard.ok ? "校验通过" : "校验未过"}</SettingsChip>
         </div>
+
+        <AnalysisSymbolsSettings settings={settings} focus={focusSection === "symbols"} onSave={onSave} />
 
         <div className="settings-section">
           <div className="settings-section__title">
@@ -227,16 +231,6 @@ export function SettingsPanel({ settings, venues, onSave }: SettingsPanelProps) 
             <MetricRow label={`CEX (${settings.cex_id})`} value={settings.cex_trading_configured ? "已配置" : "未配置"} />
             <MetricRow label="OKX" value={`${settings.okx.configured ? "已配置" : "未配置"} / ${settings.okx.demo ? "Demo" : "实盘"}`} />
             <MetricRow label="LLM Key" value={settings.llm_enabled ? "已配置" : "未配置"} />
-          </div>
-        </div>
-
-        <div className="settings-section settings-section--wide">
-          <div className="settings-section__title">
-            <SlidersHorizontal size={14} />
-            <span>Watchlist</span>
-          </div>
-          <div className="settings-token-list">
-            {settings.watchlist.length ? settings.watchlist.map((symbol) => <span key={symbol}>{symbol}</span>) : <span>--</span>}
           </div>
         </div>
 

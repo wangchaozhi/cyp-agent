@@ -92,6 +92,51 @@ func TestTrackerPublishesCVARAfterEnoughEquitySamples(t *testing.T) {
 	}
 }
 
+func TestTrackerScopesPaperAndOKXDemoBaselines(t *testing.T) {
+	ctx := context.Background()
+	repository := persistence.NewMemoryRepository(20)
+	paper, err := NewScoped(ctx, repository, contracts.MustDecimal("10000"), "paper")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := paper.ObserveEquity(ctx, contracts.MustDecimal("9000")); err != nil {
+		t.Fatal(err)
+	}
+	demo, err := NewScoped(ctx, repository, contracts.MustDecimal("5000"), "demo:okx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot := demo.Snapshot(contracts.MustDecimal("5000")); !snapshot.TotalDrawdown.IsZero() {
+		t.Fatalf("Demo inherited Paper drawdown: %+v", snapshot)
+	}
+	restoredPaper, err := NewScoped(ctx, repository, contracts.MustDecimal("10000"), "paper")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot := restoredPaper.Snapshot(contracts.MustDecimal("9000")); snapshot.TotalDrawdown.String() != "0.1" {
+		t.Fatalf("Paper baseline was not preserved: %+v", snapshot)
+	}
+}
+
+func TestPaperScopeCanImportLegacyUnscopedCheckpoint(t *testing.T) {
+	ctx := context.Background()
+	repository := persistence.NewMemoryRepository(20)
+	legacy, err := New(ctx, repository, contracts.MustDecimal("10000"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.ObserveEquity(ctx, contracts.MustDecimal("9500")); err != nil {
+		t.Fatal(err)
+	}
+	paper, err := NewScoped(ctx, repository, contracts.MustDecimal("10000"), "paper")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot := paper.Snapshot(contracts.MustDecimal("9500")); snapshot.TotalDrawdown.String() != "0.05" {
+		t.Fatalf("legacy Paper checkpoint was not imported: %+v", snapshot)
+	}
+}
+
 func decimal(value string) *contracts.Decimal {
 	parsed := contracts.MustDecimal(value)
 	return &parsed

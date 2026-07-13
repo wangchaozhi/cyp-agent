@@ -61,6 +61,34 @@ describe("event stream semantics", () => {
     expect(summary).toContain("多维信号不足");
   });
 
+  it("labels proposal notional, reference price, and stop price unambiguously", () => {
+    const summary = summarizeEvent(
+      event({
+        type: "proposal_ready",
+        proposal: {
+          symbol: "ETH/USDT:USDT",
+          venue: "okx",
+          side: "short",
+          instrument: "perp",
+          size_quote: "985.39",
+          leverage: 2,
+          margin_mode: "isolated",
+          entry: { type: "market", price: "1785.74" },
+          stop_loss: "1817.44",
+          take_profit: ["1722.34"],
+          confidence: 0.45,
+          thesis: "test",
+          supporting_reports: ["technical"],
+        },
+      }),
+    );
+
+    expect(summary).toContain("名义金额=985.39 USDT");
+    expect(summary).toContain("参考价=1785.74");
+    expect(summary).toContain("止损价=1817.44");
+    expect(summary).not.toContain("规模=");
+  });
+
   it("does not paint no-trade and rejected runs as successful executions", () => {
     expect(eventTone(event({ status: "no_trade" }))).toBe("event-row--warn");
     expect(eventTone(event({ status: "rejected" }))).toBe("event-row--warn");

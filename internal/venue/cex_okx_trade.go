@@ -93,7 +93,9 @@ func (venue *CEXVenue) placeOKXDemo(
 		return contracts.ExecutionResult{}, okxOrderRef{}, err
 	}
 	sizingPrice := referencePrice
-	if intent.Price != nil && intent.Price.IsPositive() {
+	usesSpecifiedPrice := intent.ReduceOnly || intent.OrderType == contracts.EntryTypeLimit ||
+		intent.OrderType == contracts.EntryTypeRange
+	if usesSpecifiedPrice && intent.Price != nil && intent.Price.IsPositive() {
 		sizingPrice = *intent.Price
 	}
 	orderSize, err := okxContractOrderSize(intent.SizeQuote, sizingPrice, spec)
@@ -494,29 +496,51 @@ func (venue *CEXVenue) ProtectiveOrders(ctx context.Context, symbol string) ([]c
 	if !venue.DemoTradingEnabled() {
 		return nil, &CEXError{Kind: CEXErrorDisabled, Exchange: venue.id, Operation: "protective_orders", Message: ErrCEXTradingDisabled.Error(), Err: ErrCEXTradingDisabled}
 	}
-	var payload struct {
-		Code string `json:"code"`
-		Data []struct {
-			AlgoID     string `json:"algoId"`
-			StopLoss   any    `json:"slTriggerPx"`
-			TakeProfit any    `json:"tpTriggerPx"`
-		} `json:"data"`
-	}
-	if err := venue.doJSON(ctx, http.MethodGet, "/api/v5/trade/orders-algo-pending", url.Values{
-		"ordType": {"conditional"}, "instId": {okxInstrumentID(symbol)},
-	}, true, &payload); err != nil {
-		return nil, err
-	}
-	orders := make([]contracts.ProtectiveOrder, 0, len(payload.Data)*2)
-	for _, row := range payload.Data {
-		if price, err := decimalFromAny(row.StopLoss); err == nil && price.IsPositive() {
-			orders = append(orders, contracts.ProtectiveOrder{Kind: "stop_loss", OrderID: row.AlgoID, TriggerPrice: price, ReduceOnly: true})
+	orders := make([]contracts.ProtectiveOrder, 0, 4)
+	seen := make(map[string]struct{})
+	// OKX classifies a single TP or SL as "conditional", while an attached
+	// TP+SL pair is an "oco" algo. Reconciliation must inspect both classes.
+	for _, orderType := range []string{"conditional", "oco"} {
+		var payload struct {
+			Code string `json:"code"`
+			Data []struct {
+				AlgoID     string `json:"algoId"`
+				StopLoss   any    `json:"slTriggerPx"`
+				TakeProfit any    `json:"tpTriggerPx"`
+			} `json:"data"`
 		}
-		if price, err := decimalFromAny(row.TakeProfit); err == nil && price.IsPositive() {
-			orders = append(orders, contracts.ProtectiveOrder{Kind: "take_profit", OrderID: row.AlgoID, TriggerPrice: price, ReduceOnly: true})
+		if err := venue.doJSON(ctx, http.MethodGet, "/api/v5/trade/orders-algo-pending", url.Values{
+			"ordType": {orderType}, "instId": {okxInstrumentID(symbol)},
+		}, true, &payload); err != nil {
+			return nil, err
+		}
+		for _, row := range payload.Data {
+			for _, order := range protectiveOrdersFromOKXAlgo(row.AlgoID, row.StopLoss, row.TakeProfit) {
+				key := order.Kind + "\x00" + order.OrderID + "\x00" + order.TriggerPrice.String()
+				if _, exists := seen[key]; exists {
+					continue
+				}
+				seen[key] = struct{}{}
+				orders = append(orders, order)
+			}
 		}
 	}
 	return orders, nil
+}
+
+func protectiveOrdersFromOKXAlgo(algoID string, stopLoss, takeProfit any) []contracts.ProtectiveOrder {
+	orders := make([]contracts.ProtectiveOrder, 0, 2)
+	if price, err := decimalFromAny(stopLoss); err == nil && price.IsPositive() {
+		orders = append(orders, contracts.ProtectiveOrder{
+			Kind: "stop_loss", OrderID: algoID, TriggerPrice: price, ReduceOnly: true,
+		})
+	}
+	if price, err := decimalFromAny(takeProfit); err == nil && price.IsPositive() {
+		orders = append(orders, contracts.ProtectiveOrder{
+			Kind: "take_profit", OrderID: algoID, TriggerPrice: price, ReduceOnly: true,
+		})
+	}
+	return orders
 }
 
 func (venue *CEXVenue) okxPrivatePOST(ctx context.Context, path string, body any, target any) error {

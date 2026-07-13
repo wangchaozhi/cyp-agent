@@ -16,6 +16,7 @@ interface SystemHeaderProps {
   analysisSymbols: string[];
   runDisabledReason: string | null;
   onAnalysisSymbolChange: (symbol: string) => void;
+  onManageAnalysisSymbols: () => void;
   onModeChange: (mode: RuntimeMode) => void;
   onRun: () => void;
   onToggleKill: () => void;
@@ -45,6 +46,7 @@ export function SystemHeader({
   analysisSymbols,
   runDisabledReason,
   onAnalysisSymbolChange,
+  onManageAnalysisSymbols,
   onModeChange,
   onRun,
   onToggleKill,
@@ -113,11 +115,19 @@ export function SystemHeader({
           <select
             aria-label="分析币种"
             value={analysisSymbol}
-            onChange={(event) => onAnalysisSymbolChange(event.target.value)}
-            disabled={running || !analysisSymbols.length}
+            onChange={(event) => {
+              if (event.target.value === "__manage_symbols__") {
+                onManageAnalysisSymbols();
+                return;
+              }
+              onAnalysisSymbolChange(event.target.value);
+            }}
+            disabled={running}
           >
             {!analysisSymbols.length ? <option value="">暂无币种</option> : null}
             {analysisSymbols.map((symbol) => <option key={symbol} value={symbol}>{symbol}</option>)}
+            {analysisSymbols.length ? <option disabled>──────────</option> : null}
+            <option value="__manage_symbols__">＋ 管理分析币种…</option>
           </select>
         </label>
         <button

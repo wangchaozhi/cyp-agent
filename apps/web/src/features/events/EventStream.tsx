@@ -63,7 +63,8 @@ export function summarizeEvent(event: DashboardEvent): string {
     if (proposal.side === "flat") {
       return `观望 ${proposal.symbol} 强度=${formatConfidence(proposal.confidence)} 原因=${proposal.thesis}`;
     }
-    return `${sideLabel(proposal.side)} ${proposal.symbol} 规模=${formatAmount(proposal.size_quote)} 止损=${proposal.stop_loss ?? "-"} 强度=${formatConfidence(proposal.confidence)}`;
+    const referencePrice = proposal.entry.price ?? proposal.entry.low ?? proposal.entry.high ?? "-";
+    return `${sideLabel(proposal.side)} ${proposal.symbol} 名义金额=${formatAmount(proposal.size_quote)} USDT 参考价=${referencePrice} 止损价=${proposal.stop_loss ?? "-"} 强度=${formatConfidence(proposal.confidence)}`;
   }
 
   if (event.type === "risk_assessed" && event.assessment) {

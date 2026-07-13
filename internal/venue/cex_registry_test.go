@@ -33,3 +33,29 @@ func TestVenueRegistryDescribesAndReplacesByID(t *testing.T) {
 		t.Fatal("replacement was not installed")
 	}
 }
+
+func TestExecutionIdentitySeparatesPaperDemoAndLive(t *testing.T) {
+	paper := IdentifyExecution(NewPaperVenue())
+	if paper.Environment != EnvironmentPaper || !paper.Writable {
+		t.Fatalf("paper identity=%+v", paper)
+	}
+	demo, err := NewOKXVenue(CEXConfig{
+		Demo: true, EnableDemoTrading: true,
+		APIKey: "demo-key", APISecret: "demo-secret", Passphrase: "demo-passphrase",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	demoIdentity := IdentifyExecution(demo)
+	if demoIdentity.Environment != EnvironmentDemo || !demoIdentity.Writable {
+		t.Fatalf("demo identity=%+v", demoIdentity)
+	}
+	live, err := NewBinanceVenue(CEXConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	liveIdentity := IdentifyExecution(live)
+	if liveIdentity.Environment != EnvironmentLive || liveIdentity.Writable {
+		t.Fatalf("live identity=%+v", liveIdentity)
+	}
+}

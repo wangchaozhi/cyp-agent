@@ -103,6 +103,11 @@ func NewPaperVenue(options ...PaperOption) *PaperVenue {
 func (*PaperVenue) ID() string         { return "paper" }
 func (*PaperVenue) Kind() Kind         { return KindPaper }
 func (*PaperVenue) IsConfigured() bool { return true }
+func (venue *PaperVenue) ExecutionIdentity() ExecutionIdentity {
+	return ExecutionIdentity{
+		VenueID: venue.ID(), Kind: venue.Kind(), Environment: EnvironmentPaper, Writable: true,
+	}
+}
 func (*PaperVenue) Caps() Caps {
 	return Caps{Spot: true, Perp: true, NativeProtectiveOrders: true, ReadOnly: false}
 }

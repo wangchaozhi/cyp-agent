@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/wangchaozhi/cyp-agent/internal/venue"
 )
 
 var (
@@ -109,15 +111,12 @@ func (state *SafetyState) Snapshot() SafetySnapshot {
 }
 
 func (state *SafetyState) CheckNewPosition(runtime RuntimeState) error {
-	supported := runtime.Mode == "paper" && (runtime.ExecutionVenue == "paper" ||
-		(runtime.ExecutionVenue == "okx" && runtime.ExecutionDemo))
-	if !supported {
-		return fmt.Errorf(
-			"%w: mode=%q execution_venue=%q",
-			ErrLiveExecutionDisabled,
-			runtime.Mode,
-			runtime.ExecutionVenue,
-		)
+	policy, err := ResolveModePolicy(runtime.Mode)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrLiveExecutionDisabled, err)
+	}
+	if err := policy.ValidateExecution(runtime.executionTarget()); err != nil {
+		return err
 	}
 	if runtime.Kill {
 		return ErrKillSwitch
@@ -129,10 +128,6 @@ func (state *SafetyState) CheckNewPosition(runtime RuntimeState) error {
 	return nil
 }
 
-type demoExecutionVenue interface {
-	DemoTradingEnabled() bool
-}
-
 // ValidateExecutionVenue is also used by monitor/reconcile paths. It permits
 // only the local Paper venue or an adapter that explicitly proves it is wired
 // to an authenticated OKX Demo account.
@@ -140,15 +135,8 @@ func ValidateExecutionVenue(target ReconcileVenue) error {
 	if target == nil {
 		return fmt.Errorf("%w: venue is nil", ErrLiveExecutionDisabled)
 	}
-	if target.Kind() == "paper" && target.ID() == "paper" {
-		return nil
-	}
-	if target.Kind() == "cex" && target.ID() == "okx" {
-		if demo, ok := target.(demoExecutionVenue); ok && demo.DemoTradingEnabled() {
-			return nil
-		}
-	}
-	return fmt.Errorf("%w: venue kind=%q id=%q", ErrLiveExecutionDisabled, target.Kind(), target.ID())
+	policy, _ := ResolveModePolicy("paper")
+	return policy.ValidateExecution(executionTarget(venue.IdentifyExecution(target)))
 }
 
 // ValidatePaperVenue is retained for callers that only have venue metadata.

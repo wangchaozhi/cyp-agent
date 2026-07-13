@@ -85,3 +85,30 @@ func TestRuntimeModeUpdateKeepsLiveExecutionReadOnly(t *testing.T) {
 		t.Fatal("invalid mode partially mutated settings")
 	}
 }
+
+func TestRuntimeWatchlistUpdateNormalizesAndRejectsUnsafeDemoSymbols(t *testing.T) {
+	state := New(config.DefaultSettings())
+	watchlist := []string{" btc/usdt ", "ETH/USDT", "BTC/USDT"}
+	if err := state.UpdateSettings(contracts.SettingsUpdateRequest{Watchlist: &watchlist}); err != nil {
+		t.Fatalf("watchlist update: %v", err)
+	}
+	if got := state.Settings().WatchlistSymbols(); len(got) != 2 || got[0] != "BTC/USDT" || got[1] != "ETH/USDT" {
+		t.Fatalf("normalized watchlist = %#v", got)
+	}
+
+	demoSettings := config.DefaultSettings()
+	demoSettings.ExecutionVenue = "okx"
+	demoSettings.OKXDemo = true
+	demo := New(demoSettings)
+	invalid := []string{"BTC/USDT"}
+	if err := demo.UpdateSettings(contracts.SettingsUpdateRequest{Watchlist: &invalid}); !errors.Is(err, ErrInvalidWatchlist) {
+		t.Fatalf("spot Demo watchlist error = %v", err)
+	}
+	valid := []string{"btc/usdt:usdt", "eth/usdt:usdt"}
+	if err := demo.UpdateSettings(contracts.SettingsUpdateRequest{Watchlist: &valid}); err != nil {
+		t.Fatalf("Demo watchlist update: %v", err)
+	}
+	if got := demo.Settings().Watchlist; got != "BTC/USDT:USDT,ETH/USDT:USDT" {
+		t.Fatalf("Demo watchlist = %q", got)
+	}
+}

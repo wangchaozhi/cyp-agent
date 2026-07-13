@@ -255,12 +255,13 @@ func (strategist *Strategist) Run(
 	}
 
 	quantizedSize, _ := size.QuoScale(contracts.NewDecimalFromInt64(1), 2, contracts.RoundDown)
+	entryReference := ref
 	quantizedStop, _ := stop.QuoScale(contracts.NewDecimalFromInt64(1), 2, contracts.RoundHalfEven)
 	quantizedTakeProfit, _ := takeProfit.QuoScale(contracts.NewDecimalFromInt64(1), 2, contracts.RoundHalfEven)
 	proposal := contracts.TradeProposal{
 		Symbol: snapshot.Symbol, Venue: venueID, Side: side, Instrument: instrument,
 		SizeQuote: quantizedSize, Leverage: leverage, MarginMode: contracts.MarginModeIsolated,
-		Entry: contracts.PricePlan{Type: contracts.EntryTypeMarket}, StopLoss: &quantizedStop,
+		Entry: contracts.PricePlan{Type: contracts.EntryTypeMarket, Price: &entryReference}, StopLoss: &quantizedStop,
 		TakeProfit: contracts.List[contracts.Decimal]{quantizedTakeProfit},
 		Confidence: confidence, Thesis: thesis, SupportingReports: supporting,
 	}

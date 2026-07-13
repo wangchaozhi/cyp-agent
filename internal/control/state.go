@@ -63,6 +63,16 @@ func (s *State) UpdateSettings(request contracts.SettingsUpdateRequest) error {
 		}
 		next.Mode = mode
 	}
+	if request.Watchlist != nil {
+		watchlist, err := normalizeRuntimeWatchlist(
+			*request.Watchlist,
+			next.ExecutionVenue == "okx" && next.OKXDemo,
+		)
+		if err != nil {
+			return err
+		}
+		next.Watchlist = strings.Join(watchlist, ",")
+	}
 	if request.LLMProvider != nil {
 		provider := strings.TrimSpace(*request.LLMProvider)
 		if provider != "anthropic" && provider != "deepseek" {
