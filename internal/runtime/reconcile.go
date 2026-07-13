@@ -42,19 +42,34 @@ type remoteProtectiveReader interface {
 }
 
 type VenueReconciler struct {
-	venue  ReconcileVenue
-	events *events.Bus
-	logger *slog.Logger
+	venue         ReconcileVenue
+	events        *events.Bus
+	logger        *slog.Logger
+	positionState interface {
+		ReconcilePositions(context.Context, []contracts.Position) error
+	}
 }
 
-func NewVenueReconciler(target ReconcileVenue, eventBus *events.Bus, logger *slog.Logger) (*VenueReconciler, error) {
+type ReconcileOption func(*VenueReconciler)
+
+func WithPositionState(state interface {
+	ReconcilePositions(context.Context, []contracts.Position) error
+}) ReconcileOption {
+	return func(reconciler *VenueReconciler) { reconciler.positionState = state }
+}
+
+func NewVenueReconciler(target ReconcileVenue, eventBus *events.Bus, logger *slog.Logger, options ...ReconcileOption) (*VenueReconciler, error) {
 	if target == nil {
 		return nil, errors.New("reconcile venue is required")
 	}
 	if logger == nil {
 		logger = observability.DefaultLogger("reconcile")
 	}
-	return &VenueReconciler{venue: target, events: eventBus, logger: logger}, nil
+	reconciler := &VenueReconciler{venue: target, events: eventBus, logger: logger}
+	for _, option := range options {
+		option(reconciler)
+	}
+	return reconciler, nil
 }
 
 func (reconciler *VenueReconciler) Reconcile(ctx context.Context) (ReconcileReport, error) {
@@ -72,6 +87,12 @@ func (reconciler *VenueReconciler) Reconcile(ctx context.Context) (ReconcileRepo
 		return report, fmt.Errorf("load execution venue positions: %w", err)
 	}
 	report.Positions = append(report.Positions, positions...)
+	if reconciler.positionState != nil {
+		if stateErr := reconciler.positionState.ReconcilePositions(ctx, positions); stateErr != nil {
+			report.Discrepancies = append(report.Discrepancies,
+				"持仓风险账本对账失败："+stateErr.Error())
+		}
+	}
 	checkedSymbols := make(map[string]struct{})
 	for _, position := range positions {
 		if _, checked := checkedSymbols[position.Symbol]; checked {

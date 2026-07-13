@@ -33,6 +33,8 @@ func NewPostgresRepository(ctx context.Context, dsn string, maxLessons int) (*Po
 	poolConfig.MaxConnIdleTime = 5 * time.Minute
 	poolConfig.MaxConnLifetime = time.Hour
 	poolConfig.HealthCheckPeriod = 30 * time.Second
+	poolConfig.ConnConfig.RuntimeParams["statement_timeout"] = "10000"
+	poolConfig.ConnConfig.RuntimeParams["lock_timeout"] = "3000"
 	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
 		return nil, fmt.Errorf("open PostgreSQL pool: %w", err)
@@ -78,28 +80,41 @@ func (repository *PostgresRepository) SaveCheckpoint(
 	runID, step string,
 	value any,
 ) error {
+	return repository.SaveCheckpoints(ctx, runID, map[string]any{step: value})
+}
+
+func (repository *PostgresRepository) SaveCheckpoints(
+	ctx context.Context,
+	runID string,
+	values map[string]any,
+) error {
 	if err := contextError(ctx); err != nil {
 		return err
 	}
 	runID = strings.TrimSpace(runID)
-	step = strings.TrimSpace(step)
 	if runID == "" {
 		return ErrInvalidRunID
 	}
-	if step == "" {
-		return ErrInvalidStep
-	}
-	raw, err := encodeCheckpoint(value)
+	encoded, err := encodeCheckpoints(values)
 	if err != nil {
 		return err
 	}
-	_, err = repository.pool.Exec(ctx, `
-        INSERT INTO checkpoints (run_id, step, data, ts)
-        VALUES ($1, $2, $3, now())
-        ON CONFLICT (run_id, step) DO UPDATE
-        SET data = EXCLUDED.data, ts = EXCLUDED.ts`, runID, step, string(raw))
+	transaction, err := repository.pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("save PostgreSQL checkpoint: %w", err)
+		return fmt.Errorf("begin PostgreSQL checkpoint transaction: %w", err)
+	}
+	defer func() { _ = transaction.Rollback(ctx) }()
+	for step, raw := range encoded {
+		if _, err := transaction.Exec(ctx, `
+            INSERT INTO checkpoints (run_id, step, data, ts)
+            VALUES ($1, $2, $3, now())
+            ON CONFLICT (run_id, step) DO UPDATE
+            SET data = EXCLUDED.data, ts = EXCLUDED.ts`, runID, step, string(raw)); err != nil {
+			return fmt.Errorf("save PostgreSQL checkpoint: %w", err)
+		}
+	}
+	if err := transaction.Commit(ctx); err != nil {
+		return fmt.Errorf("commit PostgreSQL checkpoints: %w", err)
 	}
 	return nil
 }
@@ -137,6 +152,35 @@ func (repository *PostgresRepository) LoadCheckpoints(
 		return nil, fmt.Errorf("iterate PostgreSQL checkpoints: %w", err)
 	}
 	return result, nil
+}
+
+func (repository *PostgresRepository) PruneCheckpoints(ctx context.Context, keepRecentRuns int) (int, error) {
+	if err := contextError(ctx); err != nil {
+		return 0, err
+	}
+	if keepRecentRuns <= 0 {
+		return 0, ErrInvalidKeep
+	}
+	var removed int
+	err := repository.pool.QueryRow(ctx, `
+        WITH expired AS (
+            SELECT run_id
+            FROM checkpoints
+            WHERE LEFT(run_id, 2) <> '__'
+            GROUP BY run_id
+            ORDER BY MAX(ts) DESC, run_id DESC
+            OFFSET $1
+		), deleted AS (
+			DELETE FROM checkpoints AS target
+			USING expired
+			WHERE target.run_id = expired.run_id
+			RETURNING target.run_id
+		)
+		SELECT COUNT(DISTINCT run_id) FROM deleted`, keepRecentRuns).Scan(&removed)
+	if err != nil {
+		return 0, fmt.Errorf("prune PostgreSQL checkpoints: %w", err)
+	}
+	return removed, nil
 }
 
 func (repository *PostgresRepository) AppendLessons(

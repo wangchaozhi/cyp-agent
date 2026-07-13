@@ -3,6 +3,7 @@ package venue
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -151,6 +152,22 @@ func (venue *CEXVenue) placeOKXDemo(
 
 	var accepted okxOrderAckEnvelope
 	if err := venue.okxPrivatePOST(ctx, "/api/v5/trade/order", body, &accepted); err != nil {
+		// Never retry an order POST blindly: the exchange may have accepted it
+		// before the response was lost. Reconcile by the deterministic clOrdId
+		// first so a transport timeout cannot become a duplicate order.
+		if isAmbiguousOKXSubmission(err) {
+			result, reference, recovered, recoveryErr := venue.recoverOKXOrder(
+				ctx, intent, referencePrice, spec, instrumentID, clientOrderID, protective,
+			)
+			if recovered {
+				return result, reference, recoveryErr
+			}
+			if recoveryErr != nil {
+				return contracts.ExecutionResult{}, okxOrderRef{}, errors.Join(ErrOrderStateUnknown, err,
+					fmt.Errorf("reconcile ambiguous OKX order: %w", recoveryErr))
+			}
+			return contracts.ExecutionResult{}, okxOrderRef{}, errors.Join(ErrOrderStateUnknown, err)
+		}
 		return contracts.ExecutionResult{}, okxOrderRef{}, err
 	}
 	if len(accepted.Data) == 0 {
@@ -177,6 +194,34 @@ func (venue *CEXVenue) placeOKXDemo(
 		return contracts.ExecutionResult{}, reference, err
 	}
 	return result, reference, nil
+}
+
+func isAmbiguousOKXSubmission(err error) bool {
+	var classified *CEXError
+	return errors.As(err, &classified) && classified.Retryable()
+}
+
+func (venue *CEXVenue) recoverOKXOrder(
+	ctx context.Context,
+	intent contracts.OrderIntent,
+	referencePrice contracts.Decimal,
+	spec okxInstrumentSpec,
+	instrumentID, clientOrderID string,
+	protective contracts.List[contracts.ProtectiveOrder],
+) (contracts.ExecutionResult, okxOrderRef, bool, error) {
+	var payload okxOrderDetailEnvelope
+	err := venue.doJSON(ctx, http.MethodGet, "/api/v5/trade/order", url.Values{
+		"instId": {instrumentID}, "clOrdId": {clientOrderID},
+	}, true, &payload)
+	if err != nil {
+		return contracts.ExecutionResult{}, okxOrderRef{}, false, err
+	}
+	if len(payload.Data) == 0 || strings.TrimSpace(payload.Data[0].OrderID) == "" {
+		return contracts.ExecutionResult{}, okxOrderRef{}, false, nil
+	}
+	reference := okxOrderRef{InstrumentID: instrumentID, OrderID: payload.Data[0].OrderID}
+	result, err := venue.waitOKXOrder(ctx, intent, referencePrice, spec, reference, protective)
+	return result, reference, true, err
 }
 
 func (venue *CEXVenue) okxInstrument(ctx context.Context, instrumentID string) (okxInstrumentSpec, error) {

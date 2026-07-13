@@ -62,6 +62,7 @@ func run() error {
 	server := &http.Server{
 		Addr:              address,
 		Handler:           application.API.Handler(),
+		ReadTimeout:       15 * time.Second,
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       90 * time.Second,
 		MaxHeaderBytes:    1 << 20,

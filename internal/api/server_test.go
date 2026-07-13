@@ -99,7 +99,7 @@ func TestHealthSettingsKillAndDashboardShapes(t *testing.T) {
 	})
 	client := server.Client()
 
-	for _, path := range []string{"/api/health", "/api/venues", "/api/settings", "/api/risk", "/api/portfolio", "/api/market", "/api/metrics", "/api/token-usage", "/api/pending", "/api/trades"} {
+	for _, path := range []string{"/api/health", "/api/ready", "/api/venues", "/api/settings", "/api/risk", "/api/portfolio", "/api/market", "/api/metrics", "/api/token-usage", "/api/pending", "/api/trades"} {
 		response, body := requestJSON(t, client, http.MethodGet, server.URL+path, nil)
 		if response.StatusCode != http.StatusOK {
 			t.Fatalf("GET %s status = %d, body = %s", path, response.StatusCode, body)
@@ -113,6 +113,21 @@ func TestHealthSettingsKillAndDashboardShapes(t *testing.T) {
 		if strings.Contains(string(body), "deepseek-secret") || strings.Contains(string(body), "okx-secret") || strings.Contains(string(body), "okx-pass") {
 			t.Fatalf("GET %s leaked a secret: %s", path, body)
 		}
+	}
+
+	request, err := http.NewRequest(http.MethodGet, server.URL+"/api/health", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("X-Request-ID", "unsafe request id")
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	requestID := response.Header.Get("X-Request-ID")
+	if len(requestID) != 12 || requestID == "unsafe request id" || strings.ContainsAny(requestID, " \r\n\t") {
+		t.Fatalf("unsafe request ID was not replaced: %q", requestID)
 	}
 
 	response, body := requestJSON(t, client, http.MethodPost, server.URL+"/api/settings", map[string]any{

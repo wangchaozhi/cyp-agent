@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: cyp-agent HTTP API
-  version: 1.7.0
+  version: 1.8.0
   description: |
     React 仪表盘使用的 REST 与 SSE 契约。
 
@@ -355,6 +355,12 @@ paths:
                 $ref: "#/components/schemas/BacktestReport"
         "422":
           $ref: "#/components/responses/ErrorResponse"
+        "429":
+          description: 回测并发任务已达到上限
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "502":
           $ref: "#/components/responses/ErrorResponse"
         default:
@@ -395,6 +401,12 @@ paths:
                 $ref: "#/components/schemas/Error"
         "429":
           description: 后台分析队列已满
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: Kill Switch、对账、安全冻结或场所配置阻止新开仓
           content:
             application/json:
               schema:
@@ -617,7 +629,13 @@ components:
         reconciling: { type: boolean }
         safety:
           type: object
-          additionalProperties: true
+          additionalProperties: false
+          required: [frozen, reason, reconcile_active]
+          properties:
+            frozen: { type: boolean }
+            reason: { type: string }
+            last_reconciled: { type: string, format: date-time }
+            reconcile_active: { type: boolean }
         reasons:
           type: array
           items: { type: string }

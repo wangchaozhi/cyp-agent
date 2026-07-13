@@ -40,6 +40,7 @@ function errorMessage(error: unknown): string {
 export default function App() {
   const [positionPollInterval, setPositionPollInterval] = useState(IDLE_POSITION_POLL_MS);
   const health = usePollingResource(cypApi.health, 5000);
+  const readiness = usePollingResource(cypApi.ready, 5000);
   const venues = usePollingResource(cypApi.venues, 10000);
   const runtimeSettings = usePollingResource(cypApi.settings, 10000);
   const pending = usePollingResource(cypApi.pending, 3000);
@@ -63,6 +64,7 @@ export default function App() {
   const refreshTimerRef = useRef<number | null>(null);
   const apiError = [
     health.error,
+    readiness.error,
     venues.error,
     runtimeSettings.error,
     pending.error,
@@ -109,10 +111,10 @@ export default function App() {
         scheduleRefresh([pending.refresh]);
       }
       if (["run_started", "executed", "reviewed", "run_done", "automated_exit"].includes(event.type)) {
-        scheduleRefresh([positions.refresh, risk.refresh, portfolio.refresh]);
+        scheduleRefresh([positions.refresh, risk.refresh, portfolio.refresh, readiness.refresh]);
       }
       if (["risk_assessed", "killswitch"].includes(event.type)) {
-        scheduleRefresh([health.refresh, risk.refresh, runtimeSettings.refresh]);
+        scheduleRefresh([health.refresh, readiness.refresh, risk.refresh, runtimeSettings.refresh]);
       }
 			if (event.type === "token_budget_alert") {
 				scheduleRefresh([metrics.refresh]);
@@ -124,7 +126,7 @@ export default function App() {
 				});
 			}
     },
-    [health.refresh, metrics.refresh, pending.refresh, portfolio.refresh, positions.refresh, risk.refresh, runtimeSettings.refresh, scheduleRefresh],
+    [health.refresh, metrics.refresh, pending.refresh, portfolio.refresh, positions.refresh, readiness.refresh, risk.refresh, runtimeSettings.refresh, scheduleRefresh],
   );
 
   const streamStatus = useEventStream(handleEvent);
@@ -133,13 +135,19 @@ export default function App() {
   // available; an unconfigured model is an informational status, not a gate.
   const runDisabledReason = !health.data
     ? "等待后端状态"
-    : switchingMode
-      ? "正在切换运行模式"
-      : !runtimeSettings.data && !marketSymbols.length
-        ? "等待币种列表"
-        : !analysisSymbol
-          ? "未选择分析币种"
-          : null;
+    : !readiness.data
+      ? "等待交易安全状态"
+      : !readiness.data.execution_ready
+        ? readiness.data.safety.reason
+          || (health.data.kill ? "Kill Switch 已启用" : readiness.data.reasons.join("；"))
+          || "交易执行尚未就绪"
+        : switchingMode
+          ? "正在切换运行模式"
+          : !runtimeSettings.data && !marketSymbols.length
+            ? "等待币种列表"
+            : !analysisSymbol
+              ? "未选择分析币种"
+              : null;
 
   useEffect(() => {
     setAnalysisSymbol((current) => (
@@ -211,7 +219,7 @@ export default function App() {
     try {
       const disablesAutomation = mode === "live" && Boolean(runtimeSettings.data?.automation.enabled);
       await cypApi.updateSettings({ mode, ...(disablesAutomation ? { automation: { enabled: false } } : {}) });
-      await Promise.all([runtimeSettings.refresh(), health.refresh(), risk.refresh()]);
+      await Promise.all([runtimeSettings.refresh(), health.refresh(), readiness.refresh(), risk.refresh()]);
       setNotice({
         tone: mode === "live" ? "warn" : "ok",
         message: mode === "live"
@@ -231,7 +239,7 @@ export default function App() {
     try {
       const next = !health.data?.kill;
       await cypApi.setKillSwitch(next);
-      await Promise.all([health.refresh(), risk.refresh(), runtimeSettings.refresh()]);
+      await Promise.all([health.refresh(), readiness.refresh(), risk.refresh(), runtimeSettings.refresh()]);
       setNotice({ tone: "ok", message: next ? "Kill Switch 已启用" : "Kill Switch 已解除" });
     } catch (error) {
       setNotice({ tone: "bad", message: `切换失败：${errorMessage(error)}` });
@@ -266,7 +274,7 @@ export default function App() {
     setNotice(null);
     try {
       await cypApi.updateSettings(payload);
-      await Promise.all([runtimeSettings.refresh(), health.refresh()]);
+      await Promise.all([runtimeSettings.refresh(), health.refresh(), readiness.refresh()]);
       setNotice({
         tone: "ok",
         message: payload.watchlist ? "分析币种已更新" : payload.automation ? "自动化策略已保存" : "设置已保存",
@@ -296,7 +304,7 @@ export default function App() {
         symbol: position.symbol,
         instrument: position.instrument,
       });
-      await Promise.all([positions.refresh(), risk.refresh(), portfolio.refresh()]);
+      await Promise.all([positions.refresh(), readiness.refresh(), risk.refresh(), portfolio.refresh()]);
       setNotice({ tone: "ok", message: `已平仓 ${position.symbol}，均价=${result.avg_price ?? "-"}` });
     } catch (error) {
       setNotice({ tone: "bad", message: `平仓失败：${errorMessage(error)}` });
@@ -347,6 +355,11 @@ export default function App() {
 
           <div className="toast-stack" aria-live="polite">
             {apiError ? <div className="app-alert" role="alert"><span>后端连接异常：{apiError}</span></div> : null}
+            {readiness.data && !readiness.data.execution_ready ? (
+              <div className="app-safety-alert" role="alert">
+                <span>新开仓已冻结：{readiness.data.safety.reason || (health.data?.kill ? "Kill Switch 已启用" : readiness.data.reasons.join("；") || "交易执行尚未就绪")}。持仓监控与自动平仓继续运行。</span>
+              </div>
+            ) : null}
             {notice ? (
               <div className={`app-notice app-notice--${notice.tone}`} role="status">
                 <span>{notice.message}</span>

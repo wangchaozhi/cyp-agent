@@ -196,9 +196,14 @@ func (tracker *Tracker) ObserveEquity(ctx context.Context, equity contracts.Deci
 	}
 	tracker.mu.Lock()
 	defer tracker.mu.Unlock()
+	before := clonePersistedState(tracker.state)
 	now := tracker.now().UTC()
 	tracker.observeLocked(equity, now)
-	return tracker.persistLocked(ctx)
+	if err := tracker.persistLocked(ctx); err != nil {
+		tracker.state = before
+		return err
+	}
+	return nil
 }
 
 func (tracker *Tracker) RecordOpen(
@@ -216,6 +221,7 @@ func (tracker *Tracker) RecordOpen(
 	if tracker.hasTradeLocked(execution.ClientID, "open") {
 		return nil
 	}
+	before := clonePersistedState(tracker.state)
 	now := tracker.now().UTC()
 	price := contracts.Zero()
 	if execution.AvgPrice != nil {
@@ -231,7 +237,11 @@ func (tracker *Tracker) RecordOpen(
 	tracker.recordOrderLocked(now)
 	tracker.observeLocked(equity, now)
 	tracker.trimLocked()
-	return tracker.persistLocked(ctx)
+	if err := tracker.persistLocked(ctx); err != nil {
+		tracker.state = before
+		return err
+	}
+	return nil
 }
 
 func (tracker *Tracker) RecordClose(
@@ -253,6 +263,7 @@ func (tracker *Tracker) RecordClose(
 			}
 		}
 	}
+	before := clonePersistedState(tracker.state)
 	now := tracker.now().UTC()
 	pnl := position.SizeBase.Mul(execution.AvgPrice.Sub(position.EntryPrice))
 	if position.Side == contracts.SideShort {
@@ -274,7 +285,11 @@ func (tracker *Tracker) RecordClose(
 	tracker.recordOrderLocked(now)
 	tracker.observeLocked(equity, now)
 	tracker.trimLocked()
-	return record, tracker.persistLocked(ctx)
+	if err := tracker.persistLocked(ctx); err != nil {
+		tracker.state = before
+		return record, err
+	}
+	return record, nil
 }
 
 func (tracker *Tracker) OpenTrade(symbol string, instrument contracts.Instrument) (TradeRecord, bool) {
@@ -288,14 +303,102 @@ func (tracker *Tracker) OpenTrade(symbol string, instrument contracts.Instrument
 		if trade.Symbol != symbol || trade.Instrument != instrument {
 			continue
 		}
-		if trade.Kind == "close" {
+		if closesPosition(trade.Kind) {
 			return TradeRecord{}, false
 		}
-		if trade.Kind == "open" {
+		if opensPosition(trade.Kind) {
 			return trade, true
 		}
 	}
 	return TradeRecord{}, false
+}
+
+// ReconcilePositions repairs the durable open/flat markers from the execution
+// venue during startup. It never invents realized PnL for activity that
+// happened while the process was offline; reconciliation records are explicit
+// in the ledger so operators can distinguish them from observed fills.
+func (tracker *Tracker) ReconcilePositions(ctx context.Context, positions []contracts.Position) error {
+	if tracker == nil {
+		return nil
+	}
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	type openState struct {
+		trade TradeRecord
+		open  bool
+	}
+	states := make(map[string]openState)
+	for _, trade := range tracker.state.Trades {
+		key := positionKey(trade.Symbol, trade.Instrument)
+		if opensPosition(trade.Kind) {
+			states[key] = openState{trade: trade, open: true}
+		} else if closesPosition(trade.Kind) {
+			states[key] = openState{trade: trade, open: false}
+		}
+	}
+	active := make(map[string]contracts.Position, len(positions))
+	for _, position := range positions {
+		active[positionKey(position.Symbol, position.Instrument)] = position
+	}
+	now := tracker.now().UTC()
+	sequence := 0
+	before := clonePersistedState(tracker.state)
+	changed := false
+	for key, state := range states {
+		if !state.open {
+			continue
+		}
+		position, exists := active[key]
+		if exists && positionMatchesTrade(position, state.trade) {
+			continue
+		}
+		sequence++
+		tracker.state.Trades = append(tracker.state.Trades, TradeRecord{
+			ClientID: reconcileClientID("close", now, sequence), RunID: state.trade.RunID,
+			Kind: "reconcile_close", Symbol: state.trade.Symbol, Side: state.trade.Side,
+			Instrument: state.trade.Instrument, Price: state.trade.Price,
+			SizeBase: state.trade.SizeBase, FeeQuote: contracts.Zero(), PNLQuote: contracts.Zero(), TS: now,
+		})
+		changed = true
+	}
+	for key, position := range active {
+		if state := states[key]; state.open && positionMatchesTrade(position, state.trade) {
+			continue
+		}
+		sequence++
+		tracker.state.Trades = append(tracker.state.Trades, TradeRecord{
+			ClientID: reconcileClientID("open", now, sequence), RunID: "reconciled",
+			Kind: "reconcile_open", Symbol: position.Symbol, Side: position.Side,
+			Instrument: position.Instrument, Price: position.EntryPrice,
+			SizeBase: position.SizeBase, FeeQuote: contracts.Zero(), PNLQuote: contracts.Zero(), TS: now,
+		})
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	tracker.trimLocked()
+	if err := tracker.persistLocked(ctx); err != nil {
+		tracker.state = before
+		return err
+	}
+	return nil
+}
+
+func positionKey(symbol string, instrument contracts.Instrument) string {
+	return strings.ToUpper(strings.TrimSpace(symbol)) + "\x00" + string(instrument)
+}
+
+func positionMatchesTrade(position contracts.Position, trade TradeRecord) bool {
+	return position.Side == trade.Side && position.SizeBase.Cmp(trade.SizeBase) == 0 &&
+		position.EntryPrice.Cmp(trade.Price) == 0
+}
+
+func opensPosition(kind string) bool  { return kind == "open" || kind == "reconcile_open" }
+func closesPosition(kind string) bool { return kind == "close" || kind == "reconcile_close" }
+
+func reconcileClientID(kind string, now time.Time, sequence int) string {
+	return "reconcile-" + kind + "-" + strconv.FormatInt(now.UnixNano(), 36) + "-" + strconv.Itoa(sequence)
 }
 
 func (tracker *Tracker) Snapshot(equity contracts.Decimal) Snapshot {
@@ -400,6 +503,14 @@ func (tracker *Tracker) persistLocked(ctx context.Context) error {
 		ctx = context.Background()
 	}
 	return tracker.repository.SaveCheckpoint(ctx, checkpointRunID, tracker.step, tracker.state)
+}
+
+func clonePersistedState(state persistedState) persistedState {
+	copy := state
+	copy.Orders = append([]time.Time(nil), state.Orders...)
+	copy.EquityPoints = append([]EquityPoint(nil), state.EquityPoints...)
+	copy.Trades = append([]TradeRecord(nil), state.Trades...)
+	return copy
 }
 
 func drawdown(baseline, equity contracts.Decimal) contracts.Decimal {

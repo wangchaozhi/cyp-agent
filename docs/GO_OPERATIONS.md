@@ -244,7 +244,7 @@ docker compose ps
 docker compose logs -f backend
 ```
 
-Compose 默认使用 Paper、合成行情、Dashboard 审批和 PostgreSQL 持久化，只把服务映射到主机回环地址的 `8000` 端口。容器内监听非回环地址，因此令牌必填；Dashboard 设置页中的“API 写操作令牌”只保存在当前浏览器。停止但保留数据库卷：
+Compose 默认使用 Paper、合成行情、Dashboard 审批和 PostgreSQL 持久化，只把服务映射到主机回环地址的 `8000` 端口。容器内监听非回环地址，因此令牌必填；Dashboard 设置页中的“API 写操作令牌”只保存在当前标签会话，关闭标签后需重新输入。停止但保留数据库卷：
 
 ```powershell
 docker compose down
@@ -329,6 +329,7 @@ CYP_MAX_CONCURRENCY=2
 1. 查看进程退出错误或 `.logs/backend.err.log`；
 2. 检查 `/api/health` 与 `/api/ready`；
 3. 检查 `ready.safety.reason`、`reconciling` 和 Kill Switch；
+   若原因是保护单、平仓确认或持久化失败，先核对 OKX Demo 持仓/委托与数据库，再重启触发完整对账，不要仅在前端反复点击运行；
 4. 检查 `.env` 中 mode、venue、persistence 和 DSN；
 5. PostgreSQL 模式检查 `docker compose ps` 与 `docker compose logs db`；
 6. CEX 行情异常时切回 `CYP_DATA_SOURCE=synthetic` 验证核心链路；

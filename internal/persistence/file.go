@@ -62,12 +62,15 @@ func loadFileState(path string) (repositoryState, error) {
 	if err := json.Unmarshal(raw, &state); err != nil {
 		return repositoryState{}, fmt.Errorf("decode repository file: %w", err)
 	}
-	if state.Version != 0 && state.Version != 1 {
+	if state.Version != 0 && state.Version != 1 && state.Version != 2 {
 		return repositoryState{}, fmt.Errorf("unsupported repository version %d", state.Version)
 	}
-	state.Version = 1
+	state.Version = 2
 	if state.Checkpoints == nil {
 		state.Checkpoints = make(map[string]map[string]json.RawMessage)
+	}
+	if state.CheckpointUpdated == nil {
+		state.CheckpointUpdated = make(map[string]time.Time)
 	}
 	if state.Lessons == nil {
 		state.Lessons = make([]lessonRecord, 0)
@@ -104,7 +107,30 @@ func (repository *FileRepository) SaveCheckpoint(
 		return err
 	}
 	return repository.mutate(ctx, func(state *repositoryState) error {
-		return saveCheckpoint(state, runID, step, raw)
+		return saveCheckpoint(state, runID, step, raw, repository.now())
+	})
+}
+
+func (repository *FileRepository) SaveCheckpoints(
+	ctx context.Context,
+	runID string,
+	values map[string]any,
+) error {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
+	encoded, err := encodeCheckpoints(values)
+	if err != nil {
+		return err
+	}
+	return repository.mutate(ctx, func(state *repositoryState) error {
+		now := repository.now()
+		for step, raw := range encoded {
+			if err := saveCheckpoint(state, runID, step, raw, now); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }
 
@@ -118,6 +144,24 @@ func (repository *FileRepository) LoadCheckpoints(
 	repository.mu.RLock()
 	defer repository.mu.RUnlock()
 	return loadCheckpoints(repository.state, runID)
+}
+
+func (repository *FileRepository) PruneCheckpoints(ctx context.Context, keepRecentRuns int) (int, error) {
+	if err := contextError(ctx); err != nil {
+		return 0, err
+	}
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	next := cloneState(repository.state)
+	removed, err := pruneCheckpoints(&next, keepRecentRuns)
+	if err != nil || removed == 0 {
+		return removed, err
+	}
+	if err := writeStateAtomically(ctx, repository.path, next); err != nil {
+		return 0, err
+	}
+	repository.state = next
+	return removed, nil
 }
 
 func (repository *FileRepository) AppendLessons(

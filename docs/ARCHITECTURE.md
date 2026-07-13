@@ -89,7 +89,7 @@ cmd/cyp ── backtest / sweep / config / version
   → 发布 SSE 事件并保存最终结果
 ```
 
-持久化检查点包括 `proposal`、`risk`、`approval`、`order_intent`、`execution` 和 `result`。敏感字段在写入 Repository 前递归脱敏。
+持久化检查点包括 `proposal`、`risk`、`approval`、`order_intent`、`execution` 和 `result`。同一设置更新或一组检查点通过批量接口原子提交，敏感字段在写入 Repository 前递归脱敏；仅保留最近 2000 个普通 run，`__` 前缀的系统状态不参与清理。
 
 所有金额类契约使用 `internal/contracts.Decimal`。JSON 输出为十进制字符串，请勿在前端或集成层把金额先转为二进制浮点数再回传。
 
@@ -126,12 +126,13 @@ cmd/cyp ── backtest / sweep / config / version
 
 ## 状态、对账与运行时
 
-SafetyState 初始为冻结状态，只有成功的 `StartupReconcile` 可以解除冻结。对账目标是当前 Paper 或 OKX Demo 执行场所，会核验持仓及止损保护；发现未解决差异或保护缺口时服务拒绝启动。
+SafetyState 初始为冻结状态，只有成功的 `StartupReconcile` 可以解除冻结。对账目标是当前 Paper 或 OKX Demo 执行场所，会把执行场所持仓与持久风险账本双向修复；发现未解决差异时服务拒绝启动。持仓监控连续发现原生止损缺口或账户保证金越线时会再次冻结新开仓，已有持仓的监控与 reduce-only 平仓保持运行。
 
-RuntimeEngine 包含两条可选常驻循环：
+RuntimeEngine 包含三条可选常驻循环：
 
 - Scanner 按 `CYP_SCAN_INTERVAL` 扫描 `CYP_WATCHLIST` 并触发 run；
 - PositionMonitor 按 `CYP_MONITOR_INTERVAL` 检查当前模拟执行场所的持仓、保护条件和告警。
+- ExitManager 使用不调用 LLM 的数学状态机检查收益目标、回撤、时间止损和反向条件。
 
 同一 symbol 通过锁避免并发扫描冲突。Kill Switch 阻止新开仓，但平仓接口仍可用于降低风险。
 
@@ -143,7 +144,7 @@ RuntimeEngine 包含两条可选常驻循环：
 | `file` | 原子写入 `CYP_STATE_FILE`，默认 `data/cyp-state.json` | 本地开发、单实例 |
 | `postgres` | pgx 连接池，保存 `checkpoints` 和 `lessons` | Docker Compose、持久部署 |
 
-文件模式通过临时文件、原子替换和 `.bak` 恢复降低中断写入风险；不支持多进程共享。PostgreSQL 模式会在启动时确保所需表和字段存在，初始化 SQL 同时位于 `db/migrations/` 与 `docker/initdb/`。
+文件模式通过临时文件、原子替换和 `.bak` 恢复降低中断写入风险；不支持多进程共享。PostgreSQL 模式会在启动时确保所需表和字段存在，初始化 SQL 同时位于 `db/migrations/` 与 `docker/initdb/`。各连接池限制连接数、生命周期、语句执行和锁等待时间，避免数据库阻塞无限占住运行线程。
 
 OHLCV 归档与上述运行状态 Repository 解耦：即使 `CYP_PERSISTENCE=file`，也可通过 `CYP_OHLCV_ARCHIVE_ENABLED=true` 把行情写入同一 PostgreSQL/TimescaleDB。实时写入使用有界异步队列；失败只记录指标和日志，不阻塞交易、对账或主动平仓。启动及每 6 小时按 watchlist 修复默认 730 天窗口中的时间缺口，upsert 保证重复补数安全。
 
@@ -157,9 +158,11 @@ SSE 使用 `text/event-stream`，连接建立后发送 retry 指令，每 15 秒
 
 Dashboard 的 positions、risk 与 portfolio 共用 1 秒只读账户快照：余额、持仓和唯一币种标记价并发获取，同一轮前端刷新只访问交易所一次。下单路径、对账、自动退出和所有风控计算不读取该缓存。
 
-Orchestrator 对异步 run 执行两级准入：每个币种最多一轮在途，全局等待数量有界；真正执行仍受 `MaxConcurrency` 信号量和共享 symbol lock 双重约束。这样扫描周期、重复点击或上游延迟都不能制造无界 goroutine。API 内存查询只保留最近 2000 轮，完整步骤继续写入持久化 checkpoint。
+Orchestrator 对异步 run 执行两级准入：每个币种最多一轮在途，全局等待数量有界；真正执行仍受 `MaxConcurrency` 信号量和共享 symbol lock 双重约束，人工平仓也使用同一把 symbol lock。这样扫描周期、重复点击或上游延迟都不能制造无界 goroutine 或同币种开平仓竞态。API 内存和持久化查询都只保留最近 2000 轮普通 run。
 
-写请求必须使用 JSON，并经过浏览器同源检查。配置 `CYP_API_TOKEN` 后还必须携带 Bearer token；非回环监听缺少 token 时进程拒绝启动。开发环境默认监听 `127.0.0.1`，对外部署仍须在可信反向代理后增加 TLS、访问控制和审计。
+OKX Demo 下单 POST 不做盲重试；若连接中断或服务端错误导致提交结果未知，适配器使用确定性 `clOrdId` 主动查单并继续等待最终状态。只读 GET 对限流和瞬时服务错误做有界退避重试。任何平仓成功后都会再次确认空仓并清理残余保护单，确认或持久化失败则冻结后续新开仓。
+
+写请求必须使用 JSON，并经过浏览器同源检查。配置 `CYP_API_TOKEN` 后还必须携带 Bearer token；Dashboard 只把令牌保存到当前标签会话并迁移删除旧的持久副本。非回环监听缺少 token 时进程拒绝启动。开发环境默认监听 `127.0.0.1`，对外部署仍须在可信反向代理后增加 TLS、访问控制和审计。回测最多同时执行两项，SSE 最多保持 64 个连接，请求 ID 只接受有限长度的安全字符。
 
 ## 变更规则
 

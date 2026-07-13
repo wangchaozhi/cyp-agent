@@ -54,6 +54,22 @@ export interface HealthStatus {
   kill: boolean;
 }
 
+export interface SafetyStatus {
+  frozen: boolean;
+  reason?: string;
+  last_reconciled?: string;
+  reconcile_active: boolean;
+}
+
+export interface ReadinessStatus {
+  ok: boolean;
+  ready: boolean;
+  execution_ready: boolean;
+  reconciling: boolean;
+  safety: SafetyStatus;
+  reasons: string[];
+}
+
 export interface VenueInfo {
   id: string;
   kind: string;

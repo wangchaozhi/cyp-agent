@@ -2,6 +2,8 @@ package riskstate
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -155,6 +157,89 @@ func TestPaperScopeCanImportLegacyUnscopedCheckpoint(t *testing.T) {
 	}
 	if snapshot := paper.Snapshot(contracts.MustDecimal("9500")); snapshot.TotalDrawdown.String() != "0.05" {
 		t.Fatalf("legacy Paper checkpoint was not imported: %+v", snapshot)
+	}
+}
+
+func TestReconcilePositionsRepairsMissingAndStaleOpenMarkers(t *testing.T) {
+	tracker, err := New(context.Background(), nil, contracts.MustDecimal("10000"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	position := contracts.Position{
+		Symbol: "ETH/USDT:USDT", Side: contracts.SideLong, Instrument: contracts.InstrumentPerp,
+		EntryPrice: contracts.MustDecimal("2000"), SizeBase: contracts.MustDecimal("0.1"),
+	}
+	if err := tracker.ReconcilePositions(context.Background(), []contracts.Position{position}); err != nil {
+		t.Fatal(err)
+	}
+	if trade, ok := tracker.OpenTrade(position.Symbol, position.Instrument); !ok || trade.Kind != "reconcile_open" {
+		t.Fatalf("missing reconciled open marker: %+v ok=%t", trade, ok)
+	}
+	if err := tracker.ReconcilePositions(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if trade, ok := tracker.OpenTrade(position.Symbol, position.Instrument); ok {
+		t.Fatalf("stale open marker survived flat reconciliation: %+v", trade)
+	}
+	trades := tracker.Trades()
+	if len(trades) != 2 || trades[0].Kind != "reconcile_open" || trades[1].Kind != "reconcile_close" {
+		t.Fatalf("unexpected reconciliation ledger: %+v", trades)
+	}
+	if err := tracker.ReconcilePositions(context.Background(), nil); err != nil || len(tracker.Trades()) != 2 {
+		t.Fatalf("flat reconciliation was not idempotent: trades=%+v err=%v", tracker.Trades(), err)
+	}
+}
+
+func TestReconcilePositionsRepairsOfflineReversal(t *testing.T) {
+	tracker, err := New(context.Background(), nil, contracts.MustDecimal("10000"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	position := contracts.Position{
+		Symbol: "BTC/USDT:USDT", Side: contracts.SideLong, Instrument: contracts.InstrumentPerp,
+		EntryPrice: contracts.MustDecimal("60000"), SizeBase: contracts.MustDecimal("0.1"),
+	}
+	if err := tracker.ReconcilePositions(context.Background(), []contracts.Position{position}); err != nil {
+		t.Fatal(err)
+	}
+	position.Side = contracts.SideShort
+	if err := tracker.ReconcilePositions(context.Background(), []contracts.Position{position}); err != nil {
+		t.Fatal(err)
+	}
+	trade, exists := tracker.OpenTrade(position.Symbol, position.Instrument)
+	if !exists || trade.Side != contracts.SideShort {
+		t.Fatalf("offline reversal was not reconciled: exists=%v trade=%+v", exists, trade)
+	}
+	position.SizeBase = contracts.MustDecimal("0.2")
+	if err := tracker.ReconcilePositions(context.Background(), []contracts.Position{position}); err != nil {
+		t.Fatal(err)
+	}
+	trade, exists = tracker.OpenTrade(position.Symbol, position.Instrument)
+	if !exists || trade.SizeBase.Cmp(position.SizeBase) != 0 {
+		t.Fatalf("offline size change was not reconciled: exists=%v trade=%+v", exists, trade)
+	}
+}
+
+type failingRiskRepository struct{}
+
+func (failingRiskRepository) SaveCheckpoint(context.Context, string, string, any) error {
+	return errors.New("storage unavailable")
+}
+func (failingRiskRepository) LoadCheckpoints(context.Context, string) (map[string]json.RawMessage, error) {
+	return map[string]json.RawMessage{}, nil
+}
+
+func TestRiskStateRollsBackMemoryWhenPersistenceFails(t *testing.T) {
+	tracker, err := New(context.Background(), failingRiskRepository{}, contracts.MustDecimal("10000"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := clonePersistedState(tracker.state)
+	if err := tracker.ObserveEquity(context.Background(), contracts.MustDecimal("9000")); err == nil {
+		t.Fatal("failed persistence unexpectedly succeeded")
+	}
+	if tracker.state.CurrentEquity.Cmp(before.CurrentEquity) != 0 || len(tracker.state.EquityPoints) != len(before.EquityPoints) {
+		t.Fatalf("failed persistence polluted memory: before=%+v after=%+v", before, tracker.state)
 	}
 }
 

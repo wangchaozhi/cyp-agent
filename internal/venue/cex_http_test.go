@@ -445,7 +445,9 @@ func TestCEXErrorsPrecisionAdaptersAndTradingGuard(t *testing.T) {
 		_, _ = response.Write([]byte(`{"code":-1003,"msg":"too many requests"}`))
 	}))
 	defer server.Close()
-	venue := newTestCEX(t, "binance", server.URL, nil)
+	venue := newTestCEX(t, "binance", server.URL, func(config *CEXConfig) {
+		config.RetryDelay = func(int, time.Duration) time.Duration { return 0 }
+	})
 	_, err := venue.FetchTicker(context.Background(), "BTC/USDT")
 	var classified *CEXError
 	if !errors.As(err, &classified) || classified.Kind != CEXErrorRateLimit ||
@@ -457,8 +459,10 @@ func TestCEXErrorsPrecisionAdaptersAndTradingGuard(t *testing.T) {
 	if err != nil || quantized.Cmp(contracts.MustDecimal("1.234")) != 0 {
 		t.Fatalf("quantized=%s err=%v", quantized, err)
 	}
-	if got := SanitizeOKXClientID("run-1_with/symbols", "-tp0"); got != "run1withsymbolstp0" {
-		t.Fatalf("sanitized=%q", got)
+	firstID := SanitizeOKXClientID("run-1_with/symbols", "-tp0")
+	secondID := SanitizeOKXClientID("run1_with/symbols", "-tp0")
+	if len(firstID) > 32 || firstID == secondID || firstID != SanitizeOKXClientID("run-1_with/symbols", "-tp0") {
+		t.Fatalf("collision-safe ids first=%q second=%q", firstID, secondID)
 	}
 	intent := contracts.OrderIntent{
 		ClientID: "run-1", Instrument: contracts.InstrumentPerp, MarginMode: contracts.MarginModeIsolated,
@@ -476,6 +480,113 @@ func TestCEXErrorsPrecisionAdaptersAndTradingGuard(t *testing.T) {
 	}
 	if cancelErr := venue.Cancel(context.Background(), "order"); !errors.Is(cancelErr, ErrCEXTradingDisabled) {
 		t.Fatalf("cancel error=%v", cancelErr)
+	}
+}
+
+func TestCEXRetriesSafeGETRequestsOnly(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		if calls.Add(1) < 3 {
+			response.WriteHeader(http.StatusTooManyRequests)
+			_, _ = response.Write([]byte(`{"code":-1003,"msg":"slow down"}`))
+			return
+		}
+		_, _ = response.Write([]byte(`{"symbol":"BTCUSDT","price":"100"}`))
+	}))
+	defer server.Close()
+	target := newTestCEX(t, "binance", server.URL, func(config *CEXConfig) {
+		config.RetryDelay = func(int, time.Duration) time.Duration { return 0 }
+	})
+	price, err := target.FetchTicker(context.Background(), "BTC/USDT")
+	if err != nil || price.Cmp(contracts.MustDecimal("100")) != 0 || calls.Load() != 3 {
+		t.Fatalf("price=%s calls=%d err=%v", price.String(), calls.Load(), err)
+	}
+}
+
+func TestOKXDemoRecoversAmbiguousOrderByClientID(t *testing.T) {
+	const secret = "okx-demo-secret"
+	var placed atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/api/v5/public/instruments":
+			_, _ = response.Write([]byte(`{"code":"0","data":[{"instId":"ETH-USDT-SWAP","baseCcy":"ETH","quoteCcy":"USDT","settleCcy":"USDT","ctType":"linear","ctValCcy":"ETH","ctVal":"0.1","lotSz":"1","minSz":"1","tickSz":"0.01","state":"live"}]}`))
+		case "/api/v5/market/ticker":
+			_, _ = response.Write([]byte(`{"code":"0","data":[{"last":"2000"}]}`))
+		case "/api/v5/account/config":
+			_, _ = response.Write([]byte(`{"code":"0","data":[{"posMode":"net_mode"}]}`))
+		case "/api/v5/account/set-leverage":
+			_, _ = response.Write([]byte(`{"code":"0","data":[{}]}`))
+		case "/api/v5/trade/order":
+			if request.Method == http.MethodPost {
+				placed.Add(1)
+				panic(http.ErrAbortHandler)
+			}
+			if request.URL.Query().Get("clOrdId") == "" && request.URL.Query().Get("ordId") == "" {
+				t.Errorf("recovery query omitted order identity: %s", request.URL.RawQuery)
+			}
+			_, _ = response.Write([]byte(`{"code":"0","data":[{"ordId":"recovered-1","clOrdId":"ambiguousorder","state":"filled","avgPx":"2000","accFillSz":"1","fee":"0","feeCcy":"USDT"}]}`))
+		default:
+			http.NotFound(response, request)
+		}
+	}))
+	defer server.Close()
+	target := newTestCEX(t, "okx", server.URL, func(config *CEXConfig) {
+		config.APIKey, config.APISecret, config.Passphrase = "key", secret, "pass"
+		config.Demo, config.EnableDemoTrading = true, true
+		config.RetryDelay = func(int, time.Duration) time.Duration { return 0 }
+	})
+	stop := contracts.MustDecimal("1800")
+	result, err := target.Place(context.Background(), contracts.OrderIntent{
+		ClientID: "ambiguous-order", Symbol: "ETH/USDT:USDT", Venue: "okx",
+		Side: contracts.SideLong, Instrument: contracts.InstrumentPerp,
+		OrderType: contracts.EntryTypeMarket, SizeQuote: contracts.MustDecimal("200"),
+		Leverage: 2, MarginMode: contracts.MarginModeIsolated, StopLoss: &stop,
+	})
+	if err != nil || result.Status != contracts.OrderStatusFilled || result.OrderID == nil ||
+		*result.OrderID != "recovered-1" || placed.Load() != 1 {
+		t.Fatalf("recovered result=%#v placed=%d err=%v", result, placed.Load(), err)
+	}
+}
+
+func TestOKXDemoMarksUnresolvedAmbiguousSubmissionUnknown(t *testing.T) {
+	var placed atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/api/v5/public/instruments":
+			_, _ = response.Write([]byte(`{"code":"0","data":[{"instId":"ETH-USDT-SWAP","baseCcy":"ETH","quoteCcy":"USDT","settleCcy":"USDT","ctType":"linear","ctValCcy":"ETH","ctVal":"0.1","lotSz":"1","minSz":"1","tickSz":"0.01","state":"live"}]}`))
+		case "/api/v5/market/ticker":
+			_, _ = response.Write([]byte(`{"code":"0","data":[{"last":"2000"}]}`))
+		case "/api/v5/account/config":
+			_, _ = response.Write([]byte(`{"code":"0","data":[{"posMode":"net_mode"}]}`))
+		case "/api/v5/account/set-leverage":
+			_, _ = response.Write([]byte(`{"code":"0","data":[{}]}`))
+		case "/api/v5/trade/order":
+			if request.Method == http.MethodPost {
+				placed.Add(1)
+				panic(http.ErrAbortHandler)
+			}
+			_, _ = response.Write([]byte(`{"code":"0","data":[]}`))
+		default:
+			http.NotFound(response, request)
+		}
+	}))
+	defer server.Close()
+	target := newTestCEX(t, "okx", server.URL, func(config *CEXConfig) {
+		config.APIKey, config.APISecret, config.Passphrase = "key", "secret", "pass"
+		config.Demo, config.EnableDemoTrading = true, true
+		config.RetryDelay = func(int, time.Duration) time.Duration { return 0 }
+	})
+	stop := contracts.MustDecimal("1800")
+	_, err := target.Place(context.Background(), contracts.OrderIntent{
+		ClientID: "unresolved-order", Symbol: "ETH/USDT:USDT", Venue: "okx",
+		Side: contracts.SideLong, Instrument: contracts.InstrumentPerp,
+		OrderType: contracts.EntryTypeMarket, SizeQuote: contracts.MustDecimal("200"),
+		Leverage: 2, MarginMode: contracts.MarginModeIsolated, StopLoss: &stop,
+	})
+	if !errors.Is(err, ErrOrderStateUnknown) || placed.Load() != 1 {
+		t.Fatalf("unresolved submission error=%v placed=%d", err, placed.Load())
 	}
 }
 

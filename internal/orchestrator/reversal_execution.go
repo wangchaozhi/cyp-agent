@@ -129,7 +129,11 @@ func (s *Service) closeForReversal(
 	_ = s.journal.Transition(runID+":reverse-close:submit", clientID, contracts.OrderStatusSubmitting, nil, "")
 	execution, err := s.venue.Place(ctx, intent)
 	if err != nil {
-		_ = s.journal.Transition(runID+":reverse-close:fail", clientID, contracts.OrderStatusFailed, nil, err.Error())
+		status := contracts.OrderStatusFailed
+		if s.freezeUnknownOrder(err) {
+			status = contracts.OrderStatusUnknown
+		}
+		_ = s.journal.Transition(runID+":reverse-close:fail", clientID, status, nil, err.Error())
 		return err
 	}
 	s.recordExecution(runID+":reverse-close", clientID, execution)
@@ -139,11 +143,7 @@ func (s *Service) closeForReversal(
 		}
 		return fmt.Errorf("close order status is %s", execution.Status)
 	}
-	flatErr := s.waitUntilFlat(ctx, position.Symbol, position.Instrument)
-	var protectiveErr error
-	if flatErr == nil {
-		protectiveErr = s.clearProtectiveOrders(ctx, position.Symbol)
-	}
+	finalizeErr := s.FinalizeClose(ctx, *position)
 	balances, balanceErr := s.venue.Balances(ctx)
 	equity := balances.TotalQuote
 	if !equity.IsPositive() {
@@ -167,8 +167,7 @@ func (s *Service) closeForReversal(
 		_, reviewErr = s.ReviewClosed(ctx, *position, execution, pnl, reference)
 	}
 	if joined := errors.Join(
-		wrapReversalError("verify flat", flatErr),
-		wrapReversalError("clear protection", protectiveErr),
+		wrapReversalError("finalize close", finalizeErr),
 		wrapReversalError("post-close balances", balanceErr),
 		wrapReversalError("persist close", stateErr),
 		wrapReversalError("review close", reviewErr),
@@ -215,6 +214,16 @@ func (s *Service) waitUntilFlat(ctx context.Context, symbol string, instrument c
 		}
 	}
 	return errors.New("position still exists after reduce-only close")
+}
+
+// FinalizeClose verifies that a reduce-only fill actually flattened the
+// position and removes residual TP/SL algorithms before the same symbol may be
+// opened again. Manual, automated, and reversal closes share this invariant.
+func (s *Service) FinalizeClose(ctx context.Context, position contracts.Position) error {
+	if err := s.waitUntilFlat(ctx, position.Symbol, position.Instrument); err != nil {
+		return err
+	}
+	return s.clearProtectiveOrders(ctx, position.Symbol)
 }
 
 func (s *Service) clearProtectiveOrders(ctx context.Context, symbol string) error {

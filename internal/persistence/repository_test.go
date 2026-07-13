@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestMemoryRepositoryConcurrentAndBounded(t *testing.T) {
@@ -106,6 +107,52 @@ func TestCheckpointSecretsAreMasked(t *testing.T) {
 	}
 	if !containsAny(text, "***") {
 		t.Fatalf("mask missing from checkpoint: %s", text)
+	}
+}
+
+func TestCheckpointBatchIsAtomicAndRunHistoryIsBounded(t *testing.T) {
+	t.Parallel()
+	repository := NewMemoryRepository(10)
+	now := time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC)
+	repository.now = func() time.Time { return now }
+	ctx := context.Background()
+	if err := repository.SaveCheckpoints(ctx, "run-1", map[string]any{
+		"proposal": map[string]any{"ok": true}, "result": map[string]any{"status": "done"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := repository.LoadCheckpoints(ctx, "run-1")
+	if err := repository.SaveCheckpoints(ctx, "run-1", map[string]any{
+		"valid": true, "invalid": func() {},
+	}); err == nil {
+		t.Fatal("invalid checkpoint batch unexpectedly succeeded")
+	}
+	after, _ := repository.LoadCheckpoints(ctx, "run-1")
+	if len(after) != len(before) {
+		t.Fatalf("failed batch partially changed checkpoints: before=%v after=%v", before, after)
+	}
+	for index := 2; index <= 4; index++ {
+		now = now.Add(time.Minute)
+		if err := repository.SaveCheckpoint(ctx, fmt.Sprintf("run-%d", index), "result", index); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := repository.SaveCheckpoint(ctx, "__runtime_preferences__", "watchlist", []string{"BTC/USDT"}); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := repository.PruneCheckpoints(ctx, 2)
+	if err != nil || removed != 2 {
+		t.Fatalf("prune removed=%d err=%v", removed, err)
+	}
+	for _, runID := range []string{"run-1", "run-2"} {
+		steps, _ := repository.LoadCheckpoints(ctx, runID)
+		if len(steps) != 0 {
+			t.Fatalf("old run %s was retained: %v", runID, steps)
+		}
+	}
+	protected, _ := repository.LoadCheckpoints(ctx, "__runtime_preferences__")
+	if len(protected) != 1 {
+		t.Fatalf("system checkpoint was pruned: %v", protected)
 	}
 }
 

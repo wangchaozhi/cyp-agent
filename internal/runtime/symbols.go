@@ -12,11 +12,16 @@ import (
 // callers should share the same instance.
 type SymbolLocks struct {
 	mu    sync.Mutex
-	locks map[string]chan struct{}
+	locks map[string]*symbolLock
+}
+
+type symbolLock struct {
+	semaphore  chan struct{}
+	references int
 }
 
 func NewSymbolLocks() *SymbolLocks {
-	return &SymbolLocks{locks: make(map[string]chan struct{})}
+	return &SymbolLocks{locks: make(map[string]*symbolLock)}
 }
 
 func (locks *SymbolLocks) Do(
@@ -24,43 +29,54 @@ func (locks *SymbolLocks) Do(
 	symbol string,
 	operation func(context.Context) error,
 ) error {
-	semaphore, err := locks.semaphoreFor(ctx, symbol, operation)
+	entry, key, err := locks.entryFor(ctx, symbol, operation)
 	if err != nil {
 		return err
 	}
+	defer locks.release(key, entry)
 	select {
-	case semaphore <- struct{}{}:
-		defer func() { <-semaphore }()
+	case entry.semaphore <- struct{}{}:
+		defer func() { <-entry.semaphore }()
 	case <-ctx.Done():
 		return ctx.Err()
 	}
 	return operation(ctx)
 }
 
-func (locks *SymbolLocks) semaphoreFor(
+func (locks *SymbolLocks) entryFor(
 	ctx context.Context,
 	symbol string,
 	operation func(context.Context) error,
-) (chan struct{}, error) {
+) (*symbolLock, string, error) {
 	if ctx == nil {
-		return nil, errors.New("symbol lock context is required")
+		return nil, "", errors.New("symbol lock context is required")
 	}
 	if operation == nil {
-		return nil, errors.New("symbol operation is required")
+		return nil, "", errors.New("symbol operation is required")
 	}
-	symbol = strings.TrimSpace(symbol)
+	symbol = strings.ToUpper(strings.TrimSpace(symbol))
 	if symbol == "" {
-		return nil, errors.New("symbol is required")
+		return nil, "", errors.New("symbol is required")
 	}
 	if locks == nil {
-		return nil, errors.New("symbol locks are unavailable")
+		return nil, "", errors.New("symbol locks are unavailable")
 	}
 	locks.mu.Lock()
 	defer locks.mu.Unlock()
-	semaphore := locks.locks[symbol]
-	if semaphore == nil {
-		semaphore = make(chan struct{}, 1)
-		locks.locks[symbol] = semaphore
+	entry := locks.locks[symbol]
+	if entry == nil {
+		entry = &symbolLock{semaphore: make(chan struct{}, 1)}
+		locks.locks[symbol] = entry
 	}
-	return semaphore, nil
+	entry.references++
+	return entry, symbol, nil
+}
+
+func (locks *SymbolLocks) release(symbol string, entry *symbolLock) {
+	locks.mu.Lock()
+	defer locks.mu.Unlock()
+	entry.references--
+	if entry.references == 0 && locks.locks[symbol] == entry {
+		delete(locks.locks, symbol)
+	}
 }

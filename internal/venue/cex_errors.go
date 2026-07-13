@@ -24,6 +24,7 @@ const (
 var (
 	ErrCEXTradingDisabled = errors.New("真实 CEX 与非 OKX Demo 下单已硬禁用")
 	ErrCEXUnsupported     = errors.New("exchange operation is unsupported")
+	ErrOrderStateUnknown  = errors.New("exchange order submission state is unknown")
 )
 
 // CEXError preserves a stable classification while retaining exchange status

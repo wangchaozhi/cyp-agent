@@ -83,3 +83,26 @@ func TestScanIntervalStoreRoundTrip(t *testing.T) {
 		t.Fatalf("scan interval=%d found=%v err=%v", seconds, found, err)
 	}
 }
+
+func TestSavePreferencesCommitsCombinedDashboardUpdate(t *testing.T) {
+	ctx := context.Background()
+	store := New(persistence.NewMemoryRepository(10))
+	watchlist := []string{"BTC/USDT:USDT", "SOL/USDT:USDT"}
+	automation := config.DefaultSettings().Automation
+	automation.MinConfidence = 0.72
+	interval := 300
+	if err := store.SavePreferences(ctx, Update{
+		Watchlist: &watchlist, Automation: &automation, ScanInterval: &interval,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	gotWatchlist, watchlistFound, watchlistErr := store.LoadWatchlist(ctx)
+	gotAutomation, automationFound, automationErr := store.LoadAutomation(ctx)
+	gotInterval, intervalFound, intervalErr := store.LoadScanInterval(ctx)
+	if watchlistErr != nil || automationErr != nil || intervalErr != nil ||
+		!watchlistFound || !automationFound || !intervalFound ||
+		len(gotWatchlist) != 2 || gotAutomation.MinConfidence != 0.72 || gotInterval != 300 {
+		t.Fatalf("combined preferences watchlist=%v automation=%+v interval=%d errors=%v/%v/%v",
+			gotWatchlist, gotAutomation, gotInterval, watchlistErr, automationErr, intervalErr)
+	}
+}

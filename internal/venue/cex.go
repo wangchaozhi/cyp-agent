@@ -26,6 +26,11 @@ import (
 
 const maxCEXResponseBytes = 4 << 20
 
+const (
+	defaultCEXGETRetries = 2
+	maxCEXRetryDelay     = 2 * time.Second
+)
+
 type CEXConfig struct {
 	ExchangeID           string
 	BaseURL              string
@@ -39,6 +44,8 @@ type CEXConfig struct {
 	QuoteCurrency        string
 	EstimatedSlippageBPS contracts.Decimal
 	Clock                func() time.Time
+	GETRetries           *int
+	RetryDelay           func(attempt int, retryAfter time.Duration) time.Duration
 }
 
 type MarketPrecision struct {
@@ -63,6 +70,8 @@ type CEXVenue struct {
 	quoteCurrency  string
 	slippageBPS    contracts.Decimal
 	now            func() time.Time
+	getRetries     int
+	retryDelay     func(attempt int, retryAfter time.Duration) time.Duration
 
 	placeMu     sync.Mutex
 	mu          sync.RWMutex
@@ -120,6 +129,13 @@ func NewCEXVenue(config CEXConfig) (*CEXVenue, error) {
 	if config.Clock == nil {
 		config.Clock = time.Now
 	}
+	getRetries := defaultCEXGETRetries
+	if config.GETRetries != nil {
+		getRetries = max(0, *config.GETRetries)
+	}
+	if config.RetryDelay == nil {
+		config.RetryDelay = cexRetryDelay
+	}
 	if config.EnableDemoTrading {
 		if exchange != "okx" || !config.Demo {
 			return nil, &CEXError{
@@ -140,6 +156,7 @@ func NewCEXVenue(config CEXConfig) (*CEXVenue, error) {
 		apiKey: config.APIKey, apiSecret: config.APISecret, passphrase: config.Passphrase,
 		demo: config.Demo, demoTrading: config.EnableDemoTrading, quoteCurrency: config.QuoteCurrency,
 		slippageBPS: config.EstimatedSlippageBPS, now: config.Clock,
+		getRetries: getRetries, retryDelay: config.RetryDelay,
 		precision: make(map[string]MarketPrecision), instruments: make(map[string]okxInstrumentSpec),
 		fills: make(map[string]contracts.ExecutionResult), orderRefs: make(map[string]okxOrderRef),
 	}, nil
@@ -344,14 +361,33 @@ func (venue *CEXVenue) EntryParameters(intent contracts.OrderIntent, isClose boo
 var nonAlphanumeric = regexp.MustCompile(`[^A-Za-z0-9]`)
 
 func SanitizeOKXClientID(raw, suffix string) string {
-	value := nonAlphanumeric.ReplaceAllString(raw+suffix, "")
+	original := raw + suffix
+	value := nonAlphanumeric.ReplaceAllString(original, "")
 	if value == "" {
 		value = "c"
 	}
-	if len(value) > 32 {
-		value = value[:32]
+	// OKX ignores punctuation in our normalized IDs and limits clOrdId to 32
+	// characters. Preserve a hash whenever normalization changed the source or
+	// truncation is needed, otherwise distinct run IDs could collapse into the
+	// same exchange idempotency key.
+	if value != original || len(value) > 32 {
+		digest := sha256.Sum256([]byte(original))
+		hash := hex.EncodeToString(digest[:4])
+		prefixLimit := 32 - len(hash)
+		if len(value) > prefixLimit {
+			value = value[:prefixLimit]
+		}
+		value += hash
 	}
 	return value
+}
+
+func cexRetryDelay(attempt int, retryAfter time.Duration) time.Duration {
+	if retryAfter > 0 {
+		return min(retryAfter, maxCEXRetryDelay)
+	}
+	delay := 100 * time.Millisecond * time.Duration(1<<min(attempt, 4))
+	return min(delay, maxCEXRetryDelay)
 }
 
 // NewHTTPRequest is exported for adapter-level testing and future read-only
@@ -465,6 +501,41 @@ func (venue *CEXVenue) doJSONBody(
 }
 
 func (venue *CEXVenue) doJSONBodyAt(
+	ctx context.Context,
+	baseURL, method, path string,
+	query url.Values,
+	body []byte,
+	private bool,
+	target any,
+) error {
+	var lastErr error
+	for attempt := 0; attempt <= venue.getRetries; attempt++ {
+		err := venue.doJSONBodyAtOnce(ctx, baseURL, method, path, query, body, private, target)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		var classified *CEXError
+		if method != http.MethodGet || attempt == venue.getRetries ||
+			!errors.As(err, &classified) || !classified.Retryable() {
+			return err
+		}
+		delay := venue.retryDelay(attempt, classified.RetryAfter)
+		if delay <= 0 {
+			continue
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return lastErr
+}
+
+func (venue *CEXVenue) doJSONBodyAtOnce(
 	ctx context.Context,
 	baseURL, method, path string,
 	query url.Values,

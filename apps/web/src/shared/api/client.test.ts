@@ -26,7 +26,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 const fetchMock = vi.fn();
 
 beforeEach(() => {
-  vi.stubGlobal("window", { localStorage: fakeStorage() });
+  vi.stubGlobal("window", { localStorage: fakeStorage(), sessionStorage: fakeStorage() });
   vi.stubGlobal("fetch", fetchMock);
   fetchMock.mockReset();
 });
@@ -73,6 +73,18 @@ describe("api client error handling", () => {
     const assertion = expect(request).rejects.toThrow("请求超时");
     await vi.advanceTimersByTimeAsync(30_000);
     await assertion;
+  });
+
+  it("keeps API tokens in session storage and removes persistent legacy copies", async () => {
+    window.localStorage.setItem("cyp-agent.api-token", "legacy-secret");
+    fetchMock.mockResolvedValue(jsonResponse({ kill: true }));
+
+    await cypApi.setKillSwitch(true);
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(new Headers(init.headers).get("Authorization")).toBe("Bearer legacy-secret");
+    expect(window.localStorage.getItem("cyp-agent.api-token")).toBeNull();
+    expect(window.sessionStorage.getItem("cyp-agent.api-token")).toBe("legacy-secret");
   });
 
   it("surfaces the structured detail from error responses", async () => {

@@ -37,11 +37,16 @@ import (
 	"github.com/wangchaozhi/cyp-agent/internal/orchestrator"
 	"github.com/wangchaozhi/cyp-agent/internal/riskstate"
 	runtimecore "github.com/wangchaozhi/cyp-agent/internal/runtime"
+	"github.com/wangchaozhi/cyp-agent/internal/runtimeprefs"
 	"github.com/wangchaozhi/cyp-agent/internal/tokenusage"
 	"github.com/wangchaozhi/cyp-agent/internal/venue"
 )
 
-const maxRequestBody = 1 << 20
+const (
+	maxRequestBody         = 1 << 20
+	maxConcurrentBacktests = 2
+	maxEventStreams        = 64
+)
 
 type Server struct {
 	control           *control.State
@@ -54,13 +59,17 @@ type Server struct {
 	registry          *venue.VenueRegistry
 	marketData        *data.MarketAggregator
 	safety            *runtimecore.SafetyState
+	symbolLocks       *runtimecore.SymbolLocks
 	riskState         *riskstate.Tracker
 	tokenUsage        *tokenusage.Tracker
 	accountCache      *accountSnapshotCache
 	llmFactory        func(config.Settings) *llm.Client
 	historicalVenue   venue.Venue
 	historicalArchive ohlcv.Archive
-	watchlistStore    interface {
+	preferenceStore   interface {
+		SavePreferences(context.Context, runtimeprefs.Update) error
+	}
+	watchlistStore interface {
 		SaveWatchlist(context.Context, []string) error
 	}
 	automationStore interface {
@@ -75,6 +84,8 @@ type Server struct {
 	logger                    *slog.Logger
 	authToken                 string
 	corsOrigins               map[string]struct{}
+	backtestSlots             chan struct{}
+	eventStreamSlots          chan struct{}
 	handler                   http.Handler
 }
 
@@ -89,12 +100,16 @@ type Dependencies struct {
 	Registry          *venue.VenueRegistry
 	Market            *data.MarketAggregator
 	Safety            *runtimecore.SafetyState
+	SymbolLocks       *runtimecore.SymbolLocks
 	RiskState         *riskstate.Tracker
 	TokenUsage        *tokenusage.Tracker
 	LLMFactory        func(config.Settings) *llm.Client
 	HistoricalVenue   venue.Venue
 	HistoricalArchive ohlcv.Archive
-	WatchlistStore    interface {
+	PreferenceStore   interface {
+		SavePreferences(context.Context, runtimeprefs.Update) error
+	}
+	WatchlistStore interface {
 		SaveWatchlist(context.Context, []string) error
 	}
 	AutomationStore interface {
@@ -125,18 +140,22 @@ func New(dependencies Dependencies) (*Server, error) {
 		metrics: dependencies.Metrics, runtimeMetrics: dependencies.RuntimeMetrics,
 		registry: dependencies.Registry, marketData: dependencies.Market, safety: dependencies.Safety,
 		riskState:                 dependencies.RiskState,
+		symbolLocks:               dependencies.SymbolLocks,
 		tokenUsage:                dependencies.TokenUsage,
 		accountCache:              newAccountSnapshotCache(accountSnapshotTTL),
 		llmFactory:                dependencies.LLMFactory,
 		historicalVenue:           dependencies.HistoricalVenue,
 		historicalArchive:         dependencies.HistoricalArchive,
+		preferenceStore:           dependencies.PreferenceStore,
 		watchlistStore:            dependencies.WatchlistStore,
 		automationStore:           dependencies.AutomationStore,
 		scanIntervalStore:         dependencies.ScanIntervalStore,
 		notifyScanScheduleChanged: dependencies.NotifyScanScheduleChanged,
 		ensureRuntime:             dependencies.EnsureRuntime,
 		webDir:                    dependencies.WebDir, logger: logger, authToken: strings.TrimSpace(dependencies.APIToken),
-		corsOrigins: configuredCORSOrigins(),
+		corsOrigins:      configuredCORSOrigins(),
+		backtestSlots:    make(chan struct{}, maxConcurrentBacktests),
+		eventStreamSlots: make(chan struct{}, maxEventStreams),
 	}
 	server.handler = server.routes()
 	return server, nil
@@ -231,6 +250,25 @@ func (s *Server) updateSettings(w http.ResponseWriter, request *http.Request) {
 	persistContext, cancelPersist := context.WithTimeout(request.Context(), 5*time.Second)
 	defer cancelPersist()
 	persist := func(next config.Settings) error {
+		if s.preferenceStore != nil {
+			update := runtimeprefs.Update{}
+			if payload.Watchlist != nil {
+				watchlist := next.WatchlistSymbols()
+				update.Watchlist = &watchlist
+			}
+			if payload.Automation != nil {
+				automation := next.Automation
+				update.Automation = &automation
+			}
+			if payload.ScanInterval != nil {
+				interval := next.ScanInterval
+				update.ScanInterval = &interval
+			}
+			if err := s.preferenceStore.SavePreferences(persistContext, update); err != nil {
+				return fmt.Errorf("persist runtime preferences: %w", err)
+			}
+			return nil
+		}
 		if payload.Watchlist != nil && s.watchlistStore != nil {
 			if err := s.watchlistStore.SaveWatchlist(persistContext, next.WatchlistSymbols()); err != nil {
 				return fmt.Errorf("persist watchlist: %w", err)
@@ -533,6 +571,13 @@ func (s *Server) backtest(w http.ResponseWriter, request *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
+	select {
+	case s.backtestSlots <- struct{}{}:
+		defer func() { <-s.backtestSlots }()
+	default:
+		writeError(w, http.StatusTooManyRequests, "回测任务已满，请稍后重试")
+		return
+	}
 	if params.Data == "cex" {
 		if s.historicalVenue == nil {
 			writeError(w, http.StatusBadGateway, "真实历史拉取失败：未配置 CEX 行情场所")
@@ -571,6 +616,13 @@ func (s *Server) backtest(w http.ResponseWriter, request *http.Request) {
 }
 
 func (s *Server) eventStream(w http.ResponseWriter, request *http.Request) {
+	select {
+	case s.eventStreamSlots <- struct{}{}:
+		defer func() { <-s.eventStreamSlots }()
+	default:
+		writeError(w, http.StatusTooManyRequests, "实时事件连接已达到上限")
+		return
+	}
 	flusher, ok := responseFlusher(w)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "streaming unsupported")
@@ -669,7 +721,7 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 		w = stateWriter
 		started := time.Now()
 		requestID := strings.TrimSpace(request.Header.Get("X-Request-ID"))
-		if requestID == "" {
+		if !validRequestID(requestID) {
 			requestID = shortID()
 		}
 		w.Header().Set("X-Request-ID", requestID)
@@ -864,6 +916,20 @@ func shortID() string {
 		return fmt.Sprintf("fallback-%d", time.Now().UnixNano())
 	}
 	return hex.EncodeToString(value[:])
+}
+
+func validRequestID(value string) bool {
+	if value == "" || len(value) > 128 {
+		return false
+	}
+	for _, char := range value {
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') ||
+			(char >= '0' && char <= '9') || strings.ContainsRune("._:-", char) {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // ReadSSEData is used by contract tests and operational smoke tools.

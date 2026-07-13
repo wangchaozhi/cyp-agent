@@ -204,6 +204,8 @@ func NewPostgresArchive(ctx context.Context, dsn string) (*PostgresArchive, erro
 		return nil, fmt.Errorf("parse OHLCV archive config: %w", err)
 	}
 	poolConfig.MaxConns = 4
+	poolConfig.ConnConfig.RuntimeParams["statement_timeout"] = "10s"
+	poolConfig.ConnConfig.RuntimeParams["lock_timeout"] = "3s"
 	poolConfig.MaxConnIdleTime = 5 * time.Minute
 	poolConfig.MaxConnLifetime = time.Hour
 	poolConfig.HealthCheckPeriod = 30 * time.Second

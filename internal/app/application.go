@@ -361,7 +361,9 @@ func New(
 		orchestrator.WithRiskState(riskTracker), orchestrator.WithSafety(safety), orchestrator.WithLLM(baseLLM),
 		orchestrator.WithSymbolLocks(locks))
 
-	reconciler, err := runtimecore.NewVenueReconciler(executionVenue, bus, logger)
+	reconciler, err := runtimecore.NewVenueReconciler(
+		executionVenue, bus, logger, runtimecore.WithPositionState(riskTracker),
+	)
 	if err != nil {
 		closeTokenUsage(context.Background())
 		closeArchive(context.Background())
@@ -413,7 +415,7 @@ func New(
 	monitor, err := runtimecore.NewPositionMonitor(runtimecore.PositionMonitorConfig{
 		Venue: executionVenue, Interval: time.Duration(settings.MonitorInterval) * time.Second,
 		Events: bus, Alerter: alerter, Logger: logger, Metrics: runtimeMetrics,
-		MinMarginRatio: settings.Risk.MinMarginRatio,
+		MinMarginRatio: settings.Risk.MinMarginRatio, Safety: safety,
 	})
 	if err != nil {
 		closeTokenUsage(context.Background())
@@ -438,7 +440,7 @@ func New(
 		},
 		Exit: func(exitContext context.Context, position contracts.Position, mark contracts.Decimal, decision runtimecore.ExitDecision) error {
 			return locks.Do(exitContext, position.Symbol, func(lockedContext context.Context) error {
-				return executeAutomatedExit(lockedContext, executionVenue, riskTracker, orch, bus, logger, position, mark, decision)
+				return executeAutomatedExit(lockedContext, executionVenue, riskTracker, orch, bus, logger, safety, position, mark, decision)
 			})
 		},
 		Events: bus, Logger: logger,
@@ -479,9 +481,10 @@ func New(
 	server, err := api.New(api.Dependencies{
 		Control: state, Venue: executionVenue, Events: bus, Gate: gate, Orchestrator: orch,
 		Metrics: runMetrics, RuntimeMetrics: runtimeMetrics, Registry: registry,
-		Market: aggregator, Safety: safety, HistoricalVenue: historicalVenue,
+		Market: aggregator, Safety: safety, SymbolLocks: locks, HistoricalVenue: historicalVenue,
 		HistoricalArchive: historicalArchive,
-		RiskState:         riskTracker, WatchlistStore: preferenceStore, AutomationStore: preferenceStore,
+		RiskState:         riskTracker, PreferenceStore: preferenceStore,
+		WatchlistStore: preferenceStore, AutomationStore: preferenceStore,
 		TokenUsage: usageTracker, LLMFactory: llmFactory,
 		ScanIntervalStore: preferenceStore, NotifyScanScheduleChanged: scanner.NotifyScheduleChanged,
 		EnsureRuntime: func() error {
@@ -548,6 +551,7 @@ func executeAutomatedExit(
 	orch *orchestrator.Service,
 	bus *events.Bus,
 	logger *slog.Logger,
+	safety *runtimecore.SafetyState,
 	position contracts.Position,
 	mark contracts.Decimal,
 	decision runtimecore.ExitDecision,
@@ -564,6 +568,9 @@ func executeAutomatedExit(
 		MarginMode: marginMode, ReduceOnly: true, TakeProfit: contracts.List[contracts.Decimal]{},
 	})
 	if err != nil {
+		if errors.Is(err, venue.ErrOrderStateUnknown) && safety != nil {
+			safety.Freeze("automated close order submission state is unknown")
+		}
 		return err
 	}
 	if result.Status != contracts.OrderStatusFilled {
@@ -572,11 +579,13 @@ func executeAutomatedExit(
 		}
 		return fmt.Errorf("automated exit status is %s", result.Status)
 	}
+	finalizeErr := orch.FinalizeClose(ctx, position)
 	reference := result.ClientID
 	if opened, ok := riskTracker.OpenTrade(position.Symbol, position.Instrument); ok && opened.RunID != "" {
 		reference = opened.RunID
 	}
 	balances, balanceErr := target.Balances(ctx)
+	var stateErr error
 	if balanceErr != nil {
 		logger.ErrorContext(ctx, "automated_exit_balance_failed", "error", balanceErr.Error())
 	} else {
@@ -584,7 +593,8 @@ func executeAutomatedExit(
 		if !equity.IsPositive() {
 			equity = balances.FreeQuote
 		}
-		record, stateErr := riskTracker.RecordClose(ctx, reference, position, result, equity)
+		var record riskstate.TradeRecord
+		record, stateErr = riskTracker.RecordClose(ctx, reference, position, result, equity)
 		if stateErr != nil {
 			logger.ErrorContext(ctx, "automated_exit_persist_failed", "error", stateErr.Error())
 		} else if _, reviewErr := orch.ReviewClosed(ctx, position, result, record.PNLQuote, reference); reviewErr != nil {
@@ -594,7 +604,24 @@ func executeAutomatedExit(
 	bus.Emit("automated_exit", reference, map[string]any{
 		"symbol": position.Symbol, "execution": result, "exit_decision": decision,
 	})
+	if criticalErr := errors.Join(
+		wrapApplicationError("finalize close", finalizeErr),
+		wrapApplicationError("post-close balances", balanceErr),
+		wrapApplicationError("persist close", stateErr),
+	); criticalErr != nil {
+		if safety != nil {
+			safety.Freeze("automated close reconciliation failed")
+		}
+		return criticalErr
+	}
 	return nil
+}
+
+func wrapApplicationError(operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%s: %w", operation, err)
 }
 
 func (application *Application) Close() {

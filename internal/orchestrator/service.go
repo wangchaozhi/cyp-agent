@@ -229,6 +229,12 @@ func (s *Service) start(symbol, source string) (contracts.RunAccepted, error) {
 	if symbol == "" {
 		return contracts.RunAccepted{}, ErrEmptySymbol
 	}
+	// Fail before collecting data or calling an LLM when execution is already
+	// unavailable. Automated exits use a separate reduce-only path and remain
+	// active while entry analysis is blocked.
+	if err := s.checkNewPosition(s.control.Settings()); err != nil {
+		return contracts.RunAccepted{}, err
+	}
 	runID, err := newRunID()
 	if err != nil {
 		return contracts.RunAccepted{}, fmt.Errorf("generate run id: %w", err)
@@ -381,6 +387,12 @@ func (s *Service) runAndRecord(ctx context.Context, runID, symbol string) {
 	}
 	s.metrics.Record(string(result.Status), slippage)
 	_ = s.checkpoint(ctx, runID, "result", result)
+	if s.repository != nil {
+		// Keep durable run history aligned with the bounded API history. System
+		// checkpoints (risk state and runtime preferences) are excluded by the
+		// repository implementation.
+		_, _ = s.repository.PruneCheckpoints(ctx, s.runLimit)
+	}
 	if result.Status == contracts.RunError && result.Error != nil {
 		s.events.Emit("run_failed", runID, map[string]any{"symbol": symbol, "error": *result.Error})
 	}
@@ -453,6 +465,7 @@ func (s *Service) run(ctx context.Context, runID, symbol string) contracts.RunRe
 	accountRisk := riskstate.Snapshot{CurrentEquity: equity}
 	if s.riskState != nil {
 		if err := s.riskState.ObserveEquity(ctx, equity); err != nil {
+			s.freezeDurability("risk state persistence failed")
 			return fail(result, fmt.Errorf("persist risk state: %w", err))
 		}
 		accountRisk = s.riskState.Snapshot(equity)
@@ -685,7 +698,11 @@ func (s *Service) run(ctx context.Context, runID, symbol string) contracts.RunRe
 	execution, err := s.venue.Place(ctx, orderIntent)
 	executionSpan.End(err)
 	if err != nil {
-		_ = s.journal.Transition(runID+":fail", orderIntent.ClientID, contracts.OrderStatusFailed, nil, err.Error())
+		status := contracts.OrderStatusFailed
+		if s.freezeUnknownOrder(err) {
+			status = contracts.OrderStatusUnknown
+		}
+		_ = s.journal.Transition(runID+":fail", orderIntent.ClientID, status, nil, err.Error())
 		return fail(result, fmt.Errorf("execute: %w", err))
 	}
 	s.recordExecution(runID, orderIntent.ClientID, execution)
@@ -709,6 +726,7 @@ func (s *Service) run(ctx context.Context, runID, symbol string) contracts.RunRe
 			equityAfter = balancesAfter.FreeQuote
 		}
 		if err := s.riskState.RecordOpen(ctx, runID, finalProposal, execution, equityAfter); err != nil {
+			s.freezeDurability("executed trade risk state persistence failed")
 			return fail(result, fmt.Errorf("persist executed trade risk state: %w", err))
 		}
 	}
@@ -723,6 +741,9 @@ func (s *Service) run(ctx context.Context, runID, symbol string) contracts.RunRe
 	s.events.Emit("reviewed", runID, map[string]any{"symbol": symbol, "review": review})
 	if s.repository != nil {
 		if err := s.repository.AppendLessons(ctx, symbol, review.Lessons); err != nil {
+			if execution.Status == contracts.OrderStatusFilled {
+				s.freezeDurability("executed trade review persistence failed")
+			}
 			return fail(result, fmt.Errorf("persist lessons: %w", err))
 		}
 	}
@@ -824,9 +845,26 @@ func (s *Service) checkpoint(ctx context.Context, runID, step string, value any)
 		return nil
 	}
 	if err := s.repository.SaveCheckpoint(ctx, runID, step, value); err != nil {
+		s.freezeDurability("durable checkpoint persistence failed")
 		return fmt.Errorf("persist checkpoint %s: %w", step, err)
 	}
 	return nil
+}
+
+func (s *Service) freezeDurability(reason string) {
+	if s.safety != nil {
+		s.safety.Freeze(reason)
+	}
+}
+
+func (s *Service) freezeUnknownOrder(err error) bool {
+	if !errors.Is(err, venue.ErrOrderStateUnknown) {
+		return false
+	}
+	if s.safety != nil {
+		s.safety.Freeze("exchange order submission state is unknown")
+	}
+	return true
 }
 
 func startSpan(ctx context.Context, name string) *observability.Span {

@@ -1,0 +1,82 @@
+package persistence
+
+import (
+	"context"
+	"fmt"
+	"net/url"
+	"os"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+func TestPostgresCheckpointBatchAndRetention(t *testing.T) {
+	dsn := os.Getenv("CYP_TEST_PG_URL")
+	if dsn == "" {
+		t.Skip("CYP_TEST_PG_URL is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	adminConfig, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin, err := pgxpool.NewWithConfig(ctx, adminConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	schema := fmt.Sprintf("cyp_persistence_test_%d", time.Now().UnixNano())
+	if _, err := admin.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		cleanup, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		_, _ = admin.Exec(cleanup, "DROP SCHEMA "+schema+" CASCADE")
+	}()
+
+	repository, err := NewPostgresRepository(ctx, postgresDSNWithSearchPath(dsn, schema), 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.Close()
+	for index := 1; index <= 4; index++ {
+		runID := fmt.Sprintf("run-%d", index)
+		if err := repository.SaveCheckpoints(ctx, runID, map[string]any{
+			"proposal": map[string]any{"index": index}, "result": map[string]any{"ok": true},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if err := repository.SaveCheckpoint(ctx, "__runtime_settings__", "settings", map[string]any{"scan": 600}); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := repository.PruneCheckpoints(ctx, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 2 {
+		t.Fatalf("removed runs = %d, want 2", removed)
+	}
+	for _, runID := range []string{"run-3", "run-4", "__runtime_settings__"} {
+		loaded, err := repository.LoadCheckpoints(ctx, runID)
+		if err != nil || len(loaded) == 0 {
+			t.Fatalf("load %s after prune: checkpoints=%v err=%v", runID, loaded, err)
+		}
+	}
+}
+
+func postgresDSNWithSearchPath(dsn, schema string) string {
+	if parsed, err := url.Parse(dsn); err == nil && parsed.Scheme != "" {
+		query := parsed.Query()
+		query.Set("search_path", schema)
+		parsed.RawQuery = query.Encode()
+		return parsed.String()
+	}
+	return strings.TrimSpace(dsn) + " search_path=" + schema
+}

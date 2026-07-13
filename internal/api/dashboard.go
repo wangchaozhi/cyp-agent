@@ -1,6 +1,8 @@
 package api
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -8,6 +10,7 @@ import (
 	"github.com/wangchaozhi/cyp-agent/internal/contracts"
 	"github.com/wangchaozhi/cyp-agent/internal/portfolio"
 	"github.com/wangchaozhi/cyp-agent/internal/tokenusage"
+	"github.com/wangchaozhi/cyp-agent/internal/venue"
 )
 
 type positionView struct {
@@ -86,6 +89,23 @@ func (s *Server) closePosition(w http.ResponseWriter, request *http.Request) {
 	if payload.Instrument == "" {
 		payload.Instrument = contracts.InstrumentSpot
 	}
+	if s.symbolLocks != nil {
+		if err := s.symbolLocks.Do(request.Context(), payload.Symbol, func(context.Context) error {
+			s.closePositionLocked(w, request, payload)
+			return nil
+		}); err != nil {
+			writeError(w, http.StatusConflict, "该币种正在执行其他操作，请稍后重试")
+		}
+		return
+	}
+	s.closePositionLocked(w, request, payload)
+}
+
+func (s *Server) closePositionLocked(
+	w http.ResponseWriter,
+	request *http.Request,
+	payload contracts.ClosePositionRequest,
+) {
 	positions, err := s.venue.Positions(request.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -107,14 +127,21 @@ func (s *Server) closePosition(w http.ResponseWriter, request *http.Request) {
 	if err != nil || !mark.IsPositive() {
 		mark = found.EntryPrice
 	}
+	marginMode := contracts.MarginModeIsolated
+	if found.MarginMode != nil {
+		marginMode = *found.MarginMode
+	}
 	result, err := s.venue.Place(request.Context(), contracts.OrderIntent{
 		ClientID: "manual-close-" + shortID(), Symbol: found.Symbol, Venue: s.venue.ID(),
 		Side: found.Side, Instrument: found.Instrument, OrderType: contracts.EntryTypeMarket,
 		SizeQuote: found.SizeBase.Mul(mark), Price: &mark, Leverage: found.Leverage,
-		MarginMode: contracts.MarginModeIsolated, ReduceOnly: true,
+		MarginMode: marginMode, ReduceOnly: true,
 		TakeProfit: contracts.List[contracts.Decimal]{},
 	})
 	if err != nil {
+		if errors.Is(err, venue.ErrOrderStateUnknown) && s.safety != nil {
+			s.safety.Freeze("manual close order submission state is unknown")
+		}
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -127,10 +154,19 @@ func (s *Server) closePosition(w http.ResponseWriter, request *http.Request) {
 		return
 	}
 	s.accountCache.Invalidate()
+	if err := s.orchestrator.FinalizeClose(request.Context(), *found); err != nil {
+		s.logger.ErrorContext(request.Context(), "manual_close_finalize_failed", "error", err.Error())
+		if s.safety != nil {
+			s.safety.Freeze("manual close protection cleanup failed")
+		}
+	}
 	if s.riskState != nil {
 		balances, balanceErr := s.venue.Balances(request.Context())
 		if balanceErr != nil {
 			s.logger.ErrorContext(request.Context(), "risk_state_close_balance_failed", "error", balanceErr.Error())
+			if s.safety != nil {
+				s.safety.Freeze("manual close balance reconciliation failed")
+			}
 		} else {
 			equity := balances.TotalQuote
 			if !equity.IsPositive() {
@@ -143,6 +179,9 @@ func (s *Server) closePosition(w http.ResponseWriter, request *http.Request) {
 			record, stateErr := s.riskState.RecordClose(request.Context(), reference, *found, result, equity)
 			if stateErr != nil {
 				s.logger.ErrorContext(request.Context(), "risk_state_close_persist_failed", "error", stateErr.Error())
+				if s.safety != nil {
+					s.safety.Freeze("manual close risk state persistence failed")
+				}
 			} else if _, reviewErr := s.orchestrator.ReviewClosed(
 				request.Context(), *found, result, record.PNLQuote, reference,
 			); reviewErr != nil {

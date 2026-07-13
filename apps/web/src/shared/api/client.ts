@@ -10,6 +10,7 @@ import type {
   PendingApproval,
   PortfolioSnapshot,
   Position,
+  ReadinessStatus,
   RiskSnapshot,
   RuntimeSettings,
   RuntimeSettingsUpdate,
@@ -23,7 +24,13 @@ const apiTimeoutMs = 30_000;
 
 function storedApiToken(): string {
   try {
-    return window.localStorage.getItem(apiTokenStorageKey)?.trim() ?? "";
+    const current = window.sessionStorage.getItem(apiTokenStorageKey)?.trim() ?? "";
+    if (current) return current;
+    // Migrate older installations once, then remove the persistent browser copy.
+    const legacy = window.localStorage.getItem(apiTokenStorageKey)?.trim() ?? "";
+    window.localStorage.removeItem(apiTokenStorageKey);
+    if (legacy) window.sessionStorage.setItem(apiTokenStorageKey, legacy);
+    return legacy;
   } catch {
     return "";
   }
@@ -32,8 +39,9 @@ function storedApiToken(): string {
 export function setApiToken(value: string): void {
   try {
     const token = value.trim();
-    if (token) window.localStorage.setItem(apiTokenStorageKey, token);
-    else window.localStorage.removeItem(apiTokenStorageKey);
+    if (token) window.sessionStorage.setItem(apiTokenStorageKey, token);
+    else window.sessionStorage.removeItem(apiTokenStorageKey);
+    window.localStorage.removeItem(apiTokenStorageKey);
   } catch {
     // Storage can be unavailable in hardened/private browser contexts. The
     // request will fail closed when the server requires authentication.
@@ -88,6 +96,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const cypApi = {
   health: () => request<HealthStatus>("/api/health"),
+  ready: () => request<ReadinessStatus>("/api/ready"),
   venues: () => request<VenueInfo[]>("/api/venues"),
   settings: () => request<RuntimeSettings>("/api/settings"),
   updateSettings: (payload: RuntimeSettingsUpdate) =>

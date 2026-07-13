@@ -152,6 +152,51 @@ func TestPositionMonitorDoesNotEmitEmptyHealthyPoll(t *testing.T) {
 	}
 }
 
+func TestPositionMonitorThrottlesDuplicatesAndFreezesOnPersistentProtectionGap(t *testing.T) {
+	t.Parallel()
+	target := venue.NewPaperVenue()
+	openPaperPosition(t, target, false)
+	bus := events.NewBus(8)
+	subscription := bus.Subscribe(8)
+	defer subscription.Cancel()
+	alerter := &captureAlerter{}
+	safety := NewSafetyState()
+	if err := safety.CompleteReconcile(ReconcileReport{OK: true}, nil); err != nil {
+		t.Fatal(err)
+	}
+	monitor, err := NewPositionMonitor(PositionMonitorConfig{
+		Venue: target, Interval: time.Second, Events: bus, Alerter: alerter, Safety: safety,
+		EventHeartbeat: time.Hour, AlertCooldown: time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC)
+	monitor.now = func() time.Time { return now }
+	if _, err := monitor.CheckOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-subscription.C:
+	case <-time.After(time.Second):
+		t.Fatal("initial monitor event missing")
+	}
+	if _, err := monitor.CheckOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case event := <-subscription.C:
+		t.Fatalf("duplicate monitor event was not throttled: %#v", event)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if alerter.Calls() != 1 {
+		t.Fatalf("duplicate alert deliveries=%d", alerter.Calls())
+	}
+	if snapshot := safety.Snapshot(); !snapshot.Frozen || !strings.Contains(snapshot.Reason, "protection gap") {
+		t.Fatalf("persistent protection gap did not freeze entries: %+v", snapshot)
+	}
+}
+
 func containsAlert(alerts []string, fragment string) bool {
 	for _, alert := range alerts {
 		if strings.Contains(alert, fragment) {

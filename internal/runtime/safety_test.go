@@ -101,6 +101,12 @@ func TestSymbolLocksSerializeAndWaitingIsCancelable(t *testing.T) {
 	if err := <-firstDone; err != nil {
 		t.Fatal(err)
 	}
+	locks.mu.Lock()
+	remaining := len(locks.locks)
+	locks.mu.Unlock()
+	if remaining != 0 {
+		t.Fatalf("idle symbol locks leaked: %d", remaining)
+	}
 }
 
 func TestScannerSerializesConcurrentRunsForOneSymbol(t *testing.T) {

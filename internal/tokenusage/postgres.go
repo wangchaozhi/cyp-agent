@@ -25,6 +25,8 @@ func NewPostgresStore(ctx context.Context, dsn string) (*PostgresStore, error) {
 		return nil, fmt.Errorf("parse token usage store config: %w", err)
 	}
 	poolConfig.MaxConns = 2
+	poolConfig.ConnConfig.RuntimeParams["statement_timeout"] = "10s"
+	poolConfig.ConnConfig.RuntimeParams["lock_timeout"] = "3s"
 	poolConfig.MaxConnIdleTime = 5 * time.Minute
 	poolConfig.MaxConnLifetime = time.Hour
 	poolConfig.HealthCheckPeriod = 30 * time.Second

@@ -1,7 +1,6 @@
-// Package persistence defines the durable state boundary used by the runtime
-// and orchestrator. PostgreSQL adapters can implement Repository without
-// changing callers; the first Go release ships in-memory and atomic JSON-file
-// implementations only.
+// Package persistence defines the durable state boundary used by agents,
+// runtime preferences and the orchestrator. Memory, atomic JSON-file and
+// PostgreSQL implementations share the same checkpoint contract.
 package persistence
 
 import (
@@ -21,13 +20,16 @@ const defaultMaxLessons = 200
 var (
 	ErrInvalidRunID = errors.New("run_id is required")
 	ErrInvalidStep  = errors.New("checkpoint step is required")
+	ErrInvalidKeep  = errors.New("checkpoint retention must be positive")
 )
 
 // CheckpointRepository stores JSON-safe run checkpoints. Returned RawMessages
 // are owned by the caller and may be modified safely.
 type CheckpointRepository interface {
 	SaveCheckpoint(ctx context.Context, runID, step string, value any) error
+	SaveCheckpoints(ctx context.Context, runID string, values map[string]any) error
 	LoadCheckpoints(ctx context.Context, runID string) (map[string]json.RawMessage, error)
+	PruneCheckpoints(ctx context.Context, keepRecentRuns int) (int, error)
 }
 
 // LessonRepository stores bounded, symbol-aware lessons in chronological order.
@@ -36,9 +38,8 @@ type LessonRepository interface {
 	GetLessons(ctx context.Context, limit int, symbol string) ([]string, error)
 }
 
-// Repository is the adapter boundary reserved for a future PostgreSQL
-// implementation. Close is intentionally present even though the bundled
-// repositories do not retain external resources.
+// Repository is the storage adapter boundary. Close releases retained file or
+// database resources and is safe for repositories that retain none.
 type Repository interface {
 	CheckpointRepository
 	LessonRepository
@@ -53,17 +54,19 @@ type lessonRecord struct {
 }
 
 type repositoryState struct {
-	Version      int                                   `json:"version"`
-	NextLessonID uint64                                `json:"next_lesson_id"`
-	Checkpoints  map[string]map[string]json.RawMessage `json:"checkpoints"`
-	Lessons      []lessonRecord                        `json:"lessons"`
+	Version           int                                   `json:"version"`
+	NextLessonID      uint64                                `json:"next_lesson_id"`
+	Checkpoints       map[string]map[string]json.RawMessage `json:"checkpoints"`
+	CheckpointUpdated map[string]time.Time                  `json:"checkpoint_updated,omitempty"`
+	Lessons           []lessonRecord                        `json:"lessons"`
 }
 
 func newRepositoryState() repositoryState {
 	return repositoryState{
-		Version:     1,
-		Checkpoints: make(map[string]map[string]json.RawMessage),
-		Lessons:     make([]lessonRecord, 0),
+		Version:           2,
+		Checkpoints:       make(map[string]map[string]json.RawMessage),
+		CheckpointUpdated: make(map[string]time.Time),
+		Lessons:           make([]lessonRecord, 0),
 	}
 }
 
@@ -96,6 +99,25 @@ func encodeCheckpoint(value any) (json.RawMessage, error) {
 		return nil, fmt.Errorf("sanitize checkpoint: %w", err)
 	}
 	return sanitized, nil
+}
+
+func encodeCheckpoints(values map[string]any) (map[string]json.RawMessage, error) {
+	if len(values) == 0 {
+		return nil, ErrInvalidStep
+	}
+	encoded := make(map[string]json.RawMessage, len(values))
+	for step, value := range values {
+		step = strings.TrimSpace(step)
+		if step == "" {
+			return nil, ErrInvalidStep
+		}
+		raw, err := encodeCheckpoint(value)
+		if err != nil {
+			return nil, fmt.Errorf("checkpoint %s: %w", step, err)
+		}
+		encoded[step] = raw
+	}
+	return encoded, nil
 }
 
 // sanitizeCheckpoint recursively masks configuration and credential fields so
@@ -153,7 +175,7 @@ func sanitizeValue(value any) any {
 	}
 }
 
-func saveCheckpoint(state *repositoryState, runID, step string, raw json.RawMessage) error {
+func saveCheckpoint(state *repositoryState, runID, step string, raw json.RawMessage, now time.Time) error {
 	runID = strings.TrimSpace(runID)
 	if runID == "" {
 		return ErrInvalidRunID
@@ -167,8 +189,44 @@ func saveCheckpoint(state *repositoryState, runID, step string, raw json.RawMess
 		steps = make(map[string]json.RawMessage)
 		state.Checkpoints[runID] = steps
 	}
+	if state.CheckpointUpdated == nil {
+		state.CheckpointUpdated = make(map[string]time.Time)
+	}
 	steps[step] = cloneRaw(raw)
+	state.CheckpointUpdated[runID] = now.UTC()
 	return nil
+}
+
+func pruneCheckpoints(state *repositoryState, keepRecentRuns int) (int, error) {
+	if keepRecentRuns <= 0 {
+		return 0, ErrInvalidKeep
+	}
+	type candidate struct {
+		runID   string
+		updated time.Time
+	}
+	candidates := make([]candidate, 0, len(state.Checkpoints))
+	for runID := range state.Checkpoints {
+		if strings.HasPrefix(runID, "__") {
+			continue
+		}
+		candidates = append(candidates, candidate{runID: runID, updated: state.CheckpointUpdated[runID]})
+	}
+	if len(candidates) <= keepRecentRuns {
+		return 0, nil
+	}
+	sort.Slice(candidates, func(left, right int) bool {
+		if candidates[left].updated.Equal(candidates[right].updated) {
+			return candidates[left].runID < candidates[right].runID
+		}
+		return candidates[left].updated.Before(candidates[right].updated)
+	})
+	remove := len(candidates) - keepRecentRuns
+	for _, item := range candidates[:remove] {
+		delete(state.Checkpoints, item.runID)
+		delete(state.CheckpointUpdated, item.runID)
+	}
+	return remove, nil
 }
 
 func loadCheckpoints(state repositoryState, runID string) (map[string]json.RawMessage, error) {
@@ -278,6 +336,9 @@ func cloneState(state repositoryState) repositoryState {
 	copyState := newRepositoryState()
 	copyState.Version = state.Version
 	copyState.NextLessonID = state.NextLessonID
+	for runID, updated := range state.CheckpointUpdated {
+		copyState.CheckpointUpdated[runID] = updated
+	}
 	for runID, steps := range state.Checkpoints {
 		copySteps := make(map[string]json.RawMessage, len(steps))
 		for step, raw := range steps {

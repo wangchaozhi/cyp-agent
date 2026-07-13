@@ -40,7 +40,35 @@ func (repository *MemoryRepository) SaveCheckpoint(
 	if err := contextError(ctx); err != nil {
 		return err
 	}
-	return saveCheckpoint(&repository.state, runID, step, raw)
+	return saveCheckpoint(&repository.state, runID, step, raw, repository.now())
+}
+
+func (repository *MemoryRepository) SaveCheckpoints(
+	ctx context.Context,
+	runID string,
+	values map[string]any,
+) error {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
+	encoded, err := encodeCheckpoints(values)
+	if err != nil {
+		return err
+	}
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	if err := contextError(ctx); err != nil {
+		return err
+	}
+	now := repository.now()
+	next := cloneState(repository.state)
+	for step, raw := range encoded {
+		if err := saveCheckpoint(&next, runID, step, raw, now); err != nil {
+			return err
+		}
+	}
+	repository.state = next
+	return nil
 }
 
 func (repository *MemoryRepository) LoadCheckpoints(
@@ -53,6 +81,23 @@ func (repository *MemoryRepository) LoadCheckpoints(
 	repository.mu.RLock()
 	defer repository.mu.RUnlock()
 	return loadCheckpoints(repository.state, runID)
+}
+
+func (repository *MemoryRepository) PruneCheckpoints(ctx context.Context, keepRecentRuns int) (int, error) {
+	if err := contextError(ctx); err != nil {
+		return 0, err
+	}
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	next := cloneState(repository.state)
+	removed, err := pruneCheckpoints(&next, keepRecentRuns)
+	if err != nil {
+		return 0, err
+	}
+	if removed > 0 {
+		repository.state = next
+	}
+	return removed, nil
 }
 
 func (repository *MemoryRepository) AppendLessons(

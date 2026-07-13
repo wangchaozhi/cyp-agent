@@ -333,8 +333,9 @@ a { color: inherit; text-decoration: none; }
 
 /* Notices and settings */
 .toast-stack { position: fixed; top: 82px; right: 22px; z-index: 35; display: grid; gap: 8px; width: min(390px, calc(100vw - 32px)); pointer-events: none; }
-.app-alert, .app-notice { display: flex; gap: 12px; align-items: center; justify-content: space-between; padding: 11px 12px; border: 1px solid var(--border); border-radius: 12px; background: color-mix(in srgb, var(--surface) 94%, transparent); box-shadow: 0 18px 44px var(--shadow-strong); backdrop-filter: blur(16px); pointer-events: auto; font-size: 12px; }
+.app-alert, .app-safety-alert, .app-notice { display: flex; gap: 12px; align-items: center; justify-content: space-between; padding: 11px 12px; border: 1px solid var(--border); border-radius: 12px; background: color-mix(in srgb, var(--surface) 94%, transparent); box-shadow: 0 18px 44px var(--shadow-strong); backdrop-filter: blur(16px); pointer-events: auto; font-size: 12px; }
 .app-alert { border-color: color-mix(in srgb, var(--red) 45%, var(--border)); color: var(--red); }
+.app-safety-alert { border-color: color-mix(in srgb, var(--yellow) 46%, var(--border)); color: var(--yellow); }
 .app-notice--ok { border-color: color-mix(in srgb, var(--green) 38%, var(--border)); color: var(--green); }
 .app-notice--warn { border-color: color-mix(in srgb, var(--yellow) 42%, var(--border)); color: var(--yellow); }
 .app-notice--bad { border-color: color-mix(in srgb, var(--red) 42%, var(--border)); color: var(--red); }

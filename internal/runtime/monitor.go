@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -41,21 +42,34 @@ type PositionMonitorConfig struct {
 	LiqProximity   contracts.Decimal
 	MoveThreshold  contracts.Decimal
 	MinMarginRatio contracts.Decimal
+	Safety         *SafetyState
+	EventHeartbeat time.Duration
+	AlertCooldown  time.Duration
 }
 
 type PositionMonitor struct {
-	venue          MonitorVenue
-	interval       time.Duration
-	events         *events.Bus
-	alerter        AlertSender
-	logger         *slog.Logger
-	metrics        *observability.RuntimeMetrics
-	stopProximity  contracts.Decimal
-	liqProximity   contracts.Decimal
-	moveThreshold  contracts.Decimal
-	minMarginRatio contracts.Decimal
-	marksMu        sync.Mutex
-	lastMarks      map[string]contracts.Decimal
+	venue                MonitorVenue
+	interval             time.Duration
+	events               *events.Bus
+	alerter              AlertSender
+	logger               *slog.Logger
+	metrics              *observability.RuntimeMetrics
+	stopProximity        contracts.Decimal
+	liqProximity         contracts.Decimal
+	moveThreshold        contracts.Decimal
+	minMarginRatio       contracts.Decimal
+	safety               *SafetyState
+	eventHeartbeat       time.Duration
+	alertCooldown        time.Duration
+	now                  func() time.Time
+	marksMu              sync.Mutex
+	lastMarks            map[string]contracts.Decimal
+	stateMu              sync.Mutex
+	lastEventFingerprint string
+	lastEventAt          time.Time
+	lastAlertFingerprint string
+	lastAlertAt          time.Time
+	unsafeCounts         map[string]int
 }
 
 func NewPositionMonitor(config PositionMonitorConfig) (*PositionMonitor, error) {
@@ -80,6 +94,12 @@ func NewPositionMonitor(config PositionMonitorConfig) (*PositionMonitor, error) 
 	if config.MinMarginRatio.IsZero() {
 		config.MinMarginRatio = contracts.MustDecimal("0.05")
 	}
+	if config.EventHeartbeat <= 0 {
+		config.EventHeartbeat = time.Minute
+	}
+	if config.AlertCooldown <= 0 {
+		config.AlertCooldown = 5 * time.Minute
+	}
 	for name, threshold := range map[string]contracts.Decimal{
 		"stop proximity": config.StopProximity, "liquidation proximity": config.LiqProximity,
 		"move threshold": config.MoveThreshold, "minimum margin ratio": config.MinMarginRatio,
@@ -93,7 +113,8 @@ func NewPositionMonitor(config PositionMonitorConfig) (*PositionMonitor, error) 
 		alerter: config.Alerter, logger: config.Logger, metrics: config.Metrics,
 		stopProximity: config.StopProximity, liqProximity: config.LiqProximity,
 		moveThreshold: config.MoveThreshold, minMarginRatio: config.MinMarginRatio,
-		lastMarks: make(map[string]contracts.Decimal),
+		safety: config.Safety, eventHeartbeat: config.EventHeartbeat, alertCooldown: config.AlertCooldown,
+		now: time.Now, lastMarks: make(map[string]contracts.Decimal), unsafeCounts: make(map[string]int),
 	}, nil
 }
 
@@ -111,9 +132,13 @@ func (monitor *PositionMonitor) CheckOnce(ctx context.Context) (report MonitorRe
 		return report, fmt.Errorf("load execution venue positions: %w", err)
 	}
 	report.Positions = append(report.Positions, positions...)
+	activeSymbols := make(map[string]struct{}, len(positions))
+	unsafeProtection := make(map[string]struct{})
 	ordersBySymbol := make(map[string][]contracts.ProtectiveOrder)
 	inspectableBySymbol := make(map[string]bool)
+	inspectionFailedBySymbol := make(map[string]bool)
 	for _, position := range positions {
+		activeSymbols[position.Symbol] = struct{}{}
 		orders, checked := ordersBySymbol[position.Symbol]
 		inspectable := inspectableBySymbol[position.Symbol]
 		if !checked {
@@ -122,6 +147,8 @@ func (monitor *PositionMonitor) CheckOnce(ctx context.Context) (report MonitorRe
 			if inspectErr != nil {
 				report.Alerts = append(report.Alerts,
 					fmt.Sprintf("%s 核验保护单失败：%s", position.Symbol, inspectErr.Error()))
+				inspectionFailedBySymbol[position.Symbol] = true
+				unsafeProtection[position.Symbol] = struct{}{}
 			}
 			ordersBySymbol[position.Symbol] = orders
 			inspectableBySymbol[position.Symbol] = inspectable
@@ -129,8 +156,10 @@ func (monitor *PositionMonitor) CheckOnce(ctx context.Context) (report MonitorRe
 		if !monitor.venue.Caps().NativeProtectiveOrders {
 			report.Alerts = append(report.Alerts,
 				fmt.Sprintf("%s 无原生保护单，保护依赖监控存活", position.Symbol))
-		} else if !inspectable || !hasStopLoss(orders) {
+			unsafeProtection[position.Symbol] = struct{}{}
+		} else if !inspectionFailedBySymbol[position.Symbol] && (!inspectable || !hasStopLoss(orders)) {
 			report.Alerts = append(report.Alerts, fmt.Sprintf("%s 缺少止损保护单", position.Symbol))
+			unsafeProtection[position.Symbol] = struct{}{}
 		}
 		mark, tickerErr := monitor.venue.FetchTicker(ctx, position.Symbol)
 		if tickerErr != nil || !mark.IsPositive() {
@@ -139,20 +168,25 @@ func (monitor *PositionMonitor) CheckOnce(ctx context.Context) (report MonitorRe
 		}
 		report.Alerts = append(report.Alerts, monitor.positionAlerts(position, mark, orders)...)
 	}
+	monitor.cleanupMarks(activeSymbols)
+	monitor.updateProtectionSafety(activeSymbols, unsafeProtection)
 	if marginAlert, marginErr := monitor.marginAlert(ctx, positions); marginErr != nil {
 		monitor.logger.ErrorContext(ctx, "margin_monitor_failed", "error", marginErr.Error())
 	} else if marginAlert != "" {
 		report.Alerts = append(report.Alerts, marginAlert)
+		if monitor.safety != nil {
+			monitor.safety.Freeze("account margin safety threshold breached")
+		}
 	}
 	// An empty healthy poll has no user-visible state change. Suppressing it
 	// keeps the SSE timeline and browser rendering quiet while there are no
 	// positions, without changing the monitor cadence or alerting behavior.
-	if monitor.events != nil && (len(report.Positions) > 0 || len(report.Alerts) > 0) {
+	if monitor.events != nil && (len(report.Positions) > 0 || len(report.Alerts) > 0) && monitor.shouldEmitEvent(report) {
 		monitor.events.Emit("position_monitor", "-", map[string]any{
 			"positions": report.Positions, "alerts": report.Alerts,
 		})
 	}
-	if len(report.Alerts) > 0 {
+	if len(report.Alerts) > 0 && monitor.shouldSendAlert(report.Alerts) {
 		monitor.logger.WarnContext(ctx, "position_alerts", "alerts", report.Alerts)
 		if monitor.alerter != nil {
 			if alertErr := monitor.alerter.Alert(ctx, "warning", "position_monitor", map[string]any{
@@ -161,8 +195,79 @@ func (monitor *PositionMonitor) CheckOnce(ctx context.Context) (report MonitorRe
 				monitor.logger.ErrorContext(ctx, "position_alert_delivery_failed", "error", alertErr.Error())
 			}
 		}
+	} else if len(report.Alerts) == 0 {
+		monitor.clearAlertState()
 	}
 	return report, nil
+}
+
+func (monitor *PositionMonitor) shouldEmitEvent(report MonitorReport) bool {
+	raw, _ := json.Marshal(report)
+	fingerprint := string(raw)
+	now := monitor.now().UTC()
+	monitor.stateMu.Lock()
+	defer monitor.stateMu.Unlock()
+	if fingerprint == monitor.lastEventFingerprint && now.Sub(monitor.lastEventAt) < monitor.eventHeartbeat {
+		return false
+	}
+	monitor.lastEventFingerprint = fingerprint
+	monitor.lastEventAt = now
+	return true
+}
+
+func (monitor *PositionMonitor) shouldSendAlert(alerts []string) bool {
+	raw, _ := json.Marshal(alerts)
+	fingerprint := string(raw)
+	now := monitor.now().UTC()
+	monitor.stateMu.Lock()
+	defer monitor.stateMu.Unlock()
+	if fingerprint == monitor.lastAlertFingerprint && now.Sub(monitor.lastAlertAt) < monitor.alertCooldown {
+		return false
+	}
+	monitor.lastAlertFingerprint = fingerprint
+	monitor.lastAlertAt = now
+	return true
+}
+
+func (monitor *PositionMonitor) clearAlertState() {
+	monitor.stateMu.Lock()
+	monitor.lastAlertFingerprint = ""
+	monitor.lastAlertAt = time.Time{}
+	monitor.stateMu.Unlock()
+}
+
+func (monitor *PositionMonitor) cleanupMarks(active map[string]struct{}) {
+	monitor.marksMu.Lock()
+	defer monitor.marksMu.Unlock()
+	for symbol := range monitor.lastMarks {
+		if _, exists := active[symbol]; !exists {
+			delete(monitor.lastMarks, symbol)
+		}
+	}
+}
+
+func (monitor *PositionMonitor) updateProtectionSafety(active, unsafe map[string]struct{}) {
+	monitor.stateMu.Lock()
+	freezeSymbol := ""
+	for symbol := range active {
+		if _, missing := unsafe[symbol]; missing {
+			monitor.unsafeCounts[symbol]++
+			if monitor.unsafeCounts[symbol] >= 2 && freezeSymbol == "" {
+				freezeSymbol = symbol
+			}
+		} else {
+			delete(monitor.unsafeCounts, symbol)
+		}
+	}
+	for symbol := range monitor.unsafeCounts {
+		if _, exists := active[symbol]; !exists {
+			delete(monitor.unsafeCounts, symbol)
+		}
+	}
+	monitor.stateMu.Unlock()
+	if freezeSymbol != "" && monitor.safety != nil {
+		monitor.safety.Freeze("position protection gap: " + freezeSymbol)
+	}
 }
 
 func (monitor *PositionMonitor) positionAlerts(
