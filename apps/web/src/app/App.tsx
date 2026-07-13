@@ -4,6 +4,7 @@ import { X } from "lucide-react";
 import { PendingApprovals } from "../features/approvals/PendingApprovals";
 import { BacktestPanel } from "../features/backtest/BacktestPanel";
 import { EventStream } from "../features/events/EventStream";
+import { AppSidebar } from "../features/health/AppSidebar";
 import { SystemHeader } from "../features/health/SystemHeader";
 import { MarketPanel } from "../features/market/MarketPanel";
 import { OverviewStrip } from "../features/overview/OverviewStrip";
@@ -15,6 +16,7 @@ import { cypApi } from "../shared/api/client";
 import type { ApprovalRequest, DashboardEvent, Position, RuntimeSettingsUpdate } from "../shared/api/types";
 import { useEventStream } from "../shared/hooks/useEventStream";
 import { usePollingResource } from "../shared/hooks/usePollingResource";
+import { SectionHeading } from "../shared/ui/SectionHeading";
 
 const MAX_EVENTS = 160;
 
@@ -36,7 +38,6 @@ export default function App() {
   const positions = usePollingResource(cypApi.positions, 5000);
   const risk = usePollingResource(cypApi.risk, 5000);
   const portfolio = usePollingResource(cypApi.portfolio, 5000);
-  const market = usePollingResource(() => cypApi.market(), 15000);
   const metrics = usePollingResource(cypApi.metrics, 10000);
   const [events, setEvents] = useState<DashboardEvent[]>([]);
   const [running, setRunning] = useState(false);
@@ -164,18 +165,99 @@ export default function App() {
 
   return (
     <div className="app">
-      <SystemHeader
-        health={health.data}
-        venues={venues.data}
-        streamStatus={streamStatus}
-        running={running}
-        switchingKill={switchingKill}
-        settingsOpen={settingsOpen}
-        runDisabledReason={runDisabledReason}
-        onRun={() => void runOnce()}
-        onToggleKill={() => void toggleKill()}
-        onOpenSettings={() => setSettingsOpen(true)}
-      />
+      <a className="skip-link" href="#main-content">跳到主要内容</a>
+
+      <div className="app-shell">
+        <AppSidebar
+          health={health.data}
+          streamStatus={streamStatus}
+          pendingCount={pending.data?.length ?? 0}
+        />
+
+        <div className="app-workspace">
+          <SystemHeader
+            health={health.data}
+            venues={venues.data}
+            streamStatus={streamStatus}
+            running={running}
+            switchingKill={switchingKill}
+            settingsOpen={settingsOpen}
+            runDisabledReason={runDisabledReason}
+            onRun={() => void runOnce()}
+            onToggleKill={() => void toggleKill()}
+            onOpenSettings={() => setSettingsOpen(true)}
+          />
+
+          <div className="toast-stack" aria-live="polite">
+            {apiError ? <div className="app-alert" role="alert"><span>后端连接异常：{apiError}</span></div> : null}
+            {notice ? (
+              <div className={`app-notice app-notice--${notice.tone}`} role="status">
+                <span>{notice.message}</span>
+                <button type="button" onClick={() => setNotice(null)} aria-label="关闭通知"><X size={14} /></button>
+              </div>
+            ) : null}
+          </div>
+
+          <main id="main-content" className="dashboard-stack">
+            <OverviewStrip
+              health={health.data}
+              pending={pending.data ?? []}
+              positions={positions.data ?? []}
+              risk={risk.data}
+              portfolio={portfolio.data}
+              metrics={metrics.data}
+              streamStatus={streamStatus}
+            />
+
+            <section id="market" className="workspace-section" aria-label="市场情报">
+              <SectionHeading
+                index="01 / MARKET INTELLIGENCE"
+                title="市场情报"
+                description="比较多个资产的相对强弱、实时价格与跨场所差异。"
+              />
+              <MarketPanel watchlist={runtimeSettings.data?.watchlist ?? null} />
+            </section>
+
+            <section id="operations" className="workspace-section" aria-label="决策与执行">
+              <SectionHeading
+                index="02 / DECISION FLOW"
+                title="决策与执行"
+                description="先处理需要人工判断的提案，再沿时间线追踪每一轮运行。"
+              />
+              <div className="dashboard-hero">
+                <PendingApprovals
+                  items={pending.data ?? []}
+                  loading={pending.loading}
+                  onDecide={decideApproval}
+                />
+                <EventStream events={events} status={streamStatus} />
+              </div>
+            </section>
+
+            <section id="portfolio" className="workspace-section" aria-label="资产与风险">
+              <SectionHeading
+                index="03 / PORTFOLIO CONTROL"
+                title="资产与风险"
+                description="从当前持仓进入，检查风险预算、回撤与组合集中度。"
+              />
+              <div className="dashboard-metrics">
+                <PositionsPanel positions={positions.data ?? []} onClose={closePosition} />
+                <RiskPanel risk={risk.data} />
+                <PortfolioPanel portfolio={portfolio.data} />
+              </div>
+            </section>
+
+            <section id="backtest" className="workspace-section" aria-label="策略实验室">
+              <SectionHeading
+                index="04 / STRATEGY LAB"
+                title="策略实验室"
+                description="用合成或真实历史数据验证参数，在进入决策流程前理解策略表现。"
+              />
+              <BacktestPanel />
+            </section>
+          </main>
+        </div>
+      </div>
 
       {settingsOpen ? (
         <div className="settings-overlay" role="presentation" onClick={() => setSettingsOpen(false)}>
@@ -205,39 +287,6 @@ export default function App() {
           </aside>
         </div>
       ) : null}
-
-      {apiError ? <div className="app-alert">后端连接异常：{apiError}</div> : null}
-      {notice ? <div className={`app-notice app-notice--${notice.tone}`}>{notice.message}</div> : null}
-
-      <OverviewStrip
-        health={health.data}
-        pending={pending.data ?? []}
-        positions={positions.data ?? []}
-        risk={risk.data}
-        portfolio={portfolio.data}
-        metrics={metrics.data}
-        streamStatus={streamStatus}
-      />
-
-      <main className="dashboard-stack">
-        <section className="dashboard-hero" aria-label="运行工作区">
-          <PendingApprovals
-            items={pending.data ?? []}
-            loading={pending.loading}
-            onDecide={decideApproval}
-          />
-          <EventStream events={events} status={streamStatus} />
-        </section>
-
-        <section className="dashboard-metrics" aria-label="账户与风险概览">
-          <PositionsPanel positions={positions.data ?? []} onClose={closePosition} />
-          <RiskPanel risk={risk.data} />
-          <PortfolioPanel portfolio={portfolio.data} />
-          <MarketPanel market={market.data} />
-        </section>
-
-        <BacktestPanel />
-      </main>
     </div>
   );
 }

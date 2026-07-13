@@ -137,6 +137,50 @@ paths:
         default:
           $ref: "#/components/responses/ErrorResponse"
 
+  /api/market/history:
+    get:
+      tags: [Portfolio]
+      operationId: getMarketHistory
+      summary: 获取多个币种的历史收盘价曲线
+      description: 每个 symbol 独立读取公共 CEX K 线；单个上游失败时该序列返回空 points，不影响其他币种。
+      parameters:
+        - name: symbol
+          in: query
+          required: false
+          description: 可重复传入，最多 6 个；省略时使用 watchlist。
+          schema:
+            type: array
+            maxItems: 6
+            items: { type: string }
+          style: form
+          explode: true
+        - name: timeframe
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [15m, 1h, 4h, 1d]
+            default: 1h
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 12
+            maximum: 200
+            default: 48
+      responses:
+        "200":
+          description: 多币种历史行情
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MarketHistoryResponse"
+        "422":
+          $ref: "#/components/responses/ErrorResponse"
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+
   /api/positions:
     get:
       tags: [Portfolio]
@@ -1206,6 +1250,43 @@ components:
           type: array
           items:
             type: string
+
+    MarketHistoryPoint:
+      type: object
+      additionalProperties: false
+      required: [ts, close]
+      properties:
+        ts:
+          type: string
+          format: date-time
+        close:
+          $ref: "#/components/schemas/DecimalString"
+
+    MarketHistorySeries:
+      type: object
+      additionalProperties: false
+      required: [symbol, points]
+      properties:
+        symbol:
+          type: string
+        points:
+          type: array
+          items:
+            $ref: "#/components/schemas/MarketHistoryPoint"
+
+    MarketHistoryResponse:
+      type: object
+      additionalProperties: false
+      required: [venue, timeframe, series]
+      properties:
+        venue:
+          type: string
+        timeframe:
+          type: string
+        series:
+          type: array
+          items:
+            $ref: "#/components/schemas/MarketHistorySeries"
 
     MetricsSnapshot:
       type: object

@@ -40,7 +40,7 @@ export function PendingApprovals({ items, loading, onDecide }: PendingApprovalsP
   }
 
   return (
-    <Panel title="待审批" icon={<ShieldAlert size={16} />}>
+    <Panel title="审批队列" icon={<ShieldAlert size={16} />}>
       {error ? <div className="inline-alert">{error}</div> : null}
       {items.length ? (
         <div className="approval-list">

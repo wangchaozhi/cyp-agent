@@ -74,7 +74,7 @@ export function SettingsPanel({ settings, venues, onSave }: SettingsPanelProps) 
 
   if (!settings) {
     return (
-      <Panel title="设置" icon={<SettingsIcon size={16} />} className="panel--settings">
+      <Panel title="系统设置" icon={<SettingsIcon size={16} />} className="panel--settings">
         <EmptyState>加载中</EmptyState>
       </Panel>
     );
@@ -110,7 +110,7 @@ export function SettingsPanel({ settings, venues, onSave }: SettingsPanelProps) 
   };
 
   return (
-    <Panel title="设置" icon={<SettingsIcon size={16} />} className="panel--settings">
+    <Panel title="系统设置" icon={<SettingsIcon size={16} />} className="panel--settings">
       <div className="settings-layout">
         <div className="settings-chip-row" aria-label="运行状态">
           <SettingsChip tone={settings.kill ? "bad" : "ok"}>{settings.kill ? "停机" : "运行"}</SettingsChip>

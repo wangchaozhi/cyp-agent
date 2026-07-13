@@ -10,14 +10,14 @@ import { Panel } from "../../shared/ui/Panel";
 export function RiskPanel({ risk }: { risk: RiskSnapshot | null }) {
   if (!risk) {
     return (
-      <Panel title="风控" icon={<ShieldCheck size={16} />}>
+      <Panel title="风险雷达" icon={<ShieldCheck size={16} />} className="risk-panel">
         <EmptyState>加载中</EmptyState>
       </Panel>
     );
   }
 
   return (
-    <Panel title="风控" icon={<ShieldCheck size={16} />}>
+    <Panel title="风险雷达" icon={<ShieldCheck size={16} />} className="risk-panel">
       <div className="metric-stack">
         <MetricRow label="账户净值" value={formatAmount(risk.equity)} />
         <MetricRow

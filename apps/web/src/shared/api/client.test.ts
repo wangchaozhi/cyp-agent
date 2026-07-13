@@ -81,4 +81,15 @@ describe("api client error handling", () => {
     const [url] = fetchMock.mock.calls[0] as [string];
     expect(url).toBe("/api/market?symbol=BTC%2FUSDT");
   });
+
+  it("encodes repeated symbols for market history", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ venue: "okx", timeframe: "4h", series: [] }));
+    await cypApi.marketHistory(["BTC/USDT:USDT", "ETH/USDT:USDT"], "4h", 42);
+    const [url] = fetchMock.mock.calls[0] as [string];
+    const parsed = new URL(url, "http://localhost");
+    expect(parsed.pathname).toBe("/api/market/history");
+    expect(parsed.searchParams.getAll("symbol")).toEqual(["BTC/USDT:USDT", "ETH/USDT:USDT"]);
+    expect(parsed.searchParams.get("timeframe")).toBe("4h");
+    expect(parsed.searchParams.get("limit")).toBe("42");
+  });
 });

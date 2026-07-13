@@ -224,6 +224,22 @@ export interface MarketSnapshotInfo {
   arb_hints: string[];
 }
 
+export interface MarketHistoryPoint {
+  ts: string;
+  close: Numeric;
+}
+
+export interface MarketHistorySeries {
+  symbol: string;
+  points: MarketHistoryPoint[];
+}
+
+export interface MarketHistoryResponse {
+  venue: string;
+  timeframe: string;
+  series: MarketHistorySeries[];
+}
+
 export interface BacktestRequest {
   symbol?: string;
   bars: number;

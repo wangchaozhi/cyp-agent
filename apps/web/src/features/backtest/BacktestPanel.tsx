@@ -114,7 +114,7 @@ export function BacktestPanel() {
 
   return (
     <Panel
-      title="回测报告"
+      title="策略回测"
       icon={<LineChart size={16} />}
       actions={
         <button className="icon-command" type="button" onClick={reset} disabled={loading} title="重置参数">

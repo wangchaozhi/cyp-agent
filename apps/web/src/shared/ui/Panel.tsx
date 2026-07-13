@@ -1,3 +1,4 @@
+import { useId } from "react";
 import type { ReactNode } from "react";
 
 interface PanelProps {
@@ -9,12 +10,13 @@ interface PanelProps {
 }
 
 export function Panel({ title, icon, actions, children, className = "" }: PanelProps) {
+  const titleId = useId();
   return (
-    <section className={`panel ${className}`.trim()}>
+    <section className={`panel ${className}`.trim()} aria-labelledby={titleId}>
       <div className="panel__header">
         <div className="panel__title">
           {icon}
-          <h2>{title}</h2>
+          <h2 id={titleId}>{title}</h2>
         </div>
         {actions ? <div className="panel__actions">{actions}</div> : null}
       </div>

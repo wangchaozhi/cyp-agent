@@ -25,7 +25,7 @@ export function PositionsPanel({ positions, onClose }: PositionsPanelProps) {
   };
 
   return (
-    <Panel title="持仓" icon={<CandlestickChart size={16} />}>
+    <Panel title="当前持仓" icon={<CandlestickChart size={16} />} className="positions-panel">
       {positions.length ? (
         <div className="table-wrap">
           <table>

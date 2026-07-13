@@ -4,6 +4,7 @@ import type {
   BacktestRequest,
   ExecutionResult,
   HealthStatus,
+  MarketHistoryResponse,
   MarketSnapshotInfo,
   MetricsSnapshot,
   PendingApproval,
@@ -87,6 +88,11 @@ export const cypApi = {
   risk: () => request<RiskSnapshot>("/api/risk"),
   market: (symbol?: string) =>
     request<MarketSnapshotInfo>(`/api/market${symbol ? `?symbol=${encodeURIComponent(symbol)}` : ""}`),
+  marketHistory: (symbols: string[], timeframe: string, limit: number) => {
+    const params = new URLSearchParams({ timeframe, limit: String(limit) });
+    symbols.forEach((symbol) => params.append("symbol", symbol));
+    return request<MarketHistoryResponse>(`/api/market/history?${params.toString()}`);
+  },
   metrics: () => request<MetricsSnapshot>("/api/metrics"),
   portfolio: () => request<PortfolioSnapshot>("/api/portfolio"),
   backtest: (payload: BacktestRequest) =>

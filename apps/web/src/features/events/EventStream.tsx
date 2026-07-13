@@ -151,7 +151,7 @@ export function EventStream({ events, status }: EventStreamProps) {
   return (
     <Panel
       className="panel--events"
-      title="事件流"
+      title="运行时间线"
       icon={<ListTree size={16} />}
       actions={<span className={`stream-badge stream-badge--${status}`}>{streamLabel(status)}</span>}
     >

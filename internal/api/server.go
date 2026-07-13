@@ -17,7 +17,9 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/wangchaozhi/cyp-agent/internal/approval"
@@ -108,6 +110,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/settings", s.settings)
 	mux.HandleFunc("POST /api/settings", s.updateSettings)
 	mux.HandleFunc("GET /api/market", s.market)
+	mux.HandleFunc("GET /api/market/history", s.marketHistory)
 	mux.HandleFunc("GET /api/positions", s.positions)
 	mux.HandleFunc("GET /api/trades", s.trades)
 	mux.HandleFunc("POST /api/positions/close", s.closePosition)
@@ -230,6 +233,121 @@ func (s *Server) market(w http.ResponseWriter, request *http.Request) {
 		response.SpreadBPS = &zero
 	}
 	writeJSON(w, http.StatusOK, response)
+}
+
+type marketHistoryPoint struct {
+	TS    time.Time         `json:"ts"`
+	Close contracts.Decimal `json:"close"`
+}
+
+type marketHistorySeries struct {
+	Symbol string               `json:"symbol"`
+	Points []marketHistoryPoint `json:"points"`
+}
+
+type marketHistoryResponse struct {
+	Venue     string                `json:"venue"`
+	Timeframe string                `json:"timeframe"`
+	Series    []marketHistorySeries `json:"series"`
+}
+
+const maxMarketHistorySymbols = 6
+
+// marketHistory returns compact close-price series for the dashboard. Upstream
+// failures are isolated per symbol so one unavailable market does not hide the
+// other selected curves.
+func (s *Server) marketHistory(w http.ResponseWriter, request *http.Request) {
+	symbols, err := requestedMarketSymbols(request, s.control.Settings().WatchlistSymbols())
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	timeframe := strings.TrimSpace(request.URL.Query().Get("timeframe"))
+	if timeframe == "" {
+		timeframe = "1h"
+	}
+	if !validMarketTimeframe(timeframe) {
+		writeError(w, http.StatusUnprocessableEntity, "unsupported market history timeframe")
+		return
+	}
+	limit := 48
+	if raw := strings.TrimSpace(request.URL.Query().Get("limit")); raw != "" {
+		limit, err = strconv.Atoi(raw)
+		if err != nil || limit < 12 || limit > 200 {
+			writeError(w, http.StatusUnprocessableEntity, "market history limit must be between 12 and 200")
+			return
+		}
+	}
+
+	response := marketHistoryResponse{Timeframe: timeframe, Series: make([]marketHistorySeries, len(symbols))}
+	if s.historicalVenue != nil {
+		response.Venue = s.historicalVenue.ID()
+	}
+	var wait sync.WaitGroup
+	for index, symbol := range symbols {
+		response.Series[index] = marketHistorySeries{Symbol: symbol, Points: []marketHistoryPoint{}}
+		if s.historicalVenue == nil {
+			continue
+		}
+		wait.Add(1)
+		go func(index int, symbol string) {
+			defer wait.Done()
+			candles, fetchErr := s.historicalVenue.FetchOHLCV(request.Context(), symbol, timeframe, limit)
+			if fetchErr != nil {
+				return
+			}
+			points := make([]marketHistoryPoint, 0, len(candles))
+			for _, candle := range candles {
+				if candle.Close.IsPositive() {
+					points = append(points, marketHistoryPoint{TS: candle.TS, Close: candle.Close})
+				}
+			}
+			response.Series[index].Points = points
+		}(index, symbol)
+	}
+	wait.Wait()
+	writeJSON(w, http.StatusOK, response)
+}
+
+func requestedMarketSymbols(request *http.Request, defaults []string) ([]string, error) {
+	values := request.URL.Query()["symbol"]
+	if len(values) == 0 {
+		values = defaults
+	}
+	result := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		for _, item := range strings.Split(value, ",") {
+			symbol := strings.ToUpper(strings.TrimSpace(item))
+			if symbol == "" {
+				continue
+			}
+			if len(symbol) > 48 || !strings.Contains(symbol, "/") {
+				return nil, errors.New("invalid market history symbol")
+			}
+			if _, ok := seen[symbol]; ok {
+				continue
+			}
+			seen[symbol] = struct{}{}
+			result = append(result, symbol)
+			if len(result) > maxMarketHistorySymbols {
+				return nil, fmt.Errorf("market history supports at most %d symbols", maxMarketHistorySymbols)
+			}
+		}
+	}
+	if len(result) == 0 {
+		result = append(result, defaultSymbol(defaults))
+	}
+	return result, nil
+}
+
+func validMarketTimeframe(value string) bool {
+	switch value {
+	case "15m", "1h", "4h", "1d":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) pending(w http.ResponseWriter, _ *http.Request) {
