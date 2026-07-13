@@ -249,7 +249,10 @@ export function SettingsPanel({ settings, venues, focusSection = "general", onSa
             <MetricRow label="单笔 / 单仓" value={`${formatPercent(risk.max_risk_per_trade)} / ${formatPercent(risk.max_position_pct)}`} />
             <MetricRow label="总敞口 / 相关簇" value={`${formatPercent(risk.max_gross_exposure, 0)} / ${formatPercent(risk.max_correlated_exposure, 0)}`} />
             <MetricRow label="CVaR / 滑点" value={`${formatPercent(risk.max_cvar_pct)} / ${formatCompact(risk.max_slippage_bps, 0)}bps`} />
-            <MetricRow label="杠杆 / 逐仓" value={`${formatCompact(risk.max_leverage, 1)}x / ${risk.force_isolated ? "是" : "否"}`} />
+            <MetricRow label="杠杆上限 / 步长" value={`${formatCompact(risk.max_leverage, 1)}x / ${formatCompact(risk.leverage_step, 1)}x`} />
+            <MetricRow label="保证金 / 爆仓缓冲" value={`${formatPercent(risk.max_margin_pct)} / ${formatPercent(risk.min_liq_buffer)}`} />
+            <MetricRow label="止损 / 波动压力" value={`${formatCompact(risk.liq_stop_multiple, 1)}× / ${formatCompact(risk.liq_vol_multiple, 1)}×`} />
+            <MetricRow label="清算预留 / 模式" value={`${formatPercent(risk.liq_reserve_pct)} / ${risk.force_isolated ? "逐仓" : "可全仓"}`} />
             <MetricRow
               label="回撤(日/周/总)"
               value={`${formatPercent(risk.daily_drawdown_limit, 0)} / ${formatPercent(risk.weekly_drawdown_limit, 0)} / ${formatPercent(risk.max_drawdown_limit, 0)}`}

@@ -41,10 +41,49 @@
 | 规则 | 默认阈值 | 违反行为 |
 | --- | --- | --- |
 | 杠杆上限 `max_leverage`（按品种） | 3x（起步保守） | 否决 |
-| 爆仓价缓冲：入场价到爆仓价距离 ≥ `min_liq_buffer` | 30% | 否决 |
+| 单仓初始保证金预算 `max_margin_pct` | 净值的 10% | 超出时缩仓 |
+| 动态爆仓缓冲 | 见下方数学模型 | 不安全时降杠杆；仍不可行则缩仓/否决 |
 | 资金费拥挤度：资金费率极端且方向同向时收紧 | 可配 | 缩仓/否决 |
 | 单账户维持保证金率 ≥ `min_margin_ratio` | 显式阈值 | 否决新开仓 |
 | 全仓/逐仓模式校验 | 强制逐仓（默认） | 否决 |
+
+#### 2.2.1 杠杆数学模型 `margin-volatility-v1`
+
+仓位和杠杆分开计算：风险预算/分数 Kelly 先给出名义仓位 `N`，杠杆模型不放大 `N`，只计算该仓位需要的最低安全杠杆。
+
+设账户权益为 `E`、止损距离占入场价比例为 `d`、EWMA 收益波动率为 `σ`：
+
+```text
+保证金预算       M = E × max_margin_pct
+压力缓冲         B = max(min_liq_buffer,
+                         liq_stop_multiple × d,
+                         liq_vol_multiple × σ)
+                     + liq_reserve_pct
+安全杠杆上限     L_safe = floor_step(min(max_leverage, 1 / B))
+安全名义仓位上限 N_max = M × L_safe
+最终名义仓位     N_final = min(N, N_max)
+最终杠杆         L = ceil_step(max(1, N_final / M))
+预计初始保证金   margin = N_final / L
+```
+
+系统选择满足保证金预算的**最低**杠杆，而不是按信号置信度直接选 1/2/3 倍。若 `N / M` 大于安全上限，系统缩小 `N`，不会把杠杆硬顶到不安全区间。每次自动审批、人工改规模和反向再开仓后都会重新计算并重新 preflight。
+
+默认示例：`E=10,000`、`N=2,000`、`d=5%`、`σ=2%` 时，`M=1,000`，`B=max(30%,10%,6%)+2%=32%`，`L_safe=3x`，满足预算的最低杠杆为 `2x`，预计保证金为 `1,000`。如果自动审批把名义仓位降至 `200`，最终杠杆同步降为 `1x`。
+
+交易所真实强平价还受维持保证金档位、手续费、资金费与账户状态影响；`liq_reserve_pct` 是额外保守预留，交易所预检返回的爆仓距离仍必须大于模型压力缓冲。模型结果随 `TradeProposal.leverage_plan` 保存，便于审计。
+
+#### 2.2.2 盈利递减加仓 `risk-pyramid-v1`
+
+同向持仓不会无条件摊平亏损。只有当前仓位盈利达到 `add_min_profit_r` 且信号置信度过线时，才计算第 `k` 次加仓：
+
+```text
+第 k 次风险比例   r_k = max_risk_per_trade × add_risk_decay^k
+风险仓位上限      N_risk = equity × r_k / stop_fraction
+单次比例上限      N_tranche = existing_notional × add_max_position_fraction
+最终加仓名义金额  N_add = min(strategy_notional, N_risk, N_tranche, 其他组合剩余额度)
+```
+
+默认 `add_risk_decay=0.5`、最多两次，因此第一/第二次加仓分别只使用基础风险预算的 50%/25%。每次加仓还必须满足 60 分钟冷却、单仓上限、相关簇上限、总敞口、CVaR、最终风险分和聚合保证金预算。逐仓合约按“现仓＋新增仓”的总名义金额重新计算杠杆，并以现有杠杆作为最低值，避免加仓时意外降低杠杆导致额外占用保证金。
 
 ### 2.3 链上 DeFi 专项（不可逆，风险最高）
 
@@ -103,6 +142,18 @@
 | 配置 | 默认 | 说明 |
 | --- | --- | --- |
 | `CYP_MAX_CVAR_PCT` | `0.03` | 组合 CVaR 尾部损失上限，占账户净值比例；超限拒绝新开仓 |
+
+杠杆模型配置：
+
+| 配置 | 默认 | 说明 |
+| --- | --- | --- |
+| `CYP_MAX_LEVERAGE` | `3` | 绝对杠杆上限 |
+| `CYP_MAX_MARGIN_PCT` | `0.10` | 单仓最多占用的权益比例 |
+| `CYP_LEVERAGE_STEP` | `1` | 杠杆离散步长，支持 `0.5` 等交易所规格 |
+| `CYP_MIN_LIQ_BUFFER` | `0.30` | 最低爆仓距离 |
+| `CYP_LIQ_STOP_MULTIPLE` | `2` | 爆仓距离至少为止损距离的倍数 |
+| `CYP_LIQ_VOL_MULTIPLE` | `3` | 爆仓距离至少覆盖的 EWMA 波动倍数 |
+| `CYP_LIQ_RESERVE_PCT` | `0.02` | 维持保证金、费用和模型误差预留 |
 
 ## 7. 风控相关的工程纪律
 

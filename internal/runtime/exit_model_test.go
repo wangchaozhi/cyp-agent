@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ func TestExitModelTriggersConfirmedVolatilityTrail(t *testing.T) {
 	settings.ExitMinSamples = 2
 	settings.ExitConfirmations = 2
 	settings.VolatilityMultiplier = 0
+	settings.ProfitTargetR = 10
 	position := contracts.Position{
 		Symbol: "BTC/USDT:USDT", Venue: "okx", Side: contracts.SideLong,
 		Instrument: contracts.InstrumentPerp, EntryPrice: contracts.MustDecimal("100"),
@@ -52,5 +54,29 @@ func TestExitModelTimeStopAndReset(t *testing.T) {
 	model.Reset()
 	if len(model.series) != 0 {
 		t.Fatal("reset retained position state")
+	}
+}
+
+func TestExitModelClosesAtIdealProfitAndAdverseMarket(t *testing.T) {
+	settings := config.DefaultSettings().Automation
+	settings.ExitConfirmations = 1
+	position := contracts.Position{
+		Symbol: "SOL/USDT:USDT", Venue: "okx", Side: contracts.SideLong,
+		Instrument: contracts.InstrumentPerp, EntryPrice: contracts.MustDecimal("100"),
+	}
+	model := NewExitModel()
+	now := time.Date(2026, 7, 13, 12, 0, 0, 0, time.UTC)
+	profit := model.Observe(ExitObservation{
+		Position: position, Mark: contracts.MustDecimal("103"), StopLoss: contracts.MustDecimal("98"), Now: now,
+	}, settings)
+	if !profit.Trigger || !strings.Contains(profit.Reason, "理想收益") {
+		t.Fatalf("ideal-profit exit=%+v", profit)
+	}
+	model.Remove(position)
+	loss := model.Observe(ExitObservation{
+		Position: position, Mark: contracts.MustDecimal("99"), StopLoss: contracts.MustDecimal("98"), Now: now,
+	}, settings)
+	if !loss.Trigger || !strings.Contains(loss.Reason, "行情恶化") {
+		t.Fatalf("adverse-market exit=%+v", loss)
 	}
 }

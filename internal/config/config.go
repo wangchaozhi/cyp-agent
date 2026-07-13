@@ -37,7 +37,12 @@ type RiskConfig struct {
 	MaxOrdersPerHour       int
 	MaxSlippageBPS         contracts.Decimal
 	MaxLeverage            contracts.Decimal
+	MaxMarginPct           contracts.Decimal
+	LeverageStep           contracts.Decimal
 	MinLiqBuffer           contracts.Decimal
+	LiqStopMultiple        contracts.Decimal
+	LiqVolMultiple         contracts.Decimal
+	LiqReservePct          contracts.Decimal
 	ForceIsolated          bool
 	MinMarginRatio         contracts.Decimal
 	MaxPriceImpact         contracts.Decimal
@@ -73,32 +78,41 @@ type BudgetConfig struct {
 // AutomationConfig contains non-secret, runtime-mutable strategy controls.
 // Native protective orders are intentionally outside this switch.
 type AutomationConfig struct {
-	Enabled              bool              `json:"enabled"`
-	ScanEnabled          bool              `json:"scan_enabled"`
-	EntryEnabled         bool              `json:"entry_enabled"`
-	ApprovalEnabled      bool              `json:"approval_enabled"`
-	ExitEnabled          bool              `json:"exit_enabled"`
-	ReverseEnabled       bool              `json:"reverse_enabled"`
-	MaxRiskScore         float64           `json:"max_risk_score"`
-	MaxQuote             contracts.Decimal `json:"max_quote"`
-	MinEntryQuote        contracts.Decimal `json:"min_entry_quote"`
-	MinConfidence        float64           `json:"min_confidence"`
-	MinRewardRisk        float64           `json:"min_reward_risk"`
-	KellyScale           float64           `json:"kelly_scale"`
-	ReverseMinConfidence float64           `json:"reverse_min_confidence"`
-	ReverseMinRewardRisk float64           `json:"reverse_min_reward_risk"`
-	ReverseConfirmations int               `json:"reverse_confirmations"`
-	ReverseSignalMinutes int               `json:"reverse_signal_minutes"`
-	ReverseCooldownMins  int               `json:"reverse_cooldown_minutes"`
-	MaxReversalsPerDay   int               `json:"max_reversals_per_day"`
-	EWMALambda           float64           `json:"ewma_lambda"`
-	VolatilityMultiplier float64           `json:"volatility_multiplier"`
-	TrailActivationR     float64           `json:"trail_activation_r"`
-	TrailGivebackR       float64           `json:"trail_giveback_r"`
-	MaxHoldingMinutes    int               `json:"max_holding_minutes"`
-	TimeStopMinR         float64           `json:"time_stop_min_r"`
-	ExitConfirmations    int               `json:"exit_confirmations"`
-	ExitMinSamples       int               `json:"exit_min_samples"`
+	Enabled                bool              `json:"enabled"`
+	ScanEnabled            bool              `json:"scan_enabled"`
+	EntryEnabled           bool              `json:"entry_enabled"`
+	ApprovalEnabled        bool              `json:"approval_enabled"`
+	ExitEnabled            bool              `json:"exit_enabled"`
+	ReverseEnabled         bool              `json:"reverse_enabled"`
+	AddEnabled             bool              `json:"add_enabled"`
+	MaxRiskScore           float64           `json:"max_risk_score"`
+	MaxQuote               contracts.Decimal `json:"max_quote"`
+	MinEntryQuote          contracts.Decimal `json:"min_entry_quote"`
+	MinConfidence          float64           `json:"min_confidence"`
+	MinRewardRisk          float64           `json:"min_reward_risk"`
+	KellyScale             float64           `json:"kelly_scale"`
+	AddMinConfidence       float64           `json:"add_min_confidence"`
+	AddMinProfitR          float64           `json:"add_min_profit_r"`
+	AddRiskDecay           float64           `json:"add_risk_decay"`
+	AddMaxPositionFraction float64           `json:"add_max_position_fraction"`
+	AddCooldownMinutes     int               `json:"add_cooldown_minutes"`
+	MaxAddsPerPosition     int               `json:"max_adds_per_position"`
+	ReverseMinConfidence   float64           `json:"reverse_min_confidence"`
+	ReverseMinRewardRisk   float64           `json:"reverse_min_reward_risk"`
+	ReverseConfirmations   int               `json:"reverse_confirmations"`
+	ReverseSignalMinutes   int               `json:"reverse_signal_minutes"`
+	ReverseCooldownMins    int               `json:"reverse_cooldown_minutes"`
+	MaxReversalsPerDay     int               `json:"max_reversals_per_day"`
+	EWMALambda             float64           `json:"ewma_lambda"`
+	VolatilityMultiplier   float64           `json:"volatility_multiplier"`
+	TrailActivationR       float64           `json:"trail_activation_r"`
+	TrailGivebackR         float64           `json:"trail_giveback_r"`
+	ProfitTargetR          float64           `json:"profit_target_r"`
+	LossCutR               float64           `json:"loss_cut_r"`
+	MaxHoldingMinutes      int               `json:"max_holding_minutes"`
+	TimeStopMinR           float64           `json:"time_stop_min_r"`
+	ExitConfirmations      int               `json:"exit_confirmations"`
+	ExitMinSamples         int               `json:"exit_min_samples"`
 }
 
 type Settings struct {
@@ -158,7 +172,12 @@ func DefaultRiskConfig() RiskConfig {
 		MaxOrdersPerHour:       10,
 		MaxSlippageBPS:         contracts.MustDecimal("30"),
 		MaxLeverage:            contracts.MustDecimal("3"),
+		MaxMarginPct:           contracts.MustDecimal("0.10"),
+		LeverageStep:           contracts.MustDecimal("1"),
 		MinLiqBuffer:           contracts.MustDecimal("0.30"),
+		LiqStopMultiple:        contracts.MustDecimal("2"),
+		LiqVolMultiple:         contracts.MustDecimal("3"),
+		LiqReservePct:          contracts.MustDecimal("0.02"),
 		ForceIsolated:          true,
 		MinMarginRatio:         contracts.MustDecimal("0.05"),
 		MaxPriceImpact:         contracts.MustDecimal("0.01"),
@@ -194,14 +213,18 @@ func DefaultSettings() Settings {
 		StateFile:       "data/cyp-state.json",
 		LogLevel:        "INFO",
 		Automation: AutomationConfig{
-			ScanEnabled: true, EntryEnabled: true, ApprovalEnabled: true, ExitEnabled: true,
+			Enabled: true, ScanEnabled: true, EntryEnabled: true, ApprovalEnabled: true,
+			ExitEnabled: true, ReverseEnabled: true, AddEnabled: true,
 			MaxRiskScore: 0.5, MaxQuote: contracts.MustDecimal("200"),
 			MinEntryQuote: contracts.MustDecimal("20"), MinConfidence: 0.65,
 			MinRewardRisk: 1.5, KellyScale: 0.25,
+			AddMinConfidence: 0.75, AddMinProfitR: 0.5, AddRiskDecay: 0.5,
+			AddMaxPositionFraction: 0.5, AddCooldownMinutes: 60, MaxAddsPerPosition: 2,
 			ReverseMinConfidence: 0.75, ReverseMinRewardRisk: 2,
 			ReverseConfirmations: 2, ReverseSignalMinutes: 30,
 			ReverseCooldownMins: 60, MaxReversalsPerDay: 2, EWMALambda: 0.94,
 			VolatilityMultiplier: 3, TrailActivationR: 1, TrailGivebackR: 0.5,
+			ProfitTargetR: 1.5, LossCutR: 0.5,
 			MaxHoldingMinutes: 360, TimeStopMinR: 0, ExitConfirmations: 2, ExitMinSamples: 8,
 		},
 		Risk: DefaultRiskConfig(),
@@ -359,7 +382,12 @@ type RiskSnapshot struct {
 	MaxOrdersPerHour       int               `json:"max_orders_per_hour"`
 	MaxSlippageBPS         contracts.Decimal `json:"max_slippage_bps"`
 	MaxLeverage            contracts.Decimal `json:"max_leverage"`
+	MaxMarginPct           contracts.Decimal `json:"max_margin_pct"`
+	LeverageStep           contracts.Decimal `json:"leverage_step"`
 	MinLiqBuffer           contracts.Decimal `json:"min_liq_buffer"`
+	LiqStopMultiple        contracts.Decimal `json:"liq_stop_multiple"`
+	LiqVolMultiple         contracts.Decimal `json:"liq_vol_multiple"`
+	LiqReservePct          contracts.Decimal `json:"liq_reserve_pct"`
 	ForceIsolated          bool              `json:"force_isolated"`
 	MinMarginRatio         contracts.Decimal `json:"min_margin_ratio"`
 	DailyDrawdownLimit     contracts.Decimal `json:"daily_drawdown_limit"`
@@ -403,7 +431,10 @@ func (s Settings) Snapshot() SettingsSnapshot {
 			MaxGrossExposure: r.MaxGrossExposure, MaxSymbolConcentration: r.MaxSymbolConcentration,
 			MaxCorrelatedExposure: r.MaxCorrelatedExposure, MaxCVARPct: r.MaxCVARPct,
 			MaxOrdersPerHour: r.MaxOrdersPerHour, MaxSlippageBPS: r.MaxSlippageBPS,
-			MaxLeverage: r.MaxLeverage, MinLiqBuffer: r.MinLiqBuffer,
+			MaxLeverage: r.MaxLeverage, MaxMarginPct: r.MaxMarginPct,
+			LeverageStep: r.LeverageStep, MinLiqBuffer: r.MinLiqBuffer,
+			LiqStopMultiple: r.LiqStopMultiple, LiqVolMultiple: r.LiqVolMultiple,
+			LiqReservePct: r.LiqReservePct,
 			ForceIsolated: r.ForceIsolated, MinMarginRatio: r.MinMarginRatio,
 			DailyDrawdownLimit: r.DailyDrawdownLimit, WeeklyDrawdownLimit: r.WeeklyDrawdownLimit,
 			MaxDrawdownLimit: r.MaxDrawdownLimit, MaxConsecutiveLosses: r.MaxConsecutiveLosses,

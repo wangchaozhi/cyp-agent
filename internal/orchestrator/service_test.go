@@ -160,6 +160,72 @@ func TestRunOnceAutoApprovalExecutes(t *testing.T) {
 	}
 }
 
+func TestRunOnceAutomaticallyAddsToProfitableSameSidePosition(t *testing.T) {
+	harness := newHarness(t, func(settings *config.Settings) {
+		settings.Automation.Enabled = true
+		settings.Automation.ScanEnabled = true
+		settings.Automation.EntryEnabled = true
+		settings.Automation.ApprovalEnabled = true
+		settings.Automation.AddEnabled = true
+		settings.Automation.MinConfidence = 0
+		settings.Automation.MinRewardRisk = 1
+		settings.Automation.AddMinConfidence = 0
+		settings.Automation.AddMinProfitR = 0.1
+		settings.Automation.AddCooldownMinutes = 0
+		settings.Automation.MinEntryQuote = contracts.MustDecimal("1")
+		settings.Automation.MaxQuote = contracts.MustDecimal("200")
+		settings.AutoSymbols = "BTC/USDT"
+	}, orchestrator.WithDataSource(bullishSource{}))
+
+	initialMark := contracts.MustDecimal("5000")
+	if err := harness.venue.SetMarkPrice("BTC/USDT", initialMark); err != nil {
+		t.Fatal(err)
+	}
+	initial, err := harness.venue.Place(context.Background(), contracts.OrderIntent{
+		ClientID: "existing-profitable-long", Symbol: "BTC/USDT", Venue: "paper",
+		Side: contracts.SideLong, Instrument: contracts.InstrumentSpot,
+		OrderType: contracts.EntryTypeMarket, SizeQuote: contracts.MustDecimal("100"),
+		Price: &initialMark, Leverage: 1, MarginMode: contracts.MarginModeIsolated,
+	})
+	if err != nil || initial.Status != contracts.OrderStatusFilled {
+		t.Fatalf("initial position: %+v, %v", initial, err)
+	}
+	before, _ := harness.venue.Positions(context.Background())
+	result := harness.service.RunOnce(context.Background(), "run-auto-add", "BTC/USDT")
+	if result.Status != contracts.RunExecuted || result.Proposal == nil || result.Proposal.AddOnPlan == nil ||
+		result.Decision == nil || result.Decision.Operator != "auto-policy" {
+		t.Fatalf("automatic add status=%s before=%+v proposal=%+v decision=%+v error=%v", result.Status, before, result.Proposal, result.Decision, result.Error)
+	}
+	after, err := harness.venue.Positions(context.Background())
+	if err != nil || len(before) != 1 || len(after) != 1 || after[0].SizeBase.Cmp(before[0].SizeBase) <= 0 {
+		t.Fatalf("same-side position was not increased: before=%+v after=%+v err=%v", before, after, err)
+	}
+}
+
+func TestRunOnceAutoApprovalUsesFinalRiskScore(t *testing.T) {
+	harness := newHarness(t, func(settings *config.Settings) {
+		settings.Automation.Enabled = true
+		settings.Automation.ApprovalEnabled = true
+		settings.Automation.MinConfidence = 0
+		settings.Automation.MinRewardRisk = 1
+		settings.Automation.MinEntryQuote = contracts.MustDecimal("1")
+		settings.AutoSymbols = "BTC/USDT"
+		settings.Automation.MaxRiskScore = 0
+		settings.Automation.MaxQuote = contracts.MustDecimal("200")
+	}, orchestrator.WithDataSource(bullishSource{}))
+
+	result := harness.service.RunOnce(context.Background(), "run-auto-risk", "BTC/USDT")
+	if result.Status != contracts.RunRejected || result.Decision == nil ||
+		result.Decision.Operator != "auto-policy" || result.Assessment == nil ||
+		!strings.Contains(strings.Join(result.Assessment.HardViolations, "\n"), "auto_risk_score:") {
+		t.Fatalf("final automatic risk gate did not reject: %+v", result)
+	}
+	positions, err := harness.venue.Positions(context.Background())
+	if err != nil || len(positions) != 0 {
+		t.Fatalf("final risk rejection opened a position: %+v, %v", positions, err)
+	}
+}
+
 func TestRunOnceReversesOnlyAfterConfirmationAndFlatVerification(t *testing.T) {
 	tracker, err := riskstate.New(context.Background(), nil, contracts.MustDecimal("10000"))
 	if err != nil {

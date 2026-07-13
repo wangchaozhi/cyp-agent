@@ -62,7 +62,9 @@ func TestAutomationStoreMergesNewSafetyDefaultsIntoLegacySnapshot(t *testing.T) 
 	if err != nil || !found {
 		t.Fatalf("load found=%v err=%v", found, err)
 	}
-	if !got.EntryEnabled || got.ReverseEnabled || got.KellyScale != 0.25 || got.ReverseConfirmations != 2 || got.MinEntryQuote.String() != "20" {
+	if !got.EntryEnabled || !got.ReverseEnabled || !got.AddEnabled || got.KellyScale != 0.25 ||
+		got.AddRiskDecay != 0.5 || got.ProfitTargetR != 1.5 || got.ReverseConfirmations != 2 ||
+		got.MinEntryQuote.String() != "20" {
 		t.Fatalf("legacy automation did not inherit safe defaults: %+v", got)
 	}
 }

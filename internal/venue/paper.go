@@ -313,10 +313,6 @@ func (v *PaperVenue) Place(
 	if intent.SizeQuote.IsZero() || intent.SizeQuote.IsNegative() {
 		return v.rememberRejectedLocked(intent.ClientID, "开仓金额必须大于 0"), nil
 	}
-	if _, exists := v.positions[key]; exists {
-		return v.rememberRejectedLocked(intent.ClientID, "该标的已有同类型持仓"), nil
-	}
-
 	leverage, err := leverageDecimal(intent.Leverage)
 	if err != nil {
 		return v.rememberRejectedLocked(intent.ClientID, err.Error()), nil
@@ -328,9 +324,31 @@ func (v *PaperVenue) Place(
 			return contracts.ExecutionResult{}, err
 		}
 	}
+	existing, adding := v.positions[key]
+	if adding {
+		if existing.Side != intent.Side {
+			return v.rememberRejectedLocked(intent.ClientID, "该标的已有反向持仓"), nil
+		}
+		if intent.Instrument == contracts.InstrumentPerp {
+			existingLeverage, leverageErr := leverageDecimal(existing.Leverage)
+			if leverageErr != nil {
+				return v.rememberRejectedLocked(intent.ClientID, leverageErr.Error()), nil
+			}
+			existingNotional := existing.SizeBase.Mul(existing.EntryPrice)
+			existingMargin, marginErr := existingNotional.Quo(existingLeverage)
+			if marginErr != nil {
+				return contracts.ExecutionResult{}, marginErr
+			}
+			newTotalMargin, marginErr := existingNotional.Add(intent.SizeQuote).Quo(leverage)
+			if marginErr != nil {
+				return contracts.ExecutionResult{}, marginErr
+			}
+			cost = newTotalMargin.Sub(existingMargin)
+		}
+	}
 	fee := intent.SizeQuote.Mul(v.feeRate)
 	required := cost.Add(fee)
-	if v.freeQuote.Cmp(required) < 0 {
+	if required.IsPositive() && v.freeQuote.Cmp(required) < 0 {
 		message := fmt.Sprintf("可用余额不足：需要 %s，当前 %s", required.String(), v.freeQuote.String())
 		return v.rememberRejectedLocked(intent.ClientID, message), nil
 	}
@@ -355,6 +373,31 @@ func (v *PaperVenue) Place(
 		position.MarginMode = marginModePointer(intent.MarginMode)
 	}
 	protective := v.makeProtectiveLocked(intent)
+	if adding {
+		totalBase := existing.SizeBase.Add(sizeBase)
+		totalEntryNotional := existing.SizeBase.Mul(existing.EntryPrice).Add(sizeBase.Mul(preflight.EstPrice))
+		averageEntry, averageErr := totalEntryNotional.Quo(totalBase)
+		if averageErr != nil {
+			return contracts.ExecutionResult{}, averageErr
+		}
+		position = existing
+		position.SizeBase = totalBase
+		position.EntryPrice = averageEntry
+		position.Leverage = intent.Leverage
+		if intent.Instrument == contracts.InstrumentPerp {
+			position.MarginMode = marginModePointer(intent.MarginMode)
+			inverse, inverseErr := decimalOne.Quo(leverage)
+			if inverseErr != nil {
+				return contracts.ExecutionResult{}, inverseErr
+			}
+			liquidation := averageEntry.Mul(decimalOne.Add(inverse))
+			if intent.Side == contracts.SideLong {
+				liquidation = averageEntry.Mul(decimalOne.Sub(inverse))
+			}
+			position.LiqPrice = decimalPointer(liquidation)
+		}
+		protective = conservativeProtectiveOrders(existing.Side, v.protective[key], protective)
+	}
 	orderID := v.nextIDLocked("ord")
 	result := contracts.ExecutionResult{
 		ClientID:         intent.ClientID,
@@ -371,6 +414,40 @@ func (v *PaperVenue) Place(
 	v.protective[key] = protective
 	v.fills[intent.ClientID] = cloneExecution(result)
 	return cloneExecution(result), nil
+}
+
+func conservativeProtectiveOrders(
+	side contracts.Side,
+	existing contracts.List[contracts.ProtectiveOrder],
+	added contracts.List[contracts.ProtectiveOrder],
+) contracts.List[contracts.ProtectiveOrder] {
+	all := append(append(contracts.List[contracts.ProtectiveOrder]{}, existing...), added...)
+	var stop, take *contracts.ProtectiveOrder
+	for index := range all {
+		order := all[index]
+		switch order.Kind {
+		case "stop_loss":
+			if stop == nil || side == contracts.SideLong && order.TriggerPrice.Cmp(stop.TriggerPrice) > 0 ||
+				side == contracts.SideShort && order.TriggerPrice.Cmp(stop.TriggerPrice) < 0 {
+				copy := order
+				stop = &copy
+			}
+		case "take_profit":
+			if take == nil || side == contracts.SideLong && order.TriggerPrice.Cmp(take.TriggerPrice) < 0 ||
+				side == contracts.SideShort && order.TriggerPrice.Cmp(take.TriggerPrice) > 0 {
+				copy := order
+				take = &copy
+			}
+		}
+	}
+	result := contracts.List[contracts.ProtectiveOrder]{}
+	if stop != nil {
+		result = append(result, *stop)
+	}
+	if take != nil {
+		result = append(result, *take)
+	}
+	return result
 }
 
 // Fill returns an immutable snapshot of a prior idempotent result, including

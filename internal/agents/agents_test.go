@@ -221,6 +221,13 @@ func TestStrategistSafetyFallbacks(t *testing.T) {
 	if err != nil || proposal.Side != contracts.SideFlat {
 		t.Fatalf("disabled perp fallback = %+v, %v", proposal, err)
 	}
+	proposal, err = strategist.Run(context.Background(), bullishReports(), perpetual,
+		contracts.MustDecimal("10000"), riskConfig, AgentContext{AllowPerp: true}, "paper", nil)
+	if err != nil || proposal.Instrument != contracts.InstrumentPerp || proposal.Leverage != 2 ||
+		proposal.LeveragePlan == nil || proposal.LeveragePlan.SafeMaxLeverage != 3 ||
+		proposal.LeveragePlan.MarginBudgetQuote.Cmp(contracts.MustDecimal("1000")) != 0 {
+		t.Fatalf("perp leverage model = %+v, %v", proposal, err)
+	}
 
 	last := snapshot.OHLCV[len(snapshot.OHLCV)-1].Close
 	existing := []contracts.Position{{
@@ -229,8 +236,8 @@ func TestStrategistSafetyFallbacks(t *testing.T) {
 	}}
 	proposal, err = strategist.Run(context.Background(), bullishReports(), snapshot,
 		contracts.MustDecimal("10000"), riskConfig, AgentContext{}, "paper", existing)
-	if err != nil || proposal.Side != contracts.SideFlat || !strings.Contains(proposal.Thesis, "不加仓") {
-		t.Fatalf("same-direction fallback = %+v, %v", proposal, err)
+	if err != nil || proposal.Side != contracts.SideLong || proposal.AddOnPlan != nil {
+		t.Fatalf("same-direction candidate = %+v, %v", proposal, err)
 	}
 }
 

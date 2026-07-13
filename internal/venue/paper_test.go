@@ -248,6 +248,60 @@ func TestPaperPerpMarginAndLiquidation(t *testing.T) {
 	}
 }
 
+func TestPaperSameSidePerpAddAggregatesPositionAndMargin(t *testing.T) {
+	venue := NewPaperVenue()
+	mustSetMark(t, venue, "100")
+	first := openIntent("perp-base")
+	first.Instrument = contracts.InstrumentPerp
+	first.Leverage = 2
+	first.TakeProfit = contracts.List[contracts.Decimal]{contracts.MustDecimal("120")}
+	if result, err := venue.Place(context.Background(), first); err != nil || result.Status != contracts.OrderStatusFilled {
+		t.Fatalf("base result=%#v err=%v", result, err)
+	}
+	mustSetMark(t, venue, "110")
+	second := openIntent("perp-add")
+	second.Instrument = contracts.InstrumentPerp
+	second.Leverage = 2
+	second.SizeQuote = contracts.MustDecimal("500")
+	addStop := contracts.MustDecimal("95")
+	second.StopLoss = &addStop
+	second.TakeProfit = contracts.List[contracts.Decimal]{contracts.MustDecimal("115")}
+	if result, err := venue.Place(context.Background(), second); err != nil || result.Status != contracts.OrderStatusFilled {
+		t.Fatalf("add result=%#v err=%v", result, err)
+	}
+
+	positions, err := venue.Positions(context.Background())
+	if err != nil || len(positions) != 1 {
+		t.Fatalf("positions=%#v err=%v", positions, err)
+	}
+	baseEntry := contracts.MustDecimal("100.05")
+	addEntry := contracts.MustDecimal("110.055")
+	baseSize, _ := contracts.MustDecimal("1000").Quo(baseEntry)
+	addSize, _ := contracts.MustDecimal("500").Quo(addEntry)
+	totalSize := baseSize.Add(addSize)
+	totalEntryNotional := baseSize.Mul(baseEntry).Add(addSize.Mul(addEntry))
+	expectedEntry, _ := totalEntryNotional.Quo(totalSize)
+	position := positions[0]
+	if position.SizeBase.Cmp(totalSize) != 0 || position.EntryPrice.Cmp(expectedEntry) != 0 || position.Leverage != 2 {
+		t.Fatalf("aggregated size=%s entry=%s leverage=%g; want size=%s entry=%s", position.SizeBase,
+			position.EntryPrice, position.Leverage, totalSize, expectedEntry)
+	}
+	expectedLiq := expectedEntry.Mul(contracts.MustDecimal("0.5"))
+	if position.LiqPrice == nil || position.LiqPrice.Cmp(expectedLiq) != 0 {
+		t.Fatalf("liquidation=%v want %s", position.LiqPrice, expectedLiq)
+	}
+	balances, _ := venue.Balances(context.Background())
+	if balances.FreeQuote.Cmp(contracts.MustDecimal("9249.4")) != 0 {
+		t.Fatalf("free quote=%s, want 9249.4", balances.FreeQuote)
+	}
+	protective := venue.ProtectiveFor("BTC/USDT")
+	if len(protective) != 2 || protective[0].Kind != "stop_loss" ||
+		protective[0].TriggerPrice.Cmp(addStop) != 0 || protective[1].Kind != "take_profit" ||
+		protective[1].TriggerPrice.Cmp(contracts.MustDecimal("115")) != 0 {
+		t.Fatalf("conservative protective orders=%#v", protective)
+	}
+}
+
 func TestPaperHonorsCanceledContext(t *testing.T) {
 	venue := NewPaperVenue()
 	ctx, cancel := context.WithCancel(context.Background())

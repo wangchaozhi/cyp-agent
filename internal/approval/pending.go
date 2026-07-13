@@ -307,6 +307,14 @@ func cloneProposal(proposal contracts.TradeProposal) contracts.TradeProposal {
 		value := *proposal.Entry.High
 		proposal.Entry.High = &value
 	}
+	if proposal.LeveragePlan != nil {
+		value := *proposal.LeveragePlan
+		proposal.LeveragePlan = &value
+	}
+	if proposal.AddOnPlan != nil {
+		value := *proposal.AddOnPlan
+		proposal.AddOnPlan = &value
+	}
 	return proposal
 }
 

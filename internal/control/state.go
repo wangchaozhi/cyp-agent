@@ -104,6 +104,11 @@ func (s *State) UpdateSettings(request contracts.SettingsUpdateRequest) error {
 	if request.Automation != nil {
 		applyAutomationUpdate(&next.Automation, *request.Automation)
 	}
+	if next.Mode == "live" && (request.Automation == nil || request.Automation.Enabled == nil) {
+		// Entering live read-only mode must never inherit an active paper/demo
+		// automation master switch.
+		next.Automation.Enabled = false
+	}
 	if err := next.Validate(); err != nil {
 		return err
 	}
@@ -130,6 +135,9 @@ func applyAutomationUpdate(target *config.AutomationConfig, update contracts.Aut
 	if update.ReverseEnabled != nil {
 		target.ReverseEnabled = *update.ReverseEnabled
 	}
+	if update.AddEnabled != nil {
+		target.AddEnabled = *update.AddEnabled
+	}
 	if update.MaxRiskScore != nil {
 		target.MaxRiskScore = *update.MaxRiskScore
 	}
@@ -147,6 +155,24 @@ func applyAutomationUpdate(target *config.AutomationConfig, update contracts.Aut
 	}
 	if update.KellyScale != nil {
 		target.KellyScale = *update.KellyScale
+	}
+	if update.AddMinConfidence != nil {
+		target.AddMinConfidence = *update.AddMinConfidence
+	}
+	if update.AddMinProfitR != nil {
+		target.AddMinProfitR = *update.AddMinProfitR
+	}
+	if update.AddRiskDecay != nil {
+		target.AddRiskDecay = *update.AddRiskDecay
+	}
+	if update.AddMaxPositionFraction != nil {
+		target.AddMaxPositionFraction = *update.AddMaxPositionFraction
+	}
+	if update.AddCooldownMinutes != nil {
+		target.AddCooldownMinutes = *update.AddCooldownMinutes
+	}
+	if update.MaxAddsPerPosition != nil {
+		target.MaxAddsPerPosition = *update.MaxAddsPerPosition
 	}
 	if update.ReverseMinConfidence != nil {
 		target.ReverseMinConfidence = *update.ReverseMinConfidence
@@ -177,6 +203,12 @@ func applyAutomationUpdate(target *config.AutomationConfig, update contracts.Aut
 	}
 	if update.TrailGivebackR != nil {
 		target.TrailGivebackR = *update.TrailGivebackR
+	}
+	if update.ProfitTargetR != nil {
+		target.ProfitTargetR = *update.ProfitTargetR
+	}
+	if update.LossCutR != nil {
+		target.LossCutR = *update.LossCutR
 	}
 	if update.MaxHoldingMinutes != nil {
 		target.MaxHoldingMinutes = *update.MaxHoldingMinutes

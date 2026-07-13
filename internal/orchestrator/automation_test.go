@@ -54,3 +54,28 @@ func TestEvaluateAutoApprovalRequiresAutomaticEntrySwitch(t *testing.T) {
 		t.Fatalf("unexpected metrics: %+v", metrics)
 	}
 }
+
+func TestEvaluateAutoApprovalDefersRiskScoreUntilFinalSize(t *testing.T) {
+	settings := config.DefaultSettings()
+	settings.Automation.Enabled = true
+	settings.Automation.EntryEnabled = true
+	settings.Automation.ApprovalEnabled = true
+	settings.Automation.MaxRiskScore = 0.5
+	settings.Automation.MaxQuote = contracts.MustDecimal("200")
+	settings.Automation.MinEntryQuote = contracts.MustDecimal("1")
+	settings.Automation.MinConfidence = 0
+	settings.Automation.MinRewardRisk = 1
+	settings.AutoSymbols = "BTC/USDT"
+	entry := contracts.MustDecimal("100")
+	stop := contracts.MustDecimal("90")
+	proposal := contracts.TradeProposal{
+		Symbol: "BTC/USDT", Side: contracts.SideLong, SizeQuote: contracts.MustDecimal("5000"),
+		Entry: contracts.PricePlan{Price: &entry}, StopLoss: &stop,
+		TakeProfit: contracts.List[contracts.Decimal]{contracts.MustDecimal("130")}, Confidence: 0.8,
+	}
+	metrics := evaluateAutoApproval(settings, proposal,
+		contracts.RiskAssessment{RiskScore: 1}, contracts.MustDecimal("10000"))
+	if !metrics.Allowed || metrics.RecommendedQuote.Cmp(contracts.MustDecimal("200")) != 0 {
+		t.Fatalf("candidate risk score should be recalculated after Kelly downsize: %+v", metrics)
+	}
+}

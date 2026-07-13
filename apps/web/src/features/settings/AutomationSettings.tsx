@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Activity, Calculator, Play, Radar, Repeat2, ShieldCheck } from "lucide-react";
+import { Activity, Calculator, Layers3, Play, Radar, Repeat2, ShieldCheck } from "lucide-react";
 
 import type { AutomationSettings, RuntimeSettingsUpdate } from "../../shared/api/types";
 
@@ -27,6 +27,9 @@ export function validateAutomation(value: AutomationDraft): string | null {
   if (value.min_confidence < 0 || value.min_confidence > 1) return "最低置信度应在 0 到 1 之间";
   if (value.min_reward_risk <= 0) return "最低盈亏比必须大于 0";
   if (value.kelly_scale <= 0 || value.kelly_scale > 1) return "Kelly 使用比例应在 0 到 1 之间";
+  if (value.add_min_confidence < 0 || value.add_min_confidence > 1 || value.add_min_profit_r <= 0) return "加仓置信度或盈利 R 门槛无效";
+  if (value.add_risk_decay <= 0 || value.add_risk_decay > 1 || value.add_max_position_fraction <= 0 || value.add_max_position_fraction > 1) return "加仓风险衰减或单次比例应在 0 到 1 之间";
+  if (value.add_cooldown_minutes < 0 || value.max_adds_per_position < 1) return "加仓冷却或最多次数不在安全范围内";
   if (value.reverse_min_confidence < 0 || value.reverse_min_confidence > 1) return "反向置信度应在 0 到 1 之间";
   if (value.reverse_min_reward_risk <= 0) return "反向盈亏比必须大于 0";
   if (value.reverse_confirmations < 1 || value.reverse_signal_minutes < 1 || value.reverse_cooldown_minutes < 0 || value.max_reversals_per_day < 1) {
@@ -36,6 +39,7 @@ export function validateAutomation(value: AutomationDraft): string | null {
   if (value.volatility_multiplier < 0 || value.trail_activation_r <= 0 || value.trail_giveback_r <= 0) {
     return "波动率倍数不能为负，跟踪参数必须大于 0";
   }
+  if (value.profit_target_r <= 0 || value.loss_cut_r <= 0) return "理想收益和行情恶化阈值必须大于 0";
   if (value.max_holding_minutes <= 0 || value.exit_confirmations < 1 || value.exit_min_samples < 2) {
     return "持仓时间、确认次数和最小样本数不在安全范围内";
   }
@@ -49,7 +53,7 @@ export function AutomationSettingsPanel({ value, liveReadOnly = false, onSave }:
 
   useEffect(() => setDraft(toDraft(value)), [value]);
 
-  const setToggle = (field: "enabled" | "scan_enabled" | "entry_enabled" | "approval_enabled" | "exit_enabled" | "reverse_enabled", checked: boolean) => {
+  const setToggle = (field: "enabled" | "scan_enabled" | "entry_enabled" | "approval_enabled" | "exit_enabled" | "reverse_enabled" | "add_enabled", checked: boolean) => {
     setError(null);
     setDraft((current) => ({ ...current, [field]: checked }));
   };
@@ -84,7 +88,7 @@ export function AutomationSettingsPanel({ value, liveReadOnly = false, onSave }:
             <Activity size={13} /> {draft.enabled ? "自动化运行中" : "自动化已关闭"}
           </span>
           <h3>策略自动化</h3>
-          <p>自动扫描、分数 Kelly 开仓、数学审批、主动退出与受控反向可独立控制；总开关关闭后，交易所原生止损止盈仍然有效。</p>
+          <p>自动扫描、分数 Kelly 开仓、盈利递减加仓、数学审批、主动退出与受控反向可独立控制；总开关关闭后，交易所原生止损止盈仍然有效。</p>
         </div>
         <label className="toggle-control toggle-control--master">
           <input
@@ -117,6 +121,12 @@ export function AutomationSettingsPanel({ value, liveReadOnly = false, onSave }:
           <input type="checkbox" checked={draft.approval_enabled} onChange={(event) => setToggle("approval_enabled", event.target.checked)} />
           <i aria-hidden="true" />
         </label>
+        <label className={`automation-strategy ${draft.add_enabled ? "is-on" : ""}`}>
+          <Layers3 size={16} />
+          <span><strong>自动加仓</strong><small>盈利后按递减风险预算分层追加</small></span>
+          <input type="checkbox" checked={draft.add_enabled} onChange={(event) => setToggle("add_enabled", event.target.checked)} />
+          <i aria-hidden="true" />
+        </label>
         <label className={`automation-strategy ${draft.exit_enabled ? "is-on" : ""}`}>
           <ShieldCheck size={16} />
           <span><strong>主动退出</strong><small>EWMA 波动跟踪与时间止损</small></span>
@@ -142,6 +152,15 @@ export function AutomationSettingsPanel({ value, liveReadOnly = false, onSave }:
           <label><span>Kelly 使用比例</span><input type="number" min="0.01" max="1" step="0.05" value={draft.kelly_scale} onChange={(event) => setNumber("kelly_scale", event.target.value)} /></label>
         </fieldset>
         <fieldset>
+          <legend>自动加仓模型</legend>
+          <label><span>最低加仓置信度</span><input type="number" min="0" max="1" step="0.01" value={draft.add_min_confidence} onChange={(event) => setNumber("add_min_confidence", event.target.value)} /></label>
+          <label><span>最低浮盈 (R)</span><input type="number" min="0.1" step="0.1" value={draft.add_min_profit_r} onChange={(event) => setNumber("add_min_profit_r", event.target.value)} /></label>
+          <label><span>风险递减系数</span><input type="number" min="0.01" max="1" step="0.05" value={draft.add_risk_decay} onChange={(event) => setNumber("add_risk_decay", event.target.value)} /></label>
+          <label><span>单次最多为现仓</span><input type="number" min="0.01" max="1" step="0.05" value={draft.add_max_position_fraction} onChange={(event) => setNumber("add_max_position_fraction", event.target.value)} /></label>
+          <label><span>加仓冷却 (分钟)</span><input type="number" min="0" step="5" value={draft.add_cooldown_minutes} onChange={(event) => setNumber("add_cooldown_minutes", event.target.value)} /></label>
+          <label><span>每仓最多加仓</span><input type="number" min="1" step="1" value={draft.max_adds_per_position} onChange={(event) => setNumber("max_adds_per_position", event.target.value)} /></label>
+        </fieldset>
+        <fieldset>
           <legend>自动反向护栏</legend>
           <label><span>最低反向置信度</span><input type="number" min="0" max="1" step="0.01" value={draft.reverse_min_confidence} onChange={(event) => setNumber("reverse_min_confidence", event.target.value)} /></label>
           <label><span>最低反向盈亏比</span><input type="number" min="0.1" step="0.1" value={draft.reverse_min_reward_risk} onChange={(event) => setNumber("reverse_min_reward_risk", event.target.value)} /></label>
@@ -156,6 +175,8 @@ export function AutomationSettingsPanel({ value, liveReadOnly = false, onSave }:
           <label><span>波动率倍数</span><input type="number" min="0" step="0.1" value={draft.volatility_multiplier} onChange={(event) => setNumber("volatility_multiplier", event.target.value)} /></label>
           <label><span>跟踪启动 (R)</span><input type="number" min="0.1" step="0.1" value={draft.trail_activation_r} onChange={(event) => setNumber("trail_activation_r", event.target.value)} /></label>
           <label><span>最小回吐 (R)</span><input type="number" min="0.1" step="0.1" value={draft.trail_giveback_r} onChange={(event) => setNumber("trail_giveback_r", event.target.value)} /></label>
+          <label><span>理想收益退出 (R)</span><input type="number" min="0.1" step="0.1" value={draft.profit_target_r} onChange={(event) => setNumber("profit_target_r", event.target.value)} /></label>
+          <label><span>行情恶化退出 (R)</span><input type="number" min="0.1" step="0.1" value={draft.loss_cut_r} onChange={(event) => setNumber("loss_cut_r", event.target.value)} /></label>
           <label><span>最长持仓 (分钟)</span><input type="number" min="1" step="15" value={draft.max_holding_minutes} onChange={(event) => setNumber("max_holding_minutes", event.target.value)} /></label>
           <label><span>时间止损阈值 (R)</span><input type="number" step="0.1" value={draft.time_stop_min_r} onChange={(event) => setNumber("time_stop_min_r", event.target.value)} /></label>
           <label><span>退出确认次数</span><input type="number" min="1" step="1" value={draft.exit_confirmations} onChange={(event) => setNumber("exit_confirmations", event.target.value)} /></label>
@@ -165,7 +186,7 @@ export function AutomationSettingsPanel({ value, liveReadOnly = false, onSave }:
 
       {error ? <div className="inline-alert automation-settings__error">{error}</div> : null}
       <div className="automation-settings__footer">
-        <p>反向严格执行“reduce-only 平旧仓 → 核验归零 → 撤残余保护单 → 重新风控 → 开新仓”；任一步失败都停在空仓或原仓。Live 模式仍硬锁自动化。</p>
+        <p>加仓仅在已有浮盈、冷却结束且递减风险预算有余量时执行；反向严格执行“reduce-only 平旧仓 → 核验归零 → 撤残余保护单 → 重新风控 → 开新仓”。Live 模式仍硬锁自动化。</p>
         <button className="command-button command-button--primary" type="button" disabled={saving} onClick={() => void save()}>
           {saving ? "保存中" : "保存自动化策略"}
         </button>

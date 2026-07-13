@@ -43,10 +43,6 @@ func evaluateAutoApproval(
 		result.Reason = "币种不在自动化白名单"
 		return result
 	}
-	if assessment.RiskScore > settings.Automation.MaxRiskScore {
-		result.Reason = "风险分超过自动审批上限"
-		return result
-	}
 	approvalQuote := proposal.SizeQuote
 	if assessment.AdjustedSizeQuote != nil && assessment.AdjustedSizeQuote.Cmp(approvalQuote) < 0 {
 		approvalQuote = *assessment.AdjustedSizeQuote

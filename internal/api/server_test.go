@@ -137,19 +137,18 @@ func TestHealthSettingsKillAndDashboardShapes(t *testing.T) {
 		t.Fatalf("automation settings response = %d %s", response.StatusCode, body)
 	}
 
-	response, body = requestJSON(t, client, http.MethodPost, server.URL+"/api/settings", map[string]any{"mode": "live"})
-	if response.StatusCode != http.StatusUnprocessableEntity || !strings.Contains(string(body), "automation") {
-		t.Fatalf("live mode must reject enabled automation: %d %s", response.StatusCode, body)
-	}
 	response, body = requestJSON(t, client, http.MethodPost, server.URL+"/api/settings", map[string]any{
-		"automation": map[string]any{"enabled": false},
+		"mode": "live", "automation": map[string]any{"enabled": true},
 	})
-	if response.StatusCode != http.StatusOK {
-		t.Fatalf("disable automation response = %d %s", response.StatusCode, body)
+	if response.StatusCode != http.StatusUnprocessableEntity || !strings.Contains(string(body), "automation") {
+		t.Fatalf("live mode must reject explicitly enabled automation: %d %s", response.StatusCode, body)
 	}
 	response, body = requestJSON(t, client, http.MethodPost, server.URL+"/api/settings", map[string]any{"mode": "live"})
 	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), `"mode":"live"`) || !strings.Contains(string(body), `"live_guard":{"ok":false`) {
 		t.Fatalf("mode switch response = %d %s", response.StatusCode, body)
+	}
+	if !strings.Contains(string(body), `"automation":{"enabled":false`) {
+		t.Fatalf("live mode did not disable inherited automation: %d %s", response.StatusCode, body)
 	}
 	response, body = requestJSON(t, client, http.MethodGet, server.URL+"/api/health", nil)
 	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), `"mode":"live"`) {
@@ -252,7 +251,9 @@ func TestBacktestCompatibilityAndValidation(t *testing.T) {
 }
 
 func TestFullHTTPApprovalAndCloseLoop(t *testing.T) {
-	application, server := newTestApplication(t, nil)
+	application, server := newTestApplication(t, func(settings *config.Settings) {
+		settings.Automation.Enabled = false
+	})
 	client := server.Client()
 	response, body := requestJSON(t, client, http.MethodPost, server.URL+"/api/run", map[string]any{"symbol": "BTC/USDT"})
 	if response.StatusCode != http.StatusOK {

@@ -15,6 +15,8 @@
         "reports_ready",
         "proposal_ready",
         "risk_assessed",
+        "risk_reassessed",
+        "add_on_evaluated",
         "awaiting_approval",
         "approval_decided",
         "executed",
@@ -66,6 +68,7 @@
     "proposal_side": { "$ref": "#/$defs/Side" },
     "side": { "$ref": "#/$defs/Side" },
     "model": { "$ref": "#/$defs/AutoApprovalMetrics" },
+    "add_on": { "$ref": "#/$defs/AddOnEvaluation" },
     "reversal": { "$ref": "#/$defs/ReversalDecision" },
     "pnl_quote": { "$ref": "#/$defs/DecimalString" },
     "exit_decision": {
@@ -136,6 +139,14 @@
     {
       "properties": { "type": { "const": "risk_assessed" } },
       "required": ["symbol", "assessment"]
+    },
+    {
+      "properties": { "type": { "const": "risk_reassessed" } },
+      "required": ["symbol", "proposal", "assessment"]
+    },
+    {
+      "properties": { "type": { "const": "add_on_evaluated" } },
+      "required": ["symbol", "proposal", "add_on"]
     },
     {
       "properties": { "type": { "const": "awaiting_approval" } },
@@ -260,6 +271,76 @@
         "high": { "$ref": "#/$defs/NullableDecimalString" }
       }
     },
+    "LeveragePlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "model",
+        "required_leverage",
+        "safe_max_leverage",
+        "selected_leverage",
+        "stop_fraction",
+        "volatility_fraction",
+        "required_liquidation_buffer",
+        "margin_budget_quote",
+        "estimated_margin_quote",
+        "max_notional_quote",
+        "downsized"
+      ],
+      "properties": {
+        "model": { "type": "string", "const": "margin-volatility-v1" },
+        "required_leverage": { "type": "number", "minimum": 1 },
+        "safe_max_leverage": { "type": "number", "minimum": 1 },
+        "selected_leverage": { "type": "number", "minimum": 1 },
+        "stop_fraction": { "$ref": "#/$defs/DecimalString" },
+        "volatility_fraction": { "$ref": "#/$defs/DecimalString" },
+        "required_liquidation_buffer": { "$ref": "#/$defs/DecimalString" },
+        "margin_budget_quote": { "$ref": "#/$defs/DecimalString" },
+        "estimated_margin_quote": { "$ref": "#/$defs/DecimalString" },
+        "max_notional_quote": { "$ref": "#/$defs/DecimalString" },
+        "downsized": { "type": "boolean" }
+      }
+    },
+    "AddOnPlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "model",
+        "existing_notional_quote",
+        "existing_leverage",
+        "profit_r",
+        "add_index",
+        "max_adds",
+        "risk_decay",
+        "risk_fraction",
+        "max_position_fraction",
+        "recommended_notional_quote",
+        "cooldown_minutes"
+      ],
+      "properties": {
+        "model": { "type": "string", "const": "risk-pyramid-v1" },
+        "existing_notional_quote": { "$ref": "#/$defs/DecimalString" },
+        "existing_leverage": { "type": "number", "minimum": 1 },
+        "profit_r": { "type": "number", "exclusiveMinimum": 0 },
+        "add_index": { "type": "integer", "minimum": 1 },
+        "max_adds": { "type": "integer", "minimum": 1 },
+        "risk_decay": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+        "risk_fraction": { "type": "number", "exclusiveMinimum": 0 },
+        "max_position_fraction": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+        "recommended_notional_quote": { "$ref": "#/$defs/DecimalString" },
+        "cooldown_minutes": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "AddOnEvaluation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allowed", "reason"],
+      "properties": {
+        "allowed": { "type": "boolean" },
+        "reason": { "type": "string" },
+        "plan": { "$ref": "#/$defs/AddOnPlan" }
+      }
+    },
     "TradeProposal": {
       "type": "object",
       "additionalProperties": false,
@@ -312,7 +393,9 @@
         "supporting_reports": {
           "type": "array",
           "items": { "type": "string" }
-        }
+        },
+        "leverage_plan": { "$ref": "#/$defs/LeveragePlan" },
+        "add_on_plan": { "$ref": "#/$defs/AddOnPlan" }
       }
     },
     "RiskAssessment": {

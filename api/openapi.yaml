@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: cyp-agent HTTP API
-  version: 1.2.0
+  version: 1.3.0
   description: |
     React 仪表盘使用的 REST 与 SSE 契约。
 
@@ -744,7 +744,12 @@ components:
         - max_orders_per_hour
         - max_slippage_bps
         - max_leverage
+        - max_margin_pct
+        - leverage_step
         - min_liq_buffer
+        - liq_stop_multiple
+        - liq_vol_multiple
+        - liq_reserve_pct
         - force_isolated
         - min_margin_ratio
         - daily_drawdown_limit
@@ -764,7 +769,12 @@ components:
           minimum: 0
         max_slippage_bps: { $ref: "#/components/schemas/DecimalString" }
         max_leverage: { $ref: "#/components/schemas/DecimalString" }
+        max_margin_pct: { $ref: "#/components/schemas/DecimalString" }
+        leverage_step: { $ref: "#/components/schemas/DecimalString" }
         min_liq_buffer: { $ref: "#/components/schemas/DecimalString" }
+        liq_stop_multiple: { $ref: "#/components/schemas/DecimalString" }
+        liq_vol_multiple: { $ref: "#/components/schemas/DecimalString" }
+        liq_reserve_pct: { $ref: "#/components/schemas/DecimalString" }
         force_isolated:
           type: boolean
         min_margin_ratio: { $ref: "#/components/schemas/DecimalString" }
@@ -817,7 +827,7 @@ components:
     AutomationSettings:
       type: object
       additionalProperties: false
-      required: [enabled, scan_enabled, entry_enabled, approval_enabled, exit_enabled, reverse_enabled, max_risk_score, max_quote, min_entry_quote, min_confidence, min_reward_risk, kelly_scale, reverse_min_confidence, reverse_min_reward_risk, reverse_confirmations, reverse_signal_minutes, reverse_cooldown_minutes, max_reversals_per_day, ewma_lambda, volatility_multiplier, trail_activation_r, trail_giveback_r, max_holding_minutes, time_stop_min_r, exit_confirmations, exit_min_samples]
+      required: [enabled, scan_enabled, entry_enabled, approval_enabled, exit_enabled, reverse_enabled, add_enabled, max_risk_score, max_quote, min_entry_quote, min_confidence, min_reward_risk, kelly_scale, add_min_confidence, add_min_profit_r, add_risk_decay, add_max_position_fraction, add_cooldown_minutes, max_adds_per_position, reverse_min_confidence, reverse_min_reward_risk, reverse_confirmations, reverse_signal_minutes, reverse_cooldown_minutes, max_reversals_per_day, ewma_lambda, volatility_multiplier, trail_activation_r, trail_giveback_r, profit_target_r, loss_cut_r, max_holding_minutes, time_stop_min_r, exit_confirmations, exit_min_samples]
       properties:
         enabled: { type: boolean }
         scan_enabled: { type: boolean }
@@ -825,12 +835,19 @@ components:
         approval_enabled: { type: boolean }
         exit_enabled: { type: boolean }
         reverse_enabled: { type: boolean }
+        add_enabled: { type: boolean }
         max_risk_score: { type: number, minimum: 0, maximum: 1 }
         max_quote: { $ref: "#/components/schemas/DecimalString" }
         min_entry_quote: { $ref: "#/components/schemas/DecimalString" }
         min_confidence: { type: number, minimum: 0, maximum: 1 }
         min_reward_risk: { type: number, exclusiveMinimum: 0 }
         kelly_scale: { type: number, exclusiveMinimum: 0, maximum: 1 }
+        add_min_confidence: { type: number, minimum: 0, maximum: 1 }
+        add_min_profit_r: { type: number, exclusiveMinimum: 0 }
+        add_risk_decay: { type: number, exclusiveMinimum: 0, maximum: 1 }
+        add_max_position_fraction: { type: number, exclusiveMinimum: 0, maximum: 1 }
+        add_cooldown_minutes: { type: integer, minimum: 0 }
+        max_adds_per_position: { type: integer, minimum: 1 }
         reverse_min_confidence: { type: number, minimum: 0, maximum: 1 }
         reverse_min_reward_risk: { type: number, exclusiveMinimum: 0 }
         reverse_confirmations: { type: integer, minimum: 1 }
@@ -841,6 +858,8 @@ components:
         volatility_multiplier: { type: number, minimum: 0 }
         trail_activation_r: { type: number, exclusiveMinimum: 0 }
         trail_giveback_r: { type: number, exclusiveMinimum: 0 }
+        profit_target_r: { type: number, exclusiveMinimum: 0 }
+        loss_cut_r: { type: number, exclusiveMinimum: 0 }
         max_holding_minutes: { type: integer, minimum: 1 }
         time_stop_min_r: { type: number }
         exit_confirmations: { type: integer, minimum: 1 }
@@ -856,12 +875,19 @@ components:
         approval_enabled: { type: boolean }
         exit_enabled: { type: boolean }
         reverse_enabled: { type: boolean }
+        add_enabled: { type: boolean }
         max_risk_score: { type: number, minimum: 0, maximum: 1 }
         max_quote: { $ref: "#/components/schemas/DecimalInput" }
         min_entry_quote: { $ref: "#/components/schemas/DecimalInput" }
         min_confidence: { type: number, minimum: 0, maximum: 1 }
         min_reward_risk: { type: number, exclusiveMinimum: 0 }
         kelly_scale: { type: number, exclusiveMinimum: 0, maximum: 1 }
+        add_min_confidence: { type: number, minimum: 0, maximum: 1 }
+        add_min_profit_r: { type: number, exclusiveMinimum: 0 }
+        add_risk_decay: { type: number, exclusiveMinimum: 0, maximum: 1 }
+        add_max_position_fraction: { type: number, exclusiveMinimum: 0, maximum: 1 }
+        add_cooldown_minutes: { type: integer, minimum: 0 }
+        max_adds_per_position: { type: integer, minimum: 1 }
         reverse_min_confidence: { type: number, minimum: 0, maximum: 1 }
         reverse_min_reward_risk: { type: number, exclusiveMinimum: 0 }
         reverse_confirmations: { type: integer, minimum: 1 }
@@ -872,6 +898,8 @@ components:
         volatility_multiplier: { type: number, minimum: 0 }
         trail_activation_r: { type: number, exclusiveMinimum: 0 }
         trail_giveback_r: { type: number, exclusiveMinimum: 0 }
+        profit_target_r: { type: number, exclusiveMinimum: 0 }
+        loss_cut_r: { type: number, exclusiveMinimum: 0 }
         max_holding_minutes: { type: integer, minimum: 1 }
         time_stop_min_r: { type: number }
         exit_confirmations: { type: integer, minimum: 1 }
@@ -891,6 +919,44 @@ components:
           $ref: "#/components/schemas/NullableDecimalString"
         high:
           $ref: "#/components/schemas/NullableDecimalString"
+
+    LeveragePlan:
+      type: object
+      additionalProperties: false
+      required: [model, required_leverage, safe_max_leverage, selected_leverage, stop_fraction, volatility_fraction, required_liquidation_buffer, margin_budget_quote, estimated_margin_quote, max_notional_quote, downsized]
+      properties:
+        model:
+          type: string
+          enum: [margin-volatility-v1]
+        required_leverage: { type: number, minimum: 1 }
+        safe_max_leverage: { type: number, minimum: 1 }
+        selected_leverage: { type: number, minimum: 1 }
+        stop_fraction: { $ref: "#/components/schemas/DecimalString" }
+        volatility_fraction: { $ref: "#/components/schemas/DecimalString" }
+        required_liquidation_buffer: { $ref: "#/components/schemas/DecimalString" }
+        margin_budget_quote: { $ref: "#/components/schemas/DecimalString" }
+        estimated_margin_quote: { $ref: "#/components/schemas/DecimalString" }
+        max_notional_quote: { $ref: "#/components/schemas/DecimalString" }
+        downsized: { type: boolean }
+
+    AddOnPlan:
+      type: object
+      additionalProperties: false
+      required: [model, existing_notional_quote, existing_leverage, profit_r, add_index, max_adds, risk_decay, risk_fraction, max_position_fraction, recommended_notional_quote, cooldown_minutes]
+      properties:
+        model:
+          type: string
+          enum: [risk-pyramid-v1]
+        existing_notional_quote: { $ref: "#/components/schemas/DecimalString" }
+        existing_leverage: { type: number, minimum: 1 }
+        profit_r: { type: number, exclusiveMinimum: 0 }
+        add_index: { type: integer, minimum: 1 }
+        max_adds: { type: integer, minimum: 1 }
+        risk_decay: { type: number, exclusiveMinimum: 0, maximum: 1 }
+        risk_fraction: { type: number, exclusiveMinimum: 0 }
+        max_position_fraction: { type: number, exclusiveMinimum: 0, maximum: 1 }
+        recommended_notional_quote: { $ref: "#/components/schemas/DecimalString" }
+        cooldown_minutes: { type: integer, minimum: 0 }
 
     TradeProposal:
       type: object
@@ -945,6 +1011,10 @@ components:
           type: array
           items:
             type: string
+        leverage_plan:
+          $ref: "#/components/schemas/LeveragePlan"
+        add_on_plan:
+          $ref: "#/components/schemas/AddOnPlan"
 
     RiskAssessment:
       type: object
@@ -1237,6 +1307,9 @@ components:
             - weekly_dd
             - total_dd
             - max_leverage
+            - max_margin_pct
+            - leverage_step
+            - min_liq_buffer
             - max_orders_per_hour
             - max_consecutive_losses
           properties:
@@ -1244,6 +1317,9 @@ components:
             weekly_dd: { $ref: "#/components/schemas/DecimalString" }
             total_dd: { $ref: "#/components/schemas/DecimalString" }
             max_leverage: { $ref: "#/components/schemas/DecimalString" }
+            max_margin_pct: { $ref: "#/components/schemas/DecimalString" }
+            leverage_step: { $ref: "#/components/schemas/DecimalString" }
+            min_liq_buffer: { $ref: "#/components/schemas/DecimalString" }
             max_orders_per_hour:
               type: integer
               minimum: 0

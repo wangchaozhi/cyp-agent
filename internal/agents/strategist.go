@@ -10,6 +10,7 @@ import (
 
 	"github.com/wangchaozhi/cyp-agent/internal/config"
 	"github.com/wangchaozhi/cyp-agent/internal/contracts"
+	"github.com/wangchaozhi/cyp-agent/internal/risk"
 )
 
 var defaultWeights = map[contracts.AgentID]float64{
@@ -147,17 +148,6 @@ func (strategist *Strategist) Run(
 	if net < 0 {
 		side = contracts.SideShort
 	}
-	for _, position := range positions {
-		if position.Symbol == snapshot.Symbol && position.Side == side {
-			return flatProposal(snapshot.Symbol, venueID, confidence,
-				fmt.Sprintf("已持有 %s 同向（%s）仓位，本轮不加仓。", snapshot.Symbol, side), supporting), nil
-		}
-	}
-
-	maxLeverage := 1.0
-	if value, err := riskConfig.MaxLeverage.Float64(); err == nil && value > 1 {
-		maxLeverage = value
-	}
 	instrument := contracts.InstrumentSpot
 	leverage := 1.0
 	isPerpetualSymbol := strings.Contains(snapshot.Symbol, ":")
@@ -167,14 +157,8 @@ func (strategist *Strategist) Run(
 	}
 	if isPerpetualSymbol {
 		instrument = contracts.InstrumentPerp
-		if confidence >= 0.25 && maxLeverage > 1 {
-			leverage = math.Max(1, math.Min(maxLeverage,
-				math.RoundToEven(1+confidence*(maxLeverage-1))))
-		}
-	} else if agentContext.AllowPerp && confidence >= 0.25 && maxLeverage > 1 {
+	} else if agentContext.AllowPerp {
 		instrument = contracts.InstrumentPerp
-		leverage = math.Max(1, math.Min(maxLeverage,
-			math.RoundToEven(1+confidence*(maxLeverage-1))))
 	}
 	if side == contracts.SideShort && instrument == contracts.InstrumentSpot {
 		return flatProposal(snapshot.Symbol, venueID, confidence,
@@ -255,8 +239,40 @@ func (strategist *Strategist) Run(
 	}
 
 	quantizedSize, _ := size.QuoScale(contracts.NewDecimalFromInt64(1), 2, contracts.RoundDown)
-	entryReference := ref
 	quantizedStop, _ := stop.QuoScale(contracts.NewDecimalFromInt64(1), 2, contracts.RoundHalfEven)
+	var leveragePlan *contracts.LeveragePlan
+	if instrument == contracts.InstrumentPerp {
+		modelStopFraction, fractionErr := ref.Sub(quantizedStop).Abs().Quo(ref)
+		if fractionErr != nil || !modelStopFraction.IsPositive() {
+			return flatProposal(snapshot.Symbol, venueID, confidence,
+				"量化后的止损距离无效，本轮不开仓。", supporting), nil
+		}
+		volatilityFraction := contracts.Zero()
+		if ewmaSigma > 0 {
+			volatilityFraction, err = decimalFromFloat(ewmaSigma)
+			if err != nil {
+				return contracts.TradeProposal{}, err
+			}
+		}
+		calculation, leverageErr := risk.CalculateLeverage(risk.LeverageInput{
+			EquityQuote: equity, ProposedNotionalQuote: quantizedSize,
+			StopFraction: modelStopFraction, VolatilityFraction: volatilityFraction,
+			MaxLeverage: riskConfig.MaxLeverage, MaxMarginPct: riskConfig.MaxMarginPct,
+			LeverageStep: riskConfig.LeverageStep, MinLiquidationBuffer: riskConfig.MinLiqBuffer,
+			StopLossBufferMultiple:   riskConfig.LiqStopMultiple,
+			VolatilityBufferMultiple: riskConfig.LiqVolMultiple,
+			LiquidationReservePct:    riskConfig.LiqReservePct,
+		})
+		if leverageErr != nil {
+			return flatProposal(snapshot.Symbol, venueID, confidence,
+				"杠杆压力模型无安全可行解，本轮不开仓。", supporting), nil
+		}
+		quantizedSize = calculation.NotionalQuote
+		leverage = calculation.Plan.SelectedLeverage
+		plan := calculation.Plan
+		leveragePlan = &plan
+	}
+	entryReference := ref
 	quantizedTakeProfit, _ := takeProfit.QuoScale(contracts.NewDecimalFromInt64(1), 2, contracts.RoundHalfEven)
 	proposal := contracts.TradeProposal{
 		Symbol: snapshot.Symbol, Venue: venueID, Side: side, Instrument: instrument,
@@ -264,6 +280,7 @@ func (strategist *Strategist) Run(
 		Entry: contracts.PricePlan{Type: contracts.EntryTypeMarket, Price: &entryReference}, StopLoss: &quantizedStop,
 		TakeProfit: contracts.List[contracts.Decimal]{quantizedTakeProfit},
 		Confidence: confidence, Thesis: thesis, SupportingReports: supporting,
+		LeveragePlan: leveragePlan,
 	}
 	return proposal, proposal.Validate()
 }

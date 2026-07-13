@@ -13,52 +13,62 @@ import (
 
 // Limits is an immutable risk policy snapshot assembled from runtime config.
 type Limits struct {
-	MaxRiskPerTrade        contracts.Decimal
-	MaxPositionPct         contracts.Decimal
-	MaxGrossExposure       contracts.Decimal
-	MaxSymbolConcentration contracts.Decimal
-	MaxCorrelatedExposure  contracts.Decimal
-	MaxCVARPct             contracts.Decimal
-	MaxOrdersPerHour       int
-	MaxSlippageBPS         contracts.Decimal
-	MaxLeverage            contracts.Decimal
-	MinLiquidationBuffer   contracts.Decimal
-	ForceIsolated          bool
-	MinMarginRatio         contracts.Decimal
-	MaxPriceImpact         contracts.Decimal
-	MaxGasQuote            contracts.Decimal
-	MinPoolTVL             contracts.Decimal
-	ContractWhitelist      map[string]struct{}
-	RequirePrivateMempool  bool
-	DailyDrawdownLimit     contracts.Decimal
-	WeeklyDrawdownLimit    contracts.Decimal
-	MaxDrawdownLimit       contracts.Decimal
-	MaxConsecutiveLosses   int
+	MaxRiskPerTrade          contracts.Decimal
+	MaxPositionPct           contracts.Decimal
+	MaxGrossExposure         contracts.Decimal
+	MaxSymbolConcentration   contracts.Decimal
+	MaxCorrelatedExposure    contracts.Decimal
+	MaxCVARPct               contracts.Decimal
+	MaxOrdersPerHour         int
+	MaxSlippageBPS           contracts.Decimal
+	MaxLeverage              contracts.Decimal
+	MaxMarginPct             contracts.Decimal
+	LeverageStep             contracts.Decimal
+	MinLiquidationBuffer     contracts.Decimal
+	StopLossBufferMultiple   contracts.Decimal
+	VolatilityBufferMultiple contracts.Decimal
+	LiquidationReservePct    contracts.Decimal
+	ForceIsolated            bool
+	MinMarginRatio           contracts.Decimal
+	MaxPriceImpact           contracts.Decimal
+	MaxGasQuote              contracts.Decimal
+	MinPoolTVL               contracts.Decimal
+	ContractWhitelist        map[string]struct{}
+	RequirePrivateMempool    bool
+	DailyDrawdownLimit       contracts.Decimal
+	WeeklyDrawdownLimit      contracts.Decimal
+	MaxDrawdownLimit         contracts.Decimal
+	MaxConsecutiveLosses     int
 }
 
 func DefaultLimits() Limits {
 	return Limits{
-		MaxRiskPerTrade:        contracts.MustDecimal("0.01"),
-		MaxPositionPct:         contracts.MustDecimal("0.20"),
-		MaxGrossExposure:       contracts.MustDecimal("1.00"),
-		MaxSymbolConcentration: contracts.MustDecimal("0.30"),
-		MaxCorrelatedExposure:  contracts.MustDecimal("0.50"),
-		MaxCVARPct:             contracts.MustDecimal("0.03"),
-		MaxOrdersPerHour:       10,
-		MaxSlippageBPS:         contracts.MustDecimal("30"),
-		MaxLeverage:            contracts.MustDecimal("3"),
-		MinLiquidationBuffer:   contracts.MustDecimal("0.30"),
-		ForceIsolated:          true,
-		MinMarginRatio:         contracts.MustDecimal("0.05"),
-		MaxPriceImpact:         contracts.MustDecimal("0.01"),
-		MaxGasQuote:            contracts.MustDecimal("20"),
-		MinPoolTVL:             contracts.MustDecimal("1000000"),
-		ContractWhitelist:      map[string]struct{}{},
-		RequirePrivateMempool:  true,
-		DailyDrawdownLimit:     contracts.MustDecimal("0.03"),
-		WeeklyDrawdownLimit:    contracts.MustDecimal("0.08"),
-		MaxDrawdownLimit:       contracts.MustDecimal("0.15"),
-		MaxConsecutiveLosses:   4,
+		MaxRiskPerTrade:          contracts.MustDecimal("0.01"),
+		MaxPositionPct:           contracts.MustDecimal("0.20"),
+		MaxGrossExposure:         contracts.MustDecimal("1.00"),
+		MaxSymbolConcentration:   contracts.MustDecimal("0.30"),
+		MaxCorrelatedExposure:    contracts.MustDecimal("0.50"),
+		MaxCVARPct:               contracts.MustDecimal("0.03"),
+		MaxOrdersPerHour:         10,
+		MaxSlippageBPS:           contracts.MustDecimal("30"),
+		MaxLeverage:              contracts.MustDecimal("3"),
+		MaxMarginPct:             contracts.MustDecimal("0.10"),
+		LeverageStep:             contracts.MustDecimal("1"),
+		MinLiquidationBuffer:     contracts.MustDecimal("0.30"),
+		StopLossBufferMultiple:   contracts.MustDecimal("2"),
+		VolatilityBufferMultiple: contracts.MustDecimal("3"),
+		LiquidationReservePct:    contracts.MustDecimal("0.02"),
+		ForceIsolated:            true,
+		MinMarginRatio:           contracts.MustDecimal("0.05"),
+		MaxPriceImpact:           contracts.MustDecimal("0.01"),
+		MaxGasQuote:              contracts.MustDecimal("20"),
+		MinPoolTVL:               contracts.MustDecimal("1000000"),
+		ContractWhitelist:        map[string]struct{}{},
+		RequirePrivateMempool:    true,
+		DailyDrawdownLimit:       contracts.MustDecimal("0.03"),
+		WeeklyDrawdownLimit:      contracts.MustDecimal("0.08"),
+		MaxDrawdownLimit:         contracts.MustDecimal("0.15"),
+		MaxConsecutiveLosses:     4,
 	}
 }
 
@@ -90,6 +100,7 @@ func Assess(proposal contracts.TradeProposal, ctx contracts.RiskContext, limits 
 		ruleOrderRate(proposal, ctx, limits),
 		ruleStopLoss(proposal, ctx),
 		ruleLeverage(proposal, limits),
+		ruleMarginBudget(proposal, ctx, limits),
 		ruleLiquidationBuffer(proposal, ctx, limits),
 		ruleMarginMode(proposal, limits),
 		ruleMaintenanceMargin(proposal, ctx, limits),
@@ -222,13 +233,49 @@ func ruleLeverage(proposal contracts.TradeProposal, limits Limits) ruleResult {
 	return ok("leverage")
 }
 
+func ruleMarginBudget(proposal contracts.TradeProposal, ctx contracts.RiskContext, limits Limits) ruleResult {
+	if !isOpen(proposal) || proposal.Instrument != contracts.InstrumentPerp ||
+		!ctx.EquityQuote.IsPositive() || !limits.MaxMarginPct.IsPositive() {
+		return ok("margin_budget")
+	}
+	leverage, err := contracts.ParseDecimal(strconv.FormatFloat(proposal.Leverage, 'g', -1, 64))
+	if err != nil || !leverage.IsPositive() {
+		return ruleResult{"margin_budget", actionReject, "杠杆无效，无法计算保证金", nil}
+	}
+	marginNotional := proposal.SizeQuote
+	existingNotional := contracts.Zero()
+	if proposal.AddOnPlan != nil {
+		existingNotional = proposal.AddOnPlan.ExistingNotionalQuote
+		marginNotional = marginNotional.Add(existingNotional)
+	}
+	margin, err := marginNotional.Quo(leverage)
+	if err != nil {
+		return ruleResult{"margin_budget", actionReject, "保证金计算失败", nil}
+	}
+	budget := ctx.EquityQuote.Mul(limits.MaxMarginPct)
+	if margin.Cmp(budget) > 0 {
+		maxSize := budget.Mul(leverage).Sub(existingNotional)
+		if !maxSize.IsPositive() {
+			return ruleResult{"margin_budget", actionReject,
+				fmt.Sprintf("现有仓位已占满保证金预算 %s", budget), nil}
+		}
+		return ruleResult{"margin_budget", actionDownsize,
+			fmt.Sprintf("预计保证金 %s > 预算 %s，缩仓至 %s", margin, budget, maxSize), &maxSize}
+	}
+	return ok("margin_budget")
+}
+
 func ruleLiquidationBuffer(proposal contracts.TradeProposal, ctx contracts.RiskContext, limits Limits) ruleResult {
 	if !isOpen(proposal) || proposal.Instrument != contracts.InstrumentPerp || ctx.EstimatedLiquidationPrice == nil || !ctx.RefPrice.IsPositive() {
 		return ok("liq_buffer")
 	}
 	buffer := mustQuo(ctx.RefPrice.Sub(*ctx.EstimatedLiquidationPrice).Abs(), ctx.RefPrice)
-	if buffer.Cmp(limits.MinLiquidationBuffer) < 0 {
-		return ruleResult{"liq_buffer", actionReject, fmt.Sprintf("爆仓缓冲 %s < 下限 %s", buffer, limits.MinLiquidationBuffer), nil}
+	required := limits.MinLiquidationBuffer.Add(limits.LiquidationReservePct)
+	if proposal.LeveragePlan != nil && proposal.LeveragePlan.RequiredLiquidationBuffer.Cmp(required) > 0 {
+		required = proposal.LeveragePlan.RequiredLiquidationBuffer
+	}
+	if buffer.Cmp(required) < 0 {
+		return ruleResult{"liq_buffer", actionReject, fmt.Sprintf("爆仓缓冲 %s < 压力下限 %s", buffer, required), nil}
 	}
 	return ok("liq_buffer")
 }
@@ -338,8 +385,18 @@ func rulePositionCap(proposal contracts.TradeProposal, ctx contracts.RiskContext
 		return ok("position_cap")
 	}
 	cap := ctx.EquityQuote.Mul(limits.MaxPositionPct)
-	if proposal.SizeQuote.Cmp(cap) > 0 {
-		return ruleResult{"position_cap", actionDownsize, fmt.Sprintf("单仓 %s > 上限 %s", proposal.SizeQuote, cap), &cap}
+	existingNotional := contracts.Zero()
+	positionNotional := proposal.SizeQuote
+	if proposal.AddOnPlan != nil {
+		existingNotional = proposal.AddOnPlan.ExistingNotionalQuote
+		positionNotional = positionNotional.Add(existingNotional)
+	}
+	if positionNotional.Cmp(cap) > 0 {
+		maxSize := cap.Sub(existingNotional)
+		if !maxSize.IsPositive() {
+			return ruleResult{"position_cap", actionReject, fmt.Sprintf("现有单仓已达上限 %s", cap), nil}
+		}
+		return ruleResult{"position_cap", actionDownsize, fmt.Sprintf("加仓后单仓 %s > 上限 %s", positionNotional, cap), &maxSize}
 	}
 	return ok("position_cap")
 }
@@ -404,7 +461,7 @@ func baseRiskScore(proposal contracts.TradeProposal, ctx contracts.RiskContext, 
 	if !isOpen(proposal) || !ctx.EquityQuote.IsPositive() {
 		return 0
 	}
-	ratios := make([]contracts.Decimal, 0, 5)
+	ratios := make([]contracts.Decimal, 0, 6)
 	if limits.MaxLeverage.IsPositive() {
 		leverage, err := contracts.ParseDecimal(strconv.FormatFloat(proposal.Leverage, 'g', -1, 64))
 		if err == nil {
@@ -414,7 +471,25 @@ func baseRiskScore(proposal contracts.TradeProposal, ctx contracts.RiskContext, 
 	if limits.MaxPositionPct.IsPositive() {
 		cap := ctx.EquityQuote.Mul(limits.MaxPositionPct)
 		if cap.IsPositive() {
-			ratios = append(ratios, mustQuo(size, cap))
+			positionNotional := size
+			if proposal.AddOnPlan != nil {
+				positionNotional = positionNotional.Add(proposal.AddOnPlan.ExistingNotionalQuote)
+			}
+			ratios = append(ratios, mustQuo(positionNotional, cap))
+		}
+	}
+	if proposal.Instrument == contracts.InstrumentPerp && limits.MaxMarginPct.IsPositive() {
+		leverage, err := contracts.ParseDecimal(strconv.FormatFloat(proposal.Leverage, 'g', -1, 64))
+		if err == nil && leverage.IsPositive() {
+			marginNotional := size
+			if proposal.AddOnPlan != nil {
+				marginNotional = marginNotional.Add(proposal.AddOnPlan.ExistingNotionalQuote)
+			}
+			margin, marginErr := marginNotional.Quo(leverage)
+			cap := ctx.EquityQuote.Mul(limits.MaxMarginPct)
+			if marginErr == nil && cap.IsPositive() {
+				ratios = append(ratios, mustQuo(margin, cap))
+			}
 		}
 	}
 	if proposal.StopLoss != nil && ctx.RefPrice.IsPositive() && limits.MaxRiskPerTrade.IsPositive() {

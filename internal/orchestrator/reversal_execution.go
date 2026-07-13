@@ -317,7 +317,18 @@ func (s *Service) refreshRiskAfterReversal(
 	if assessment.AdjustedSizeQuote != nil && assessment.AdjustedSizeQuote.Cmp(proposal.SizeQuote) < 0 {
 		proposal.SizeQuote = *assessment.AdjustedSizeQuote
 	}
-	assessment = risk.Assess(proposal, context, limitsFromConfig(settings.Risk))
+	assessment, proposal, err = s.reassessExecutableProposal(
+		ctx, "reverse-final-pf", proposal, context, settings,
+	)
+	if err != nil {
+		return contracts.RiskAssessment{}, proposal, err
+	}
+	if assessment.RiskScore > settings.Automation.MaxRiskScore {
+		assessment.Verdict = contracts.VerdictRejected
+		assessment.HardViolations = append(assessment.HardViolations,
+			fmt.Sprintf("reverse auto_risk_score: 最终风险分 %.2f > 自动审批上限 %.2f",
+				assessment.RiskScore, settings.Automation.MaxRiskScore))
+	}
 	s.events.Emit("reversal_reassessed", "-", map[string]any{
 		"symbol": proposal.Symbol, "assessment": assessment, "model": metrics,
 	})

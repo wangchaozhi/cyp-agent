@@ -72,9 +72,13 @@ func TestLoadDotEnvAndEnvironmentTakesPrecedence(t *testing.T) {
 		t.Fatal(err)
 	}
 	environment := map[string]string{
-		"CYP_KILL":          "1",
-		"CYP_MAX_LEVERAGE":  "2.50",
-		"ANTHROPIC_API_KEY": "environment-secret",
+		"CYP_KILL":             "1",
+		"CYP_MAX_LEVERAGE":     "2.50",
+		"CYP_MAX_MARGIN_PCT":   "0.08",
+		"CYP_LEVERAGE_STEP":    "0.5",
+		"CYP_LIQ_VOL_MULTIPLE": "4",
+		"CYP_LIQ_RESERVE_PCT":  "0.03",
+		"ANTHROPIC_API_KEY":    "environment-secret",
 	}
 	settings, err := LoadWithOptions(LoadOptions{
 		EnvFile: path,
@@ -89,6 +93,10 @@ func TestLoadDotEnvAndEnvironmentTakesPrecedence(t *testing.T) {
 	if !settings.Kill || settings.Risk.MaxPositionPct.String() != "0.15" || settings.Risk.MaxLeverage.String() != "2.50" {
 		t.Fatalf("unexpected loaded settings: kill=%v position=%s leverage=%s", settings.Kill,
 			settings.Risk.MaxPositionPct, settings.Risk.MaxLeverage)
+	}
+	if settings.Risk.MaxMarginPct.String() != "0.08" || settings.Risk.LeverageStep.String() != "0.5" ||
+		settings.Risk.LiqVolMultiple.String() != "4" || settings.Risk.LiqReservePct.String() != "0.03" {
+		t.Fatalf("leverage model config not loaded: %+v", settings.Risk)
 	}
 	if settings.AnthropicAPIKey.Reveal() != "environment-secret" {
 		t.Fatal("environment did not override dotenv secret")
@@ -129,6 +137,8 @@ func TestLoadRejectsInvalidValuesWithoutFallback(t *testing.T) {
 		"CYP_KILL":               "sometimes",
 		"CYP_MAX_RISK_PER_TRADE": "NaN",
 		"CYP_MAX_CONCURRENCY":    "0",
+		"CYP_MAX_MARGIN_PCT":     "1.1",
+		"CYP_LEVERAGE_STEP":      "2",
 	}
 	for key, value := range tests {
 		key, value := key, value

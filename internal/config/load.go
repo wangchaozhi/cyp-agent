@@ -166,10 +166,19 @@ func LoadWithOptions(options LoadOptions) (Settings, error) {
 		func() error { return setBool("CYP_AUTO_APPROVE", &settings.Automation.ApprovalEnabled) },
 		func() error { return setBool("CYP_AUTO_EXIT", &settings.Automation.ExitEnabled) },
 		func() error { return setBool("CYP_AUTO_REVERSE", &settings.Automation.ReverseEnabled) },
+		func() error { return setBool("CYP_AUTO_ADD", &settings.Automation.AddEnabled) },
 		func() error { return setFloat("CYP_AUTO_MIN_CONFIDENCE", &settings.Automation.MinConfidence) },
 		func() error { return setFloat("CYP_AUTO_MIN_REWARD_RISK", &settings.Automation.MinRewardRisk) },
 		func() error { return setDecimal("CYP_AUTO_MIN_ENTRY_QUOTE", &settings.Automation.MinEntryQuote) },
 		func() error { return setFloat("CYP_AUTO_KELLY_SCALE", &settings.Automation.KellyScale) },
+		func() error { return setFloat("CYP_ADD_MIN_CONFIDENCE", &settings.Automation.AddMinConfidence) },
+		func() error { return setFloat("CYP_ADD_MIN_PROFIT_R", &settings.Automation.AddMinProfitR) },
+		func() error { return setFloat("CYP_ADD_RISK_DECAY", &settings.Automation.AddRiskDecay) },
+		func() error {
+			return setFloat("CYP_ADD_MAX_POSITION_FRACTION", &settings.Automation.AddMaxPositionFraction)
+		},
+		func() error { return setInt("CYP_ADD_COOLDOWN_MINUTES", &settings.Automation.AddCooldownMinutes) },
+		func() error { return setInt("CYP_MAX_ADDS_PER_POSITION", &settings.Automation.MaxAddsPerPosition) },
 		func() error { return setFloat("CYP_REVERSE_MIN_CONFIDENCE", &settings.Automation.ReverseMinConfidence) },
 		func() error {
 			return setFloat("CYP_REVERSE_MIN_REWARD_RISK", &settings.Automation.ReverseMinRewardRisk)
@@ -184,6 +193,8 @@ func LoadWithOptions(options LoadOptions) (Settings, error) {
 		},
 		func() error { return setFloat("CYP_EXIT_TRAIL_ACTIVATION_R", &settings.Automation.TrailActivationR) },
 		func() error { return setFloat("CYP_EXIT_TRAIL_GIVEBACK_R", &settings.Automation.TrailGivebackR) },
+		func() error { return setFloat("CYP_EXIT_PROFIT_TARGET_R", &settings.Automation.ProfitTargetR) },
+		func() error { return setFloat("CYP_EXIT_LOSS_CUT_R", &settings.Automation.LossCutR) },
 		func() error { return setInt("CYP_EXIT_MAX_HOLDING_MINUTES", &settings.Automation.MaxHoldingMinutes) },
 		func() error { return setFloat("CYP_EXIT_TIME_STOP_MIN_R", &settings.Automation.TimeStopMinR) },
 		func() error { return setInt("CYP_EXIT_CONFIRMATIONS", &settings.Automation.ExitConfirmations) },
@@ -205,7 +216,12 @@ func LoadWithOptions(options LoadOptions) (Settings, error) {
 		func() error { return setInt("CYP_MAX_ORDERS_PER_HOUR", &settings.Risk.MaxOrdersPerHour) },
 		func() error { return setDecimal("CYP_MAX_SLIPPAGE_BPS", &settings.Risk.MaxSlippageBPS) },
 		func() error { return setDecimal("CYP_MAX_LEVERAGE", &settings.Risk.MaxLeverage) },
+		func() error { return setDecimal("CYP_MAX_MARGIN_PCT", &settings.Risk.MaxMarginPct) },
+		func() error { return setDecimal("CYP_LEVERAGE_STEP", &settings.Risk.LeverageStep) },
 		func() error { return setDecimal("CYP_MIN_LIQ_BUFFER", &settings.Risk.MinLiqBuffer) },
+		func() error { return setDecimal("CYP_LIQ_STOP_MULTIPLE", &settings.Risk.LiqStopMultiple) },
+		func() error { return setDecimal("CYP_LIQ_VOL_MULTIPLE", &settings.Risk.LiqVolMultiple) },
+		func() error { return setDecimal("CYP_LIQ_RESERVE_PCT", &settings.Risk.LiqReservePct) },
 		func() error { return setBool("CYP_FORCE_ISOLATED", &settings.Risk.ForceIsolated) },
 		func() error { return setDecimal("CYP_MIN_MARGIN_RATIO", &settings.Risk.MinMarginRatio) },
 		func() error { return setDecimal("CYP_MAX_PRICE_IMPACT", &settings.Risk.MaxPriceImpact) },
@@ -298,12 +314,18 @@ func (s Settings) Validate() error {
 		"CYP_AUTO_MIN_CONFIDENCE":        automation.MinConfidence,
 		"CYP_AUTO_MIN_REWARD_RISK":       automation.MinRewardRisk,
 		"CYP_AUTO_KELLY_SCALE":           automation.KellyScale,
+		"CYP_ADD_MIN_CONFIDENCE":         automation.AddMinConfidence,
+		"CYP_ADD_MIN_PROFIT_R":           automation.AddMinProfitR,
+		"CYP_ADD_RISK_DECAY":             automation.AddRiskDecay,
+		"CYP_ADD_MAX_POSITION_FRACTION":  automation.AddMaxPositionFraction,
 		"CYP_REVERSE_MIN_CONFIDENCE":     automation.ReverseMinConfidence,
 		"CYP_REVERSE_MIN_REWARD_RISK":    automation.ReverseMinRewardRisk,
 		"CYP_EXIT_EWMA_LAMBDA":           automation.EWMALambda,
 		"CYP_EXIT_VOLATILITY_MULTIPLIER": automation.VolatilityMultiplier,
 		"CYP_EXIT_TRAIL_ACTIVATION_R":    automation.TrailActivationR,
 		"CYP_EXIT_TRAIL_GIVEBACK_R":      automation.TrailGivebackR,
+		"CYP_EXIT_PROFIT_TARGET_R":       automation.ProfitTargetR,
+		"CYP_EXIT_LOSS_CUT_R":            automation.LossCutR,
 		"CYP_EXIT_TIME_STOP_MIN_R":       automation.TimeStopMinR,
 	} {
 		if math.IsNaN(value) || math.IsInf(value, 0) {
@@ -312,12 +334,17 @@ func (s Settings) Validate() error {
 	}
 	if automation.MinConfidence < 0 || automation.MinConfidence > 1 || automation.MinRewardRisk <= 0 ||
 		automation.KellyScale <= 0 || automation.KellyScale > 1 ||
+		automation.AddMinConfidence < 0 || automation.AddMinConfidence > 1 ||
+		automation.AddMinProfitR <= 0 || automation.AddRiskDecay <= 0 || automation.AddRiskDecay > 1 ||
+		automation.AddMaxPositionFraction <= 0 || automation.AddMaxPositionFraction > 1 ||
+		automation.AddCooldownMinutes < 0 || automation.MaxAddsPerPosition <= 0 ||
 		automation.ReverseMinConfidence < 0 || automation.ReverseMinConfidence > 1 ||
 		automation.ReverseMinRewardRisk <= 0 || automation.ReverseConfirmations <= 0 ||
 		automation.ReverseSignalMinutes <= 0 || automation.ReverseCooldownMins < 0 ||
 		automation.MaxReversalsPerDay <= 0 ||
 		automation.EWMALambda <= 0 || automation.EWMALambda >= 1 || automation.VolatilityMultiplier < 0 ||
-		automation.TrailActivationR <= 0 || automation.TrailGivebackR <= 0 || automation.MaxHoldingMinutes <= 0 ||
+		automation.TrailActivationR <= 0 || automation.TrailGivebackR <= 0 ||
+		automation.ProfitTargetR <= 0 || automation.LossCutR <= 0 || automation.MaxHoldingMinutes <= 0 ||
 		automation.ExitConfirmations <= 0 || automation.ExitMinSamples < 2 {
 		return errors.New("automation model parameters are outside their safe ranges")
 	}
@@ -345,7 +372,12 @@ func (s Settings) Validate() error {
 		"CYP_MAX_CVAR_PCT":             s.Risk.MaxCVARPct,
 		"CYP_MAX_SLIPPAGE_BPS":         s.Risk.MaxSlippageBPS,
 		"CYP_MAX_LEVERAGE":             s.Risk.MaxLeverage,
+		"CYP_MAX_MARGIN_PCT":           s.Risk.MaxMarginPct,
+		"CYP_LEVERAGE_STEP":            s.Risk.LeverageStep,
 		"CYP_MIN_LIQ_BUFFER":           s.Risk.MinLiqBuffer,
+		"CYP_LIQ_STOP_MULTIPLE":        s.Risk.LiqStopMultiple,
+		"CYP_LIQ_VOL_MULTIPLE":         s.Risk.LiqVolMultiple,
+		"CYP_LIQ_RESERVE_PCT":          s.Risk.LiqReservePct,
 		"CYP_MIN_MARGIN_RATIO":         s.Risk.MinMarginRatio,
 		"CYP_MAX_PRICE_IMPACT":         s.Risk.MaxPriceImpact,
 		"CYP_MAX_GAS_QUOTE":            s.Risk.MaxGasQuote,
@@ -360,6 +392,22 @@ func (s Settings) Validate() error {
 	}
 	if s.Risk.MaxGasGwei != nil && s.Risk.MaxGasGwei.IsNegative() {
 		return errors.New("CYP_MAX_GAS_GWEI cannot be negative")
+	}
+	if !s.Risk.MaxLeverage.IsPositive() || s.Risk.MaxLeverage.Cmp(contracts.NewDecimalFromInt64(1)) < 0 {
+		return errors.New("CYP_MAX_LEVERAGE must be at least 1")
+	}
+	if !s.Risk.MaxMarginPct.IsPositive() || s.Risk.MaxMarginPct.Cmp(contracts.NewDecimalFromInt64(1)) > 0 {
+		return errors.New("CYP_MAX_MARGIN_PCT must be greater than 0 and at most 1")
+	}
+	if !s.Risk.LeverageStep.IsPositive() || s.Risk.LeverageStep.Cmp(contracts.NewDecimalFromInt64(1)) > 0 {
+		return errors.New("CYP_LEVERAGE_STEP must be positive and no greater than 1")
+	}
+	if !s.Risk.MinLiqBuffer.IsPositive() || !s.Risk.LiqStopMultiple.IsPositive() ||
+		!s.Risk.LiqVolMultiple.IsPositive() || s.Risk.LiqReservePct.IsNegative() {
+		return errors.New("liquidation model buffers and multipliers are outside their safe ranges")
+	}
+	if s.Risk.MinLiqBuffer.Add(s.Risk.LiqReservePct).Cmp(contracts.NewDecimalFromInt64(1)) >= 0 {
+		return errors.New("CYP_MIN_LIQ_BUFFER plus CYP_LIQ_RESERVE_PCT must be below 1")
 	}
 	return nil
 }

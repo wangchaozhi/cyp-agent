@@ -76,6 +76,34 @@ export function PendingApprovals({ items, loading, onDecide }: PendingApprovalsP
                     value={`${proposal.stop_loss ?? "-"} / ${proposal.take_profit.join(", ") || "-"}`}
                   />
                   <MetricRow label="杠杆 / 置信" value={`${proposal.leverage}x / ${formatConfidence(proposal.confidence)}`} />
+                  {proposal.leverage_plan ? (
+                    <>
+                      <MetricRow
+                        label="杠杆模型"
+                        value={`${proposal.leverage_plan.selected_leverage}x（所需 ${proposal.leverage_plan.required_leverage}x / 安全上限 ${proposal.leverage_plan.safe_max_leverage}x）`}
+                      />
+                      <MetricRow
+                        label="保证金预算"
+                        value={`${formatAmount(proposal.leverage_plan.estimated_margin_quote)} / ${formatAmount(proposal.leverage_plan.margin_budget_quote)}`}
+                      />
+                      <MetricRow
+                        label="压力缓冲"
+                        value={formatConfidence(Number(proposal.leverage_plan.required_liquidation_buffer))}
+                      />
+                    </>
+                  ) : null}
+                  {proposal.add_on_plan ? (
+                    <>
+                      <MetricRow
+                        label="自动加仓"
+                        value={`${proposal.add_on_plan.add_index}/${proposal.add_on_plan.max_adds} · 浮盈 ${proposal.add_on_plan.profit_r.toFixed(2)}R`}
+                      />
+                      <MetricRow
+                        label="加仓风险预算"
+                        value={`${formatConfidence(proposal.add_on_plan.risk_fraction)} · ${formatAmount(proposal.add_on_plan.recommended_notional_quote)} USDT`}
+                      />
+                    </>
+                  ) : null}
                   {assessment.hard_violations.length ? (
                     <MetricRow label="护栏" value={assessment.hard_violations.join("; ")} />
                   ) : null}

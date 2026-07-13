@@ -102,7 +102,11 @@ func (model *ExitModel) Observe(observation ExitObservation, settings config.Aut
 	}
 
 	reason := ""
-	if state.samples >= settings.ExitMinSamples && state.peakR >= settings.TrailActivationR && currentR <= trailFloor {
+	if currentR >= settings.ProfitTargetR {
+		reason = fmt.Sprintf("理想收益退出：当前 %.2fR ≥ 目标 %.2fR", currentR, settings.ProfitTargetR)
+	} else if currentR <= -settings.LossCutR {
+		reason = fmt.Sprintf("行情恶化退出：当前 %.2fR ≤ -%.2fR", currentR, settings.LossCutR)
+	} else if state.samples >= settings.ExitMinSamples && state.peakR >= settings.TrailActivationR && currentR <= trailFloor {
 		reason = fmt.Sprintf("波动率跟踪退出：当前 %.2fR ≤ 动态底线 %.2fR", currentR, trailFloor)
 	} else if holding >= time.Duration(settings.MaxHoldingMinutes)*time.Minute && currentR <= settings.TimeStopMinR {
 		reason = fmt.Sprintf("时间止损：持仓 %s 且当前 %.2fR ≤ %.2fR", holding.Round(time.Minute), currentR, settings.TimeStopMinR)

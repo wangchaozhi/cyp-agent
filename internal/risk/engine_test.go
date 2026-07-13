@@ -86,3 +86,83 @@ func TestAssessApprovesSafeProposal(t *testing.T) {
 		t.Fatalf("risk score = %v", assessment.RiskScore)
 	}
 }
+
+func TestAssessEnforcesPerpetualMarginBudget(t *testing.T) {
+	proposal := baseProposal()
+	proposal.Instrument = contracts.InstrumentPerp
+	proposal.SizeQuote = contracts.MustDecimal("2000")
+	ctx := baseContext()
+	assessment := Assess(proposal, ctx, DefaultLimits())
+	if assessment.Verdict != contracts.VerdictDownsized || assessment.AdjustedSizeQuote == nil ||
+		assessment.AdjustedSizeQuote.Cmp(contracts.MustDecimal("1000")) != 0 {
+		t.Fatalf("margin budget assessment: %+v", assessment)
+	}
+	if !strings.Contains(strings.Join(assessment.HardViolations, "\n"), "margin_budget:") {
+		t.Fatalf("margin rule missing: %+v", assessment.HardViolations)
+	}
+}
+
+func TestAssessAddOnUsesAggregatePositionForMarginAndPositionCaps(t *testing.T) {
+	proposal := baseProposal()
+	proposal.Instrument = contracts.InstrumentPerp
+	proposal.Leverage = 2
+	proposal.SizeQuote = contracts.MustDecimal("1000")
+	proposal.AddOnPlan = &contracts.AddOnPlan{
+		Model:                    "risk-pyramid-v1",
+		ExistingNotionalQuote:    contracts.MustDecimal("1500"),
+		ExistingLeverage:         2,
+		ProfitR:                  1,
+		AddIndex:                 1,
+		MaxAdds:                  2,
+		RiskDecay:                0.5,
+		RiskFraction:             0.005,
+		MaxPositionFraction:      0.5,
+		RecommendedNotionalQuote: contracts.MustDecimal("1000"),
+		CooldownMinutes:          60,
+	}
+	assessment := Assess(proposal, baseContext(), DefaultLimits())
+	if assessment.Verdict != contracts.VerdictDownsized || assessment.AdjustedSizeQuote == nil ||
+		assessment.AdjustedSizeQuote.Cmp(contracts.MustDecimal("500")) != 0 {
+		t.Fatalf("aggregate add-on assessment: %+v", assessment)
+	}
+	violations := strings.Join(assessment.HardViolations, "\n")
+	if !strings.Contains(violations, "margin_budget:") || !strings.Contains(violations, "position_cap:") {
+		t.Fatalf("aggregate cap rules missing: %s", violations)
+	}
+}
+
+func TestAssessAddOnRiskScoreUsesAggregateSpotPosition(t *testing.T) {
+	proposal := baseProposal()
+	proposal.SizeQuote = contracts.MustDecimal("500")
+	proposal.AddOnPlan = &contracts.AddOnPlan{
+		Model:                    "risk-pyramid-v1",
+		ExistingNotionalQuote:    contracts.MustDecimal("1500"),
+		ExistingLeverage:         1,
+		ProfitR:                  1,
+		AddIndex:                 1,
+		MaxAdds:                  2,
+		RiskDecay:                0.5,
+		RiskFraction:             0.005,
+		MaxPositionFraction:      0.5,
+		RecommendedNotionalQuote: contracts.MustDecimal("500"),
+		CooldownMinutes:          60,
+	}
+	assessment := Assess(proposal, baseContext(), DefaultLimits())
+	if assessment.Verdict != contracts.VerdictApproved || assessment.RiskScore != 1 {
+		t.Fatalf("aggregate spot risk score: %+v", assessment)
+	}
+}
+
+func TestAssessUsesReserveInLiquidationBuffer(t *testing.T) {
+	proposal := baseProposal()
+	proposal.Instrument = contracts.InstrumentPerp
+	proposal.Leverage = 3
+	ctx := baseContext()
+	liq := contracts.MustDecimal("70")
+	ctx.EstimatedLiquidationPrice = &liq
+	assessment := Assess(proposal, ctx, DefaultLimits())
+	if assessment.Verdict != contracts.VerdictRejected ||
+		!strings.Contains(strings.Join(assessment.HardViolations, "\n"), "liq_buffer:") {
+		t.Fatalf("30%% buffer should fail 32%% stressed floor: %+v", assessment)
+	}
+}

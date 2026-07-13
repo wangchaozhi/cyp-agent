@@ -14,12 +14,19 @@ export interface AutomationSettings {
   approval_enabled: boolean;
   exit_enabled: boolean;
   reverse_enabled: boolean;
+  add_enabled: boolean;
   max_risk_score: number;
   max_quote: Numeric;
   min_entry_quote: Numeric;
   min_confidence: number;
   min_reward_risk: number;
   kelly_scale: number;
+  add_min_confidence: number;
+  add_min_profit_r: number;
+  add_risk_decay: number;
+  add_max_position_fraction: number;
+  add_cooldown_minutes: number;
+  max_adds_per_position: number;
   reverse_min_confidence: number;
   reverse_min_reward_risk: number;
   reverse_confirmations: number;
@@ -30,6 +37,8 @@ export interface AutomationSettings {
   volatility_multiplier: number;
   trail_activation_r: number;
   trail_giveback_r: number;
+  profit_target_r: number;
+  loss_cut_r: number;
   max_holding_minutes: number;
   time_stop_min_r: number;
   exit_confirmations: number;
@@ -62,6 +71,34 @@ export interface PricePlan {
   high?: Numeric | null;
 }
 
+export interface LeveragePlan {
+  model: string;
+  required_leverage: number;
+  safe_max_leverage: number;
+  selected_leverage: number;
+  stop_fraction: Numeric;
+  volatility_fraction: Numeric;
+  required_liquidation_buffer: Numeric;
+  margin_budget_quote: Numeric;
+  estimated_margin_quote: Numeric;
+  max_notional_quote: Numeric;
+  downsized: boolean;
+}
+
+export interface AddOnPlan {
+  model: string;
+  existing_notional_quote: Numeric;
+  existing_leverage: number;
+  profit_r: number;
+  add_index: number;
+  max_adds: number;
+  risk_decay: number;
+  risk_fraction: number;
+  max_position_fraction: number;
+  recommended_notional_quote: Numeric;
+  cooldown_minutes: number;
+}
+
 export interface TradeProposal {
   symbol: string;
   venue: string;
@@ -76,6 +113,8 @@ export interface TradeProposal {
   confidence: number;
   thesis: string;
   supporting_reports: string[];
+  leverage_plan?: LeveragePlan;
+  add_on_plan?: AddOnPlan;
 }
 
 export interface RiskAssessment {
@@ -148,6 +187,9 @@ export interface RiskSnapshot {
     weekly_dd: Numeric;
     total_dd: Numeric;
     max_leverage: Numeric;
+    max_margin_pct: Numeric;
+    leverage_step: Numeric;
+    min_liq_buffer: Numeric;
     max_orders_per_hour: number;
     max_consecutive_losses: number;
     min_margin_ratio?: Numeric;
@@ -198,7 +240,12 @@ export interface RuntimeSettings {
     max_orders_per_hour: number;
     max_slippage_bps: Numeric;
     max_leverage: Numeric;
+    max_margin_pct: Numeric;
+    leverage_step: Numeric;
     min_liq_buffer: Numeric;
+    liq_stop_multiple: Numeric;
+    liq_vol_multiple: Numeric;
+    liq_reserve_pct: Numeric;
     force_isolated: boolean;
     min_margin_ratio: Numeric;
     daily_drawdown_limit: Numeric;
@@ -381,6 +428,11 @@ export interface DashboardEvent {
   position_side?: Side;
   proposal_side?: Side;
   side?: Side;
+  add_on?: {
+    allowed: boolean;
+    reason: string;
+    plan?: AddOnPlan;
+  };
   reversal?: {
     ready: boolean;
     side: Side;

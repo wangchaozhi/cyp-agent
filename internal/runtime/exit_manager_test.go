@@ -15,6 +15,7 @@ func TestAutomatedExitManagerHonorsMasterAndRequiresConfirmation(t *testing.T) {
 	target := venue.NewPaperVenue()
 	openPaperPosition(t, target, true)
 	automation := config.DefaultSettings().Automation
+	automation.Enabled = false
 	automation.ExitEnabled = true
 	automation.TrailActivationR = 0.2
 	automation.TrailGivebackR = 0.1

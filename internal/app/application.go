@@ -282,7 +282,9 @@ func New(
 			return opened.TS, ok
 		},
 		Exit: func(exitContext context.Context, position contracts.Position, mark contracts.Decimal, decision runtimecore.ExitDecision) error {
-			return executeAutomatedExit(exitContext, executionVenue, riskTracker, orch, bus, logger, position, mark, decision)
+			return locks.Do(exitContext, position.Symbol, func(lockedContext context.Context) error {
+				return executeAutomatedExit(lockedContext, executionVenue, riskTracker, orch, bus, logger, position, mark, decision)
+			})
 		},
 		Events: bus, Logger: logger,
 	})

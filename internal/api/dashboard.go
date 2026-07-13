@@ -170,6 +170,9 @@ type riskLimitSnapshot struct {
 	WeeklyDrawdown       contracts.Decimal `json:"weekly_dd"`
 	TotalDrawdown        contracts.Decimal `json:"total_dd"`
 	MaxLeverage          contracts.Decimal `json:"max_leverage"`
+	MaxMarginPct         contracts.Decimal `json:"max_margin_pct"`
+	LeverageStep         contracts.Decimal `json:"leverage_step"`
+	MinLiqBuffer         contracts.Decimal `json:"min_liq_buffer"`
 	MaxOrdersPerHour     int               `json:"max_orders_per_hour"`
 	MaxConsecutiveLosses int               `json:"max_consecutive_losses"`
 	MinMarginRatio       contracts.Decimal `json:"min_margin_ratio"`
@@ -235,6 +238,9 @@ func (s *Server) riskSnapshot(w http.ResponseWriter, request *http.Request) {
 			WeeklyDrawdown:       riskConfig.WeeklyDrawdownLimit,
 			TotalDrawdown:        riskConfig.MaxDrawdownLimit,
 			MaxLeverage:          riskConfig.MaxLeverage,
+			MaxMarginPct:         riskConfig.MaxMarginPct,
+			LeverageStep:         riskConfig.LeverageStep,
+			MinLiqBuffer:         riskConfig.MinLiqBuffer,
 			MaxOrdersPerHour:     riskConfig.MaxOrdersPerHour,
 			MaxConsecutiveLosses: riskConfig.MaxConsecutiveLosses,
 			MinMarginRatio:       riskConfig.MinMarginRatio,

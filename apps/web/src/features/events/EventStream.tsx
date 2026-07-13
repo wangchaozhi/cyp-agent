@@ -23,6 +23,8 @@ const LABELS: Record<string, string> = {
   reports_ready: "分析",
   proposal_ready: "提案",
   risk_assessed: "风控",
+  risk_reassessed: "最终风控",
+  add_on_evaluated: "加仓评估",
   awaiting_approval: "待审批",
   approval_decided: "审批",
   executed: "执行",
@@ -90,6 +92,17 @@ export function summarizeEvent(event: DashboardEvent): string {
     const prefix = event.review.kind === "close" ? `平仓复盘 PnL=${event.review.pnl_quote}` : "入场检查";
     const lessons = event.review.lessons.join(" / ");
     return lessons ? `${prefix} ${lessons}` : prefix;
+  }
+
+  if (event.type === "risk_reassessed" && event.assessment) {
+    return `${event.symbol ?? "-"} 最终${verdictLabel(event.assessment.verdict)} risk=${formatConfidence(event.assessment.risk_score)}`;
+  }
+
+  if (event.type === "add_on_evaluated" && event.add_on) {
+    const plan = event.add_on.plan;
+    return plan
+      ? `${event.symbol ?? "-"} 加仓 ${plan.add_index}/${plan.max_adds} 浮盈=${plan.profit_r.toFixed(2)}R 金额=${formatAmount(plan.recommended_notional_quote)} USDT`
+      : `${event.symbol ?? "-"} 未加仓：${event.add_on.reason}`;
   }
 
   if (event.type === "automation_evaluated" && event.exit_decision) {
@@ -167,6 +180,7 @@ export function eventTone(event: DashboardEvent): string {
   if (event.type === "run_failed") return "event-row--bad";
   if (["risk_assessed", "awaiting_approval", "killswitch"].includes(event.type)) return "event-row--warn";
   if (["executed", "reviewed", "automated_exit", "reversal_closed", "reversal_opened"].includes(event.type)) return "event-row--ok";
+  if (event.type === "add_on_evaluated") return event.add_on?.allowed ? "event-row--ok" : "event-row--warn";
   if (["automation_evaluated", "reversal_observed", "reversal_reassessed"].includes(event.type)) return "event-row--warn";
   return "";
 }

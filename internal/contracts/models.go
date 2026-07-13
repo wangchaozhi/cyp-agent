@@ -145,6 +145,39 @@ type PricePlan struct {
 	High  *Decimal  `json:"high"`
 }
 
+// LeveragePlan records the deterministic inputs and result of the margin and
+// liquidation-distance model. It is attached to perpetual proposals so every
+// later size change can be recalculated and audited before execution.
+type LeveragePlan struct {
+	Model                     string  `json:"model"`
+	RequiredLeverage          float64 `json:"required_leverage"`
+	SafeMaxLeverage           float64 `json:"safe_max_leverage"`
+	SelectedLeverage          float64 `json:"selected_leverage"`
+	StopFraction              Decimal `json:"stop_fraction"`
+	VolatilityFraction        Decimal `json:"volatility_fraction"`
+	RequiredLiquidationBuffer Decimal `json:"required_liquidation_buffer"`
+	MarginBudgetQuote         Decimal `json:"margin_budget_quote"`
+	EstimatedMarginQuote      Decimal `json:"estimated_margin_quote"`
+	MaxNotionalQuote          Decimal `json:"max_notional_quote"`
+	Downsized                 bool    `json:"downsized"`
+}
+
+// AddOnPlan makes every pyramid entry explainable. The initial position is
+// index zero; AddIndex starts at one and is capped by MaxAdds.
+type AddOnPlan struct {
+	Model                    string  `json:"model"`
+	ExistingNotionalQuote    Decimal `json:"existing_notional_quote"`
+	ExistingLeverage         float64 `json:"existing_leverage"`
+	ProfitR                  float64 `json:"profit_r"`
+	AddIndex                 int     `json:"add_index"`
+	MaxAdds                  int     `json:"max_adds"`
+	RiskDecay                float64 `json:"risk_decay"`
+	RiskFraction             float64 `json:"risk_fraction"`
+	MaxPositionFraction      float64 `json:"max_position_fraction"`
+	RecommendedNotionalQuote Decimal `json:"recommended_notional_quote"`
+	CooldownMinutes          int     `json:"cooldown_minutes"`
+}
+
 type TradeProposal struct {
 	Symbol            string        `json:"symbol"`
 	Venue             string        `json:"venue"`
@@ -159,6 +192,8 @@ type TradeProposal struct {
 	Confidence        float64       `json:"confidence"`
 	Thesis            string        `json:"thesis"`
 	SupportingReports List[string]  `json:"supporting_reports"`
+	LeveragePlan      *LeveragePlan `json:"leverage_plan,omitempty"`
+	AddOnPlan         *AddOnPlan    `json:"add_on_plan,omitempty"`
 }
 
 type RiskAssessment struct {
@@ -328,6 +363,46 @@ func (p TradeProposal) Validate() error {
 	}
 	if math.IsNaN(p.Leverage) || math.IsInf(p.Leverage, 0) || p.Leverage < 1 {
 		return errors.New("leverage must be finite and at least 1")
+	}
+	if p.LeveragePlan != nil {
+		plan := p.LeveragePlan
+		for name, value := range map[string]float64{
+			"required_leverage": plan.RequiredLeverage,
+			"safe_max_leverage": plan.SafeMaxLeverage,
+			"selected_leverage": plan.SelectedLeverage,
+		} {
+			if math.IsNaN(value) || math.IsInf(value, 0) || value < 1 {
+				return fmt.Errorf("leverage_plan.%s must be finite and at least 1", name)
+			}
+		}
+		if plan.SelectedLeverage > plan.SafeMaxLeverage || math.Abs(plan.SelectedLeverage-p.Leverage) > 1e-9 {
+			return errors.New("leverage_plan selection does not match proposal leverage or safe maximum")
+		}
+		if plan.StopFraction.IsNegative() || plan.VolatilityFraction.IsNegative() ||
+			!plan.RequiredLiquidationBuffer.IsPositive() || !plan.MarginBudgetQuote.IsPositive() ||
+			plan.EstimatedMarginQuote.IsNegative() || !plan.MaxNotionalQuote.IsPositive() {
+			return errors.New("leverage_plan contains invalid risk quantities")
+		}
+	}
+	if p.AddOnPlan != nil {
+		plan := p.AddOnPlan
+		for name, value := range map[string]float64{
+			"existing_leverage":     plan.ExistingLeverage,
+			"profit_r":              plan.ProfitR,
+			"risk_decay":            plan.RiskDecay,
+			"risk_fraction":         plan.RiskFraction,
+			"max_position_fraction": plan.MaxPositionFraction,
+		} {
+			if math.IsNaN(value) || math.IsInf(value, 0) {
+				return fmt.Errorf("add_on_plan.%s must be finite", name)
+			}
+		}
+		if !plan.ExistingNotionalQuote.IsPositive() || plan.ExistingLeverage < 1 || plan.ProfitR <= 0 ||
+			plan.AddIndex < 1 || plan.MaxAdds < plan.AddIndex || plan.RiskDecay <= 0 || plan.RiskDecay > 1 ||
+			plan.RiskFraction <= 0 || plan.MaxPositionFraction <= 0 || plan.MaxPositionFraction > 1 ||
+			!plan.RecommendedNotionalQuote.IsPositive() || plan.CooldownMinutes < 0 {
+			return errors.New("add_on_plan contains invalid pyramid quantities")
+		}
 	}
 	return nil
 }

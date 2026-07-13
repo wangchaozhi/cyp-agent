@@ -416,9 +416,27 @@ func (s *Service) run(ctx context.Context, runID, symbol string) contracts.RunRe
 		return result
 	}
 	existing, relation := positionForProposal(positions, proposal)
-	if relation == positionSameSide {
-		result.Status = contracts.RunNoTrade
-		return result
+	adding := relation == positionSameSide
+	if adding && existing != nil {
+		trades := []riskstate.TradeRecord{}
+		if s.riskState != nil {
+			trades = s.riskState.Trades()
+		}
+		var addOn AddOnEvaluation
+		proposal, addOn = evaluateAddOn(settings, proposal, *existing, mark, equity, trades, time.Now().UTC())
+		result.Proposal = &proposal
+		s.events.Emit("add_on_evaluated", runID, map[string]any{
+			"symbol": symbol, "add_on": addOn, "proposal": proposal,
+		})
+		if !addOn.Allowed {
+			proposal.Thesis += "（未加仓：" + addOn.Reason + "）"
+			result.Proposal = &proposal
+			result.Status = contracts.RunNoTrade
+			return result
+		}
+		if err := s.checkpoint(ctx, runID, "add_on", addOn); err != nil {
+			return fail(result, err)
+		}
 	}
 	reversing := relation == positionOppositeSide
 
@@ -499,7 +517,11 @@ func (s *Service) run(ctx context.Context, runID, symbol string) contracts.RunRe
 	}
 
 	approvalStarted := time.Now()
-	decisionResult, err := s.decide(ctx, runID, proposal, assessment, settings, equity, existing)
+	decisionExisting := existing
+	if adding {
+		decisionExisting = nil
+	}
+	decisionResult, err := s.decide(ctx, runID, proposal, assessment, settings, equity, decisionExisting)
 	s.metrics.RecordApprovalLatency(time.Since(approvalStarted))
 	if err != nil {
 		return fail(result, fmt.Errorf("approval: %w", err))
@@ -522,7 +544,18 @@ func (s *Service) run(ctx context.Context, runID, symbol string) contracts.RunRe
 	// Every operator modification and every downsizing decision is revalidated.
 	settings = s.control.Settings()
 	riskContext.Kill = settings.Kill
-	finalAssessment := risk.Assess(finalProposal, riskContext, limitsFromConfig(settings.Risk))
+	finalAssessment, finalProposal, err := s.reassessExecutableProposal(
+		ctx, runID+"-final-pf", finalProposal, riskContext, settings,
+	)
+	if err != nil {
+		return fail(result, fmt.Errorf("final risk refresh: %w", err))
+	}
+	if strings.HasPrefix(decision.Operator, "auto-") && finalAssessment.RiskScore > settings.Automation.MaxRiskScore {
+		finalAssessment.Verdict = contracts.VerdictRejected
+		finalAssessment.HardViolations = append(finalAssessment.HardViolations,
+			fmt.Sprintf("auto_risk_score: 最终风险分 %.2f > 自动审批上限 %.2f",
+				finalAssessment.RiskScore, settings.Automation.MaxRiskScore))
+	}
 	if finalAssessment.Verdict == contracts.VerdictRejected {
 		result.Assessment = &finalAssessment
 		result.Proposal = &finalProposal
@@ -530,9 +563,10 @@ func (s *Service) run(ctx context.Context, runID, symbol string) contracts.RunRe
 		s.events.Emit("risk_assessed", runID, map[string]any{"symbol": symbol, "assessment": finalAssessment})
 		return result
 	}
-	if finalAssessment.AdjustedSizeQuote != nil && finalAssessment.AdjustedSizeQuote.Cmp(finalProposal.SizeQuote) < 0 {
-		finalProposal.SizeQuote = *finalAssessment.AdjustedSizeQuote
-	}
+	result.Assessment = &finalAssessment
+	s.events.Emit("risk_reassessed", runID, map[string]any{
+		"symbol": symbol, "assessment": finalAssessment, "proposal": finalProposal,
+	})
 	if safetyErr := s.checkNewPosition(settings); safetyErr != nil {
 		return fail(result, fmt.Errorf("execution blocked by runtime safety control: %w", safetyErr))
 	}
@@ -771,27 +805,32 @@ func proposalEntryPrice(plan contracts.PricePlan) *contracts.Decimal {
 
 func limitsFromConfig(value config.RiskConfig) risk.Limits {
 	return risk.Limits{
-		MaxRiskPerTrade:        value.MaxRiskPerTrade,
-		MaxPositionPct:         value.MaxPositionPct,
-		MaxGrossExposure:       value.MaxGrossExposure,
-		MaxSymbolConcentration: value.MaxSymbolConcentration,
-		MaxCorrelatedExposure:  value.MaxCorrelatedExposure,
-		MaxCVARPct:             value.MaxCVARPct,
-		MaxOrdersPerHour:       value.MaxOrdersPerHour,
-		MaxSlippageBPS:         value.MaxSlippageBPS,
-		MaxLeverage:            value.MaxLeverage,
-		MinLiquidationBuffer:   value.MinLiqBuffer,
-		ForceIsolated:          value.ForceIsolated,
-		MinMarginRatio:         value.MinMarginRatio,
-		MaxPriceImpact:         value.MaxPriceImpact,
-		MaxGasQuote:            value.MaxGasQuote,
-		MinPoolTVL:             value.MinPoolTVL,
-		ContractWhitelist:      value.ContractWhitelistSet(),
-		RequirePrivateMempool:  value.RequirePrivateMempool,
-		DailyDrawdownLimit:     value.DailyDrawdownLimit,
-		WeeklyDrawdownLimit:    value.WeeklyDrawdownLimit,
-		MaxDrawdownLimit:       value.MaxDrawdownLimit,
-		MaxConsecutiveLosses:   value.MaxConsecutiveLosses,
+		MaxRiskPerTrade:          value.MaxRiskPerTrade,
+		MaxPositionPct:           value.MaxPositionPct,
+		MaxGrossExposure:         value.MaxGrossExposure,
+		MaxSymbolConcentration:   value.MaxSymbolConcentration,
+		MaxCorrelatedExposure:    value.MaxCorrelatedExposure,
+		MaxCVARPct:               value.MaxCVARPct,
+		MaxOrdersPerHour:         value.MaxOrdersPerHour,
+		MaxSlippageBPS:           value.MaxSlippageBPS,
+		MaxLeverage:              value.MaxLeverage,
+		MaxMarginPct:             value.MaxMarginPct,
+		LeverageStep:             value.LeverageStep,
+		MinLiquidationBuffer:     value.MinLiqBuffer,
+		StopLossBufferMultiple:   value.LiqStopMultiple,
+		VolatilityBufferMultiple: value.LiqVolMultiple,
+		LiquidationReservePct:    value.LiqReservePct,
+		ForceIsolated:            value.ForceIsolated,
+		MinMarginRatio:           value.MinMarginRatio,
+		MaxPriceImpact:           value.MaxPriceImpact,
+		MaxGasQuote:              value.MaxGasQuote,
+		MinPoolTVL:               value.MinPoolTVL,
+		ContractWhitelist:        value.ContractWhitelistSet(),
+		RequirePrivateMempool:    value.RequirePrivateMempool,
+		DailyDrawdownLimit:       value.DailyDrawdownLimit,
+		WeeklyDrawdownLimit:      value.WeeklyDrawdownLimit,
+		MaxDrawdownLimit:         value.MaxDrawdownLimit,
+		MaxConsecutiveLosses:     value.MaxConsecutiveLosses,
 	}
 }
 
