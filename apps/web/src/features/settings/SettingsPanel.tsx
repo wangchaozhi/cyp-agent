@@ -8,6 +8,7 @@ import { EmptyState } from "../../shared/ui/EmptyState";
 import { MetricRow } from "../../shared/ui/MetricRow";
 import { Panel } from "../../shared/ui/Panel";
 import { AnalysisSymbolsSettings } from "./AnalysisSymbolsSettings";
+import { AutomationSettingsPanel } from "./AutomationSettings";
 
 interface SettingsPanelProps {
   settings: RuntimeSettings | null;
@@ -127,10 +128,15 @@ export function SettingsPanel({ settings, venues, focusSection = "general", onSa
           <SettingsChip tone={settings.llm_enabled ? "ok" : "bad"}>
             LLM {settings.llm_provider}
           </SettingsChip>
+          <SettingsChip tone={settings.automation.enabled ? "ok" : "muted"}>
+            自动化 {settings.automation.enabled ? "运行中" : "已关闭"}
+          </SettingsChip>
           <SettingsChip tone={guard.ok ? "ok" : "bad"}>{guard.ok ? "校验通过" : "校验未过"}</SettingsChip>
         </div>
 
         <AnalysisSymbolsSettings settings={settings} focus={focusSection === "symbols"} onSave={onSave} />
+
+        <AutomationSettingsPanel value={settings.automation} liveReadOnly={settings.mode === "live"} onSave={onSave} />
 
         <div className="settings-section">
           <div className="settings-section__title">

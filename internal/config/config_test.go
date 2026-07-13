@@ -160,6 +160,24 @@ func TestMissingDotEnvIsAllowed(t *testing.T) {
 	}
 }
 
+func TestLegacyAutoApprovalMigratesButExplicitMasterWins(t *testing.T) {
+	t.Parallel()
+	legacy, err := LoadWithOptions(LoadOptions{LookupEnv: func(key string) (string, bool) {
+		return "auto", key == "CYP_APPROVAL"
+	}})
+	if err != nil || !legacy.Automation.Enabled || !legacy.Automation.ApprovalEnabled {
+		t.Fatalf("legacy migration automation=%#v err=%v", legacy.Automation, err)
+	}
+	explicit, err := LoadWithOptions(LoadOptions{LookupEnv: func(key string) (string, bool) {
+		values := map[string]string{"CYP_APPROVAL": "auto", "CYP_AUTOMATION_ENABLED": "false"}
+		value, ok := values[key]
+		return value, ok
+	}})
+	if err != nil || explicit.Automation.Enabled {
+		t.Fatalf("explicit master automation=%#v err=%v", explicit.Automation, err)
+	}
+}
+
 func TestRepositoryDotEnvExampleLoads(t *testing.T) {
 	t.Parallel()
 	settings, err := LoadWithOptions(LoadOptions{

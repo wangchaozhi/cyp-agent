@@ -32,6 +32,8 @@ const LABELS: Record<string, string> = {
   killswitch: "停机",
   position_monitor: "监控",
   reconciled: "对账",
+  automation_evaluated: "退出观察",
+  automated_exit: "自动平仓",
 };
 
 const RUN_STATUS_LABELS: Record<string, string> = {
@@ -86,6 +88,16 @@ export function summarizeEvent(event: DashboardEvent): string {
     return lessons ? `${prefix} ${lessons}` : prefix;
   }
 
+  if (event.type === "automation_evaluated" && event.exit_decision) {
+    const decision = event.exit_decision;
+    return `${event.symbol ?? "-"} ${decision.reason} 当前=${decision.current_r.toFixed(2)}R 峰值=${decision.peak_r.toFixed(2)}R 确认=${decision.confirmations}`;
+  }
+
+  if (event.type === "automated_exit" && event.exit_decision) {
+    const decision = event.exit_decision;
+    return `${event.symbol ?? "-"} ${decision.reason} 成交均价=${event.execution?.avg_price ?? "-"}`;
+  }
+
   if (event.type === "awaiting_approval" && event.proposal) {
     return `${sideLabel(event.proposal.side)} ${event.symbol ?? event.proposal.symbol} 等待人工确认`;
   }
@@ -134,7 +146,8 @@ export function eventTone(event: DashboardEvent): string {
   }
   if (event.type === "run_failed") return "event-row--bad";
   if (["risk_assessed", "awaiting_approval", "killswitch"].includes(event.type)) return "event-row--warn";
-  if (["executed", "reviewed"].includes(event.type)) return "event-row--ok";
+  if (["executed", "reviewed", "automated_exit"].includes(event.type)) return "event-row--ok";
+  if (event.type === "automation_evaluated") return "event-row--warn";
   return "";
 }
 

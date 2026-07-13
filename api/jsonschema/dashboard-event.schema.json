@@ -23,7 +23,9 @@
         "run_failed",
         "killswitch",
         "position_monitor",
-        "reconciled"
+        "reconciled",
+        "automation_evaluated",
+        "automated_exit"
       ]
     },
     "run_id": {
@@ -55,6 +57,9 @@
     },
     "decision": {
       "$ref": "#/$defs/ApprovalDecision"
+    },
+    "exit_decision": {
+      "$ref": "#/$defs/ExitDecision"
     },
     "execution": {
       "$ref": "#/$defs/ExecutionResult"
@@ -157,6 +162,14 @@
     {
       "properties": { "type": { "const": "reconciled" } },
       "required": ["positions", "protective_gaps"]
+    },
+    {
+      "properties": { "type": { "const": "automation_evaluated" } },
+      "required": ["symbol", "exit_decision"]
+    },
+    {
+      "properties": { "type": { "const": "automated_exit" } },
+      "required": ["symbol", "exit_decision", "execution"]
     }
   ],
   "$defs": {
@@ -311,6 +324,22 @@
           "format": "date-time"
         },
         "note": { "type": "string" }
+      }
+    },
+    "ExitDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["trigger", "reason", "current_r", "peak_r", "volatility_r", "trail_floor_r", "samples", "confirmations", "holding"],
+      "properties": {
+        "trigger": { "type": "boolean" },
+        "reason": { "type": "string" },
+        "current_r": { "type": "number" },
+        "peak_r": { "type": "number" },
+        "volatility_r": { "type": "number" },
+        "trail_floor_r": { "type": "number" },
+        "samples": { "type": "integer", "minimum": 0 },
+        "confirmations": { "type": "integer", "minimum": 0 },
+        "holding": { "type": "integer", "minimum": 0 }
       }
     },
     "ProtectiveOrder": {

@@ -44,6 +44,7 @@ export default function App() {
   const [analysisSymbol, setAnalysisSymbol] = useState("");
   const [running, setRunning] = useState(false);
   const [switchingMode, setSwitchingMode] = useState(false);
+  const [switchingAutomation, setSwitchingAutomation] = useState(false);
   const [switchingKill, setSwitchingKill] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<"general" | "symbols">("general");
@@ -70,7 +71,7 @@ export default function App() {
       if (["awaiting_approval", "approval_decided"].includes(event.type)) {
         refreshAll([pending.refresh]);
       }
-      if (["run_started", "executed", "reviewed", "run_done"].includes(event.type)) {
+      if (["run_started", "executed", "reviewed", "run_done", "automated_exit"].includes(event.type)) {
         refreshAll([positions.refresh, risk.refresh, portfolio.refresh]);
       }
       if (["risk_assessed", "killswitch"].includes(event.type)) {
@@ -138,12 +139,13 @@ export default function App() {
     setSwitchingMode(true);
     setNotice(null);
     try {
-      await cypApi.updateSettings({ mode });
+      const disablesAutomation = mode === "live" && Boolean(runtimeSettings.data?.automation.enabled);
+      await cypApi.updateSettings({ mode, ...(disablesAutomation ? { automation: { enabled: false } } : {}) });
       await Promise.all([runtimeSettings.refresh(), health.refresh(), risk.refresh()]);
       setNotice({
         tone: mode === "live" ? "warn" : "ok",
         message: mode === "live"
-          ? "已切换到 Live 只读模式：允许分析，实盘执行仍由安全锁禁止"
+          ? `已切换到 Live 只读模式：实盘执行被安全锁禁止${disablesAutomation ? "，策略自动化已关闭" : ""}`
           : "已切换到 Paper 模拟模式：所有成交仅作用于模拟账户",
       });
     } catch (error) {
@@ -168,12 +170,37 @@ export default function App() {
     }
   };
 
+  const toggleAutomation = async () => {
+    const current = runtimeSettings.data?.automation;
+    if (!current || switchingAutomation) return;
+    const next = !current.enabled;
+    setSwitchingAutomation(true);
+    setNotice(null);
+    try {
+      await cypApi.updateSettings({ automation: { enabled: next } });
+      await runtimeSettings.refresh();
+      setNotice({
+        tone: next ? "warn" : "ok",
+        message: next
+          ? "策略自动化已开启：扫描、审批与主动退出将按各自开关运行"
+          : "策略自动化已关闭；交易所原生止损止盈保持有效",
+      });
+    } catch (error) {
+      setNotice({ tone: "bad", message: `自动化切换失败：${errorMessage(error)}` });
+    } finally {
+      setSwitchingAutomation(false);
+    }
+  };
+
   const saveSettings = async (payload: RuntimeSettingsUpdate) => {
     setNotice(null);
     try {
       await cypApi.updateSettings(payload);
       await Promise.all([runtimeSettings.refresh(), health.refresh()]);
-      setNotice({ tone: "ok", message: payload.watchlist ? "分析币种已更新" : "设置已保存" });
+      setNotice({
+        tone: "ok",
+        message: payload.watchlist ? "分析币种已更新" : payload.automation ? "自动化策略已保存" : "设置已保存",
+      });
     } catch (error) {
       setNotice({ tone: "bad", message: `保存设置失败：${errorMessage(error)}` });
       throw error;
@@ -225,9 +252,11 @@ export default function App() {
             streamStatus={streamStatus}
             running={running}
             switchingMode={switchingMode}
+            switchingAutomation={switchingAutomation}
             switchingKill={switchingKill}
             settingsOpen={settingsOpen}
             mode={runtimeSettings.data?.mode ?? health.data?.mode ?? "paper"}
+            automationEnabled={runtimeSettings.data?.automation.enabled ?? false}
             analysisSymbol={analysisSymbol}
             analysisSymbols={analysisSymbols}
             runDisabledReason={runDisabledReason}
@@ -237,6 +266,7 @@ export default function App() {
               setSettingsOpen(true);
             }}
             onModeChange={(mode) => void switchMode(mode)}
+            onToggleAutomation={() => void toggleAutomation()}
             onRun={() => void runOnce()}
             onToggleKill={() => void toggleKill()}
             onOpenSettings={() => {

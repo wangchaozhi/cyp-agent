@@ -15,27 +15,31 @@ type RunFunc func(ctx context.Context, symbol string) error
 type RuntimeStateProvider func() RuntimeState
 
 type ScannerConfig struct {
-	Symbols  []string
-	Interval time.Duration
-	Run      RunFunc
-	State    RuntimeStateProvider
-	Safety   *SafetyState
-	Locks    *SymbolLocks
-	Logger   *slog.Logger
-	Metrics  *observability.RuntimeMetrics
-	OnError  func(error)
+	Symbols        []string
+	SymbolProvider func() []string
+	Interval       time.Duration
+	Run            RunFunc
+	State          RuntimeStateProvider
+	Safety         *SafetyState
+	Locks          *SymbolLocks
+	Logger         *slog.Logger
+	Metrics        *observability.RuntimeMetrics
+	OnError        func(error)
+	Enabled        func() bool
 }
 
 type Scanner struct {
-	symbols  []string
-	interval time.Duration
-	run      RunFunc
-	state    RuntimeStateProvider
-	safety   *SafetyState
-	locks    *SymbolLocks
-	logger   *slog.Logger
-	metrics  *observability.RuntimeMetrics
-	onError  func(error)
+	symbols        []string
+	symbolProvider func() []string
+	interval       time.Duration
+	run            RunFunc
+	state          RuntimeStateProvider
+	safety         *SafetyState
+	locks          *SymbolLocks
+	logger         *slog.Logger
+	metrics        *observability.RuntimeMetrics
+	onError        func(error)
+	enabled        func() bool
 }
 
 func NewScanner(config ScannerConfig) (*Scanner, error) {
@@ -63,10 +67,14 @@ func NewScanner(config ScannerConfig) (*Scanner, error) {
 	if config.Logger == nil {
 		config.Logger = observability.DefaultLogger("scanner")
 	}
+	if config.Enabled == nil {
+		config.Enabled = func() bool { return true }
+	}
 	return &Scanner{
 		symbols: symbols, interval: config.Interval, run: config.Run, state: config.State,
-		safety: config.Safety, locks: config.Locks, logger: config.Logger,
-		metrics: config.Metrics, onError: config.OnError,
+		symbolProvider: config.SymbolProvider,
+		safety:         config.Safety, locks: config.Locks, logger: config.Logger,
+		metrics: config.Metrics, onError: config.OnError, enabled: config.Enabled,
 	}, nil
 }
 
@@ -88,6 +96,15 @@ func uniqueSymbols(values []string) []string {
 }
 
 func (scanner *Scanner) Symbols() []string {
+	return scanner.currentSymbols()
+}
+
+func (scanner *Scanner) currentSymbols() []string {
+	if scanner.symbolProvider != nil {
+		if symbols := uniqueSymbols(scanner.symbolProvider()); len(symbols) > 0 {
+			return symbols
+		}
+	}
 	return append([]string(nil), scanner.symbols...)
 }
 
@@ -95,8 +112,11 @@ func (scanner *Scanner) ScanOnce(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("scanner context is required")
 	}
+	if !scanner.enabled() {
+		return nil
+	}
 	errorsSeen := make([]error, 0)
-	for _, symbol := range scanner.symbols {
+	for _, symbol := range scanner.currentSymbols() {
 		if err := ctx.Err(); err != nil {
 			return err
 		}

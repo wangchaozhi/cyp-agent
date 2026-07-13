@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: cyp-agent HTTP API
-  version: 1.0.0
+  version: 1.1.0
   description: |
     React 仪表盘使用的 REST 与 SSE 契约。
 
@@ -94,8 +94,8 @@ paths:
       security:
         - WriteToken: []
       operationId: updateRuntimeSettings
-      summary: 更新当前进程的 LLM 配置
-      description: 空密钥表示保持现值；Base URL 只能通过 `CYP_LLM_BASE_URL` 在启动时设置。
+      summary: 更新当前进程的运行配置
+      description: 可更新分析币种、模型与自动化策略；空密钥表示保持现值，Base URL 只能通过 `CYP_LLM_BASE_URL` 在启动时设置。
       requestBody:
         required: true
         content:
@@ -637,6 +637,7 @@ components:
         - runtime
         - risk
         - budget
+        - automation
         - live_guard
       properties:
         mode:
@@ -725,6 +726,8 @@ components:
             max_wall_seconds:
               type: number
               minimum: 0
+        automation:
+          $ref: "#/components/schemas/AutomationSettings"
         live_guard:
           $ref: "#/components/schemas/LiveGuard"
 
@@ -808,6 +811,51 @@ components:
         deepseek_api_key:
           type: string
           writeOnly: true
+        automation:
+          $ref: "#/components/schemas/AutomationSettingsUpdate"
+
+    AutomationSettings:
+      type: object
+      additionalProperties: false
+      required: [enabled, scan_enabled, approval_enabled, exit_enabled, max_risk_score, max_quote, min_confidence, min_reward_risk, ewma_lambda, volatility_multiplier, trail_activation_r, trail_giveback_r, max_holding_minutes, time_stop_min_r, exit_confirmations, exit_min_samples]
+      properties:
+        enabled: { type: boolean }
+        scan_enabled: { type: boolean }
+        approval_enabled: { type: boolean }
+        exit_enabled: { type: boolean }
+        max_risk_score: { type: number, minimum: 0, maximum: 1 }
+        max_quote: { $ref: "#/components/schemas/DecimalString" }
+        min_confidence: { type: number, minimum: 0, maximum: 1 }
+        min_reward_risk: { type: number, exclusiveMinimum: 0 }
+        ewma_lambda: { type: number, exclusiveMinimum: 0, exclusiveMaximum: 1 }
+        volatility_multiplier: { type: number, minimum: 0 }
+        trail_activation_r: { type: number, exclusiveMinimum: 0 }
+        trail_giveback_r: { type: number, exclusiveMinimum: 0 }
+        max_holding_minutes: { type: integer, minimum: 1 }
+        time_stop_min_r: { type: number }
+        exit_confirmations: { type: integer, minimum: 1 }
+        exit_min_samples: { type: integer, minimum: 2 }
+
+    AutomationSettingsUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        enabled: { type: boolean }
+        scan_enabled: { type: boolean }
+        approval_enabled: { type: boolean }
+        exit_enabled: { type: boolean }
+        max_risk_score: { type: number, minimum: 0, maximum: 1 }
+        max_quote: { $ref: "#/components/schemas/DecimalInput" }
+        min_confidence: { type: number, minimum: 0, maximum: 1 }
+        min_reward_risk: { type: number, exclusiveMinimum: 0 }
+        ewma_lambda: { type: number, exclusiveMinimum: 0, exclusiveMaximum: 1 }
+        volatility_multiplier: { type: number, minimum: 0 }
+        trail_activation_r: { type: number, exclusiveMinimum: 0 }
+        trail_giveback_r: { type: number, exclusiveMinimum: 0 }
+        max_holding_minutes: { type: integer, minimum: 1 }
+        time_stop_min_r: { type: number }
+        exit_confirmations: { type: integer, minimum: 1 }
+        exit_min_samples: { type: integer, minimum: 2 }
 
     PricePlan:
       type: object

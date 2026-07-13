@@ -21,14 +21,34 @@ type ClosePositionRequest struct {
 }
 
 type SettingsUpdateRequest struct {
-	Mode            *string   `json:"mode,omitempty"`
-	Watchlist       *[]string `json:"watchlist,omitempty"`
-	LLMProvider     *string   `json:"llm_provider,omitempty"`
-	LLMModel        *string   `json:"llm_model,omitempty"`
-	LLMModelFast    *string   `json:"llm_model_fast,omitempty"`
-	LLMBaseURL      *string   `json:"llm_base_url,omitempty"`
-	AnthropicAPIKey *string   `json:"anthropic_api_key,omitempty"`
-	DeepSeekAPIKey  *string   `json:"deepseek_api_key,omitempty"`
+	Mode            *string                   `json:"mode,omitempty"`
+	Watchlist       *[]string                 `json:"watchlist,omitempty"`
+	LLMProvider     *string                   `json:"llm_provider,omitempty"`
+	LLMModel        *string                   `json:"llm_model,omitempty"`
+	LLMModelFast    *string                   `json:"llm_model_fast,omitempty"`
+	LLMBaseURL      *string                   `json:"llm_base_url,omitempty"`
+	AnthropicAPIKey *string                   `json:"anthropic_api_key,omitempty"`
+	DeepSeekAPIKey  *string                   `json:"deepseek_api_key,omitempty"`
+	Automation      *AutomationSettingsUpdate `json:"automation,omitempty"`
+}
+
+type AutomationSettingsUpdate struct {
+	Enabled              *bool    `json:"enabled,omitempty"`
+	ScanEnabled          *bool    `json:"scan_enabled,omitempty"`
+	ApprovalEnabled      *bool    `json:"approval_enabled,omitempty"`
+	ExitEnabled          *bool    `json:"exit_enabled,omitempty"`
+	MaxRiskScore         *float64 `json:"max_risk_score,omitempty"`
+	MaxQuote             *Decimal `json:"max_quote,omitempty"`
+	MinConfidence        *float64 `json:"min_confidence,omitempty"`
+	MinRewardRisk        *float64 `json:"min_reward_risk,omitempty"`
+	EWMALambda           *float64 `json:"ewma_lambda,omitempty"`
+	VolatilityMultiplier *float64 `json:"volatility_multiplier,omitempty"`
+	TrailActivationR     *float64 `json:"trail_activation_r,omitempty"`
+	TrailGivebackR       *float64 `json:"trail_giveback_r,omitempty"`
+	MaxHoldingMinutes    *int     `json:"max_holding_minutes,omitempty"`
+	TimeStopMinR         *float64 `json:"time_stop_min_r,omitempty"`
+	ExitConfirmations    *int     `json:"exit_confirmations,omitempty"`
+	ExitMinSamples       *int     `json:"exit_min_samples,omitempty"`
 }
 
 type BacktestRequest struct {

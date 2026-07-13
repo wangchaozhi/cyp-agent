@@ -70,16 +70,35 @@ type BudgetConfig struct {
 	MaxWallSeconds int
 }
 
+// AutomationConfig contains non-secret, runtime-mutable strategy controls.
+// Native protective orders are intentionally outside this switch.
+type AutomationConfig struct {
+	Enabled              bool              `json:"enabled"`
+	ScanEnabled          bool              `json:"scan_enabled"`
+	ApprovalEnabled      bool              `json:"approval_enabled"`
+	ExitEnabled          bool              `json:"exit_enabled"`
+	MaxRiskScore         float64           `json:"max_risk_score"`
+	MaxQuote             contracts.Decimal `json:"max_quote"`
+	MinConfidence        float64           `json:"min_confidence"`
+	MinRewardRisk        float64           `json:"min_reward_risk"`
+	EWMALambda           float64           `json:"ewma_lambda"`
+	VolatilityMultiplier float64           `json:"volatility_multiplier"`
+	TrailActivationR     float64           `json:"trail_activation_r"`
+	TrailGivebackR       float64           `json:"trail_giveback_r"`
+	MaxHoldingMinutes    int               `json:"max_holding_minutes"`
+	TimeStopMinR         float64           `json:"time_stop_min_r"`
+	ExitConfirmations    int               `json:"exit_confirmations"`
+	ExitMinSamples       int               `json:"exit_min_samples"`
+}
+
 type Settings struct {
-	Mode             string
-	Approval         string
-	AutoSymbols      string
-	AutoMaxRiskScore float64
-	AutoMaxQuote     contracts.Decimal
-	Kill             bool
-	AllowPerp        bool
-	ExecutionVenue   string
-	DataSource       string
+	Mode           string
+	Approval       string
+	AutoSymbols    string
+	Kill           bool
+	AllowPerp      bool
+	ExecutionVenue string
+	DataSource     string
 
 	LLMProvider     string
 	LLMModel        string
@@ -115,6 +134,7 @@ type Settings struct {
 	APIToken    Secret
 	Risk        RiskConfig
 	Budget      BudgetConfig
+	Automation  AutomationConfig
 }
 
 func DefaultRiskConfig() RiskConfig {
@@ -145,27 +165,32 @@ func DefaultRiskConfig() RiskConfig {
 
 func DefaultSettings() Settings {
 	return Settings{
-		Mode:             "paper",
-		Approval:         "dashboard",
-		AutoMaxRiskScore: 0.5,
-		AutoMaxQuote:     contracts.MustDecimal("200"),
-		ExecutionVenue:   "paper",
-		DataSource:       "synthetic",
-		LLMProvider:      "anthropic",
-		LLMModel:         "claude-opus-4-8",
-		LLMModelFast:     "claude-haiku-4-5-20251001",
-		CEXID:            "binance",
-		OKXDemo:          true,
-		Signer:           "keystore",
-		ScanInterval:     300,
-		MonitorInterval:  15,
-		Watchlist:        "BTC/USDT",
-		MaxConcurrency:   2,
-		DBURL:            "postgresql://cyp:cyp@localhost:5433/cyp",
-		Persistence:      "file",
-		StateFile:        "data/cyp-state.json",
-		LogLevel:         "INFO",
-		Risk:             DefaultRiskConfig(),
+		Mode:            "paper",
+		Approval:        "dashboard",
+		ExecutionVenue:  "paper",
+		DataSource:      "synthetic",
+		LLMProvider:     "anthropic",
+		LLMModel:        "claude-opus-4-8",
+		LLMModelFast:    "claude-haiku-4-5-20251001",
+		CEXID:           "binance",
+		OKXDemo:         true,
+		Signer:          "keystore",
+		ScanInterval:    300,
+		MonitorInterval: 15,
+		Watchlist:       "BTC/USDT",
+		MaxConcurrency:  2,
+		DBURL:           "postgresql://cyp:cyp@localhost:5433/cyp",
+		Persistence:     "file",
+		StateFile:       "data/cyp-state.json",
+		LogLevel:        "INFO",
+		Automation: AutomationConfig{
+			ScanEnabled: true, ApprovalEnabled: true, ExitEnabled: true,
+			MaxRiskScore: 0.5, MaxQuote: contracts.MustDecimal("200"),
+			MinConfidence: 0.65, MinRewardRisk: 1.5, EWMALambda: 0.94,
+			VolatilityMultiplier: 3, TrailActivationR: 1, TrailGivebackR: 0.5,
+			MaxHoldingMinutes: 360, TimeStopMinR: 0, ExitConfirmations: 2, ExitMinSamples: 8,
+		},
+		Risk: DefaultRiskConfig(),
 		Budget: BudgetConfig{
 			MaxIterations:  20,
 			MaxTokens:      200_000,
@@ -289,6 +314,7 @@ type SettingsSnapshot struct {
 	APIAuthEnabled       bool             `json:"api_auth_enabled"`
 	Risk                 RiskSnapshot     `json:"risk"`
 	Budget               BudgetSnapshot   `json:"budget"`
+	Automation           AutomationConfig `json:"automation"`
 	LiveGuard            LiveGuardReport  `json:"live_guard"`
 }
 
@@ -371,7 +397,8 @@ func (s Settings) Snapshot() SettingsSnapshot {
 		},
 		Budget: BudgetSnapshot{MaxIterations: s.Budget.MaxIterations, MaxTokens: s.Budget.MaxTokens,
 			MaxCostUSD: s.Budget.MaxCostUSD, MaxWallSeconds: s.Budget.MaxWallSeconds},
-		LiveGuard: s.LiveGuard(),
+		Automation: s.Automation,
+		LiveGuard:  s.LiveGuard(),
 	}
 }
 

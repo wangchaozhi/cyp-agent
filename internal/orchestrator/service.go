@@ -587,10 +587,11 @@ func (s *Service) decide(
 	assessment contracts.RiskAssessment,
 	settings config.Settings,
 ) (approval.DecisionResult, error) {
-	if settings.Approval == "auto" && autoAllowed(settings, proposal, assessment) {
+	metrics := evaluateAutoApproval(settings, proposal, assessment)
+	if metrics.Allowed {
 		decision := contracts.ApprovalDecision{
 			Decision: contracts.ApprovalApprove, Operator: "auto-policy",
-			TS: time.Now().UTC(), Note: "自动审批策略通过",
+			TS: time.Now().UTC(), Note: autoApprovalNote(metrics),
 		}
 		return approval.DecisionResult{Decision: decision, FinalProposal: proposal}, nil
 	}
@@ -598,14 +599,7 @@ func (s *Service) decide(
 }
 
 func autoAllowed(settings config.Settings, proposal contracts.TradeProposal, assessment contracts.RiskAssessment) bool {
-	allowed := false
-	for _, symbol := range settings.AutoSymbolsList() {
-		if symbol == proposal.Symbol {
-			allowed = true
-			break
-		}
-	}
-	return allowed && assessment.RiskScore <= settings.AutoMaxRiskScore && proposal.SizeQuote.Cmp(settings.AutoMaxQuote) <= 0
+	return evaluateAutoApproval(settings, proposal, assessment).Allowed
 }
 
 func (s *Service) newLLMSession() agents.LLM {

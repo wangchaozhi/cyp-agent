@@ -1,4 +1,4 @@
-import { BrainCircuit, ChevronDown, Coins, Play, Power, RadioTower, Settings, ShieldAlert, ShieldCheck } from "lucide-react";
+import { BrainCircuit, ChevronDown, Coins, Play, Power, RadioTower, Settings, ShieldAlert, ShieldCheck, Workflow } from "lucide-react";
 
 import type { HealthStatus, RuntimeMode, VenueInfo } from "../../shared/api/types";
 import type { StreamStatus } from "../../shared/hooks/useEventStream";
@@ -9,15 +9,18 @@ interface SystemHeaderProps {
   streamStatus: StreamStatus;
   running: boolean;
   switchingMode: boolean;
+  switchingAutomation: boolean;
   switchingKill: boolean;
   settingsOpen: boolean;
   mode: RuntimeMode;
+  automationEnabled: boolean;
   analysisSymbol: string;
   analysisSymbols: string[];
   runDisabledReason: string | null;
   onAnalysisSymbolChange: (symbol: string) => void;
   onManageAnalysisSymbols: () => void;
   onModeChange: (mode: RuntimeMode) => void;
+  onToggleAutomation: () => void;
   onRun: () => void;
   onToggleKill: () => void;
   onOpenSettings: () => void;
@@ -39,15 +42,18 @@ export function SystemHeader({
   streamStatus,
   running,
   switchingMode,
+  switchingAutomation,
   switchingKill,
   settingsOpen,
   mode,
+  automationEnabled,
   analysisSymbol,
   analysisSymbols,
   runDisabledReason,
   onAnalysisSymbolChange,
   onManageAnalysisSymbols,
   onModeChange,
+  onToggleAutomation,
   onRun,
   onToggleKill,
   onOpenSettings,
@@ -85,6 +91,18 @@ export function SystemHeader({
       </div>
 
       <div className="header-actions">
+        <button
+          className={`automation-control ${automationEnabled ? "is-on" : ""}`}
+          type="button"
+          aria-pressed={automationEnabled}
+          onClick={onToggleAutomation}
+          disabled={switchingAutomation || !health || mode === "live"}
+          title={mode === "live" ? "Live 只读模式不能开启策略自动化" : automationEnabled ? "关闭自动扫描、审批与主动退出；原生保护单不受影响" : "开启已配置的自动化策略"}
+        >
+          <Workflow size={15} />
+          <span><small>策略自动化</small><strong>{switchingAutomation ? "切换中" : automationEnabled ? "运行中" : "已关闭"}</strong></span>
+          <i aria-hidden="true" />
+        </button>
         <label
           className={`mode-switcher mode-switcher--${mode}`}
           title={mode === "live" ? "Live 只读：允许分析，实盘执行被安全锁禁止" : `${paperModeLabel}：订单仅发送到模拟环境`}

@@ -19,6 +19,7 @@ type EngineConfig struct {
 	Reconciler         Reconciler
 	Scanner            *Scanner
 	Monitor            *PositionMonitor
+	ExitManager        *AutomatedExitManager
 	Safety             *SafetyState
 	Logger             *slog.Logger
 	Metrics            *observability.RuntimeMetrics
@@ -29,6 +30,7 @@ type Engine struct {
 	reconciler         Reconciler
 	scanner            *Scanner
 	monitor            *PositionMonitor
+	exitManager        *AutomatedExitManager
 	safety             *SafetyState
 	logger             *slog.Logger
 	metrics            *observability.RuntimeMetrics
@@ -57,7 +59,7 @@ func NewEngine(config EngineConfig) (*Engine, error) {
 		config.Scanner.safety = config.Safety
 	}
 	return &Engine{
-		reconciler: config.Reconciler, scanner: config.Scanner, monitor: config.Monitor,
+		reconciler: config.Reconciler, scanner: config.Scanner, monitor: config.Monitor, exitManager: config.ExitManager,
 		safety: config.Safety, logger: config.Logger, metrics: config.Metrics,
 		allowDegradedStart: config.AllowDegradedStart,
 		errors:             make(chan error, 16),
@@ -122,12 +124,15 @@ func (engine *Engine) Start(ctx context.Context) error {
 		return err
 	}
 
-	loops := make([]loop, 0, 2)
+	loops := make([]loop, 0, 3)
 	if engine.scanner != nil && !engine.safety.Snapshot().Frozen {
 		loops = append(loops, engine.scanner)
 	}
 	if engine.monitor != nil {
 		loops = append(loops, engine.monitor)
+	}
+	if engine.exitManager != nil {
+		loops = append(loops, engine.exitManager)
 	}
 	engine.mu.Lock()
 	engine.started = true

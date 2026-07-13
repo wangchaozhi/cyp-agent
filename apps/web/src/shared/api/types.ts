@@ -7,6 +7,25 @@ export type MarginMode = "isolated" | "cross";
 export type Stance = "bullish" | "bearish" | "neutral";
 export type RuntimeMode = "paper" | "live";
 
+export interface AutomationSettings {
+  enabled: boolean;
+  scan_enabled: boolean;
+  approval_enabled: boolean;
+  exit_enabled: boolean;
+  max_risk_score: number;
+  max_quote: Numeric;
+  min_confidence: number;
+  min_reward_risk: number;
+  ewma_lambda: number;
+  volatility_multiplier: number;
+  trail_activation_r: number;
+  trail_giveback_r: number;
+  max_holding_minutes: number;
+  time_stop_min_r: number;
+  exit_confirmations: number;
+  exit_min_samples: number;
+}
+
 export interface HealthStatus {
   ok: boolean;
   mode: RuntimeMode;
@@ -184,6 +203,7 @@ export interface RuntimeSettings {
     max_cost_usd: number;
     max_wall_seconds: number;
   };
+  automation: AutomationSettings;
   live_guard: {
     ok: boolean;
     reasons: string[];
@@ -199,6 +219,7 @@ export interface RuntimeSettingsUpdate {
   llm_base_url?: string;
   anthropic_api_key?: string;
   deepseek_api_key?: string;
+  automation?: Partial<AutomationSettings>;
 }
 
 export interface SymbolExposure {
@@ -347,6 +368,17 @@ export interface DashboardEvent {
   proposal?: TradeProposal;
   assessment?: RiskAssessment;
   decision?: ApprovalDecision;
+  exit_decision?: {
+    trigger: boolean;
+    reason: string;
+    current_r: number;
+    peak_r: number;
+    volatility_r: number;
+    trail_floor_r: number;
+    samples: number;
+    confirmations: number;
+    holding: number;
+  };
   execution?: ExecutionResult;
   review?: TradeReview;
   error?: string;

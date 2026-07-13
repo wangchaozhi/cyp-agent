@@ -127,10 +127,13 @@ func TestRunOnceWithoutCandlesIsNoTradeAndSetsReferenceMark(t *testing.T) {
 
 func TestRunOnceAutoApprovalExecutes(t *testing.T) {
 	harness := newHarness(t, func(settings *config.Settings) {
-		settings.Approval = "auto"
+		settings.Automation.Enabled = true
+		settings.Automation.ApprovalEnabled = true
+		settings.Automation.MinConfidence = 0
+		settings.Automation.MinRewardRisk = 1
 		settings.AutoSymbols = "BTC/USDT"
-		settings.AutoMaxRiskScore = 1
-		settings.AutoMaxQuote = contracts.MustDecimal("10000")
+		settings.Automation.MaxRiskScore = 1
+		settings.Automation.MaxQuote = contracts.MustDecimal("10000")
 	}, orchestrator.WithDataSource(bullishSource{}))
 
 	result := harness.service.RunOnce(context.Background(), "run-auto", "BTC/USDT")
@@ -158,9 +161,12 @@ func TestRunOnceAutoApprovalExecutes(t *testing.T) {
 
 func TestRunOnceAutoPolicyMismatchFallsBackToGate(t *testing.T) {
 	harness := newHarness(t, func(settings *config.Settings) {
-		settings.Approval = "auto"
+		settings.Automation.Enabled = true
+		settings.Automation.ApprovalEnabled = true
+		settings.Automation.MinConfidence = 0
+		settings.Automation.MinRewardRisk = 1
 		settings.AutoSymbols = "ETH/USDT" // symbol mismatch disables the auto policy
-		settings.AutoMaxQuote = contracts.MustDecimal("10000")
+		settings.Automation.MaxQuote = contracts.MustDecimal("10000")
 	}, orchestrator.WithDataSource(bullishSource{}))
 
 	go resolveWhenPending(t, harness.gate, "run-gate", contracts.ApprovalRequest{Decision: contracts.ApprovalApprove})
@@ -283,10 +289,13 @@ func TestStartAsyncLifecycleAndClose(t *testing.T) {
 
 func TestExecutedRunJournalsOrderLifecycle(t *testing.T) {
 	harness := newHarness(t, func(settings *config.Settings) {
-		settings.Approval = "auto"
+		settings.Automation.Enabled = true
+		settings.Automation.ApprovalEnabled = true
+		settings.Automation.MinConfidence = 0
+		settings.Automation.MinRewardRisk = 1
 		settings.AutoSymbols = "BTC/USDT"
-		settings.AutoMaxRiskScore = 1
-		settings.AutoMaxQuote = contracts.MustDecimal("10000")
+		settings.Automation.MaxRiskScore = 1
+		settings.Automation.MaxQuote = contracts.MustDecimal("10000")
 	}, orchestrator.WithDataSource(bullishSource{}))
 
 	result := harness.service.RunOnce(context.Background(), "run-journal", "BTC/USDT")

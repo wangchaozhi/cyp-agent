@@ -25,6 +25,7 @@ import (
 
 	"github.com/wangchaozhi/cyp-agent/internal/approval"
 	backtestengine "github.com/wangchaozhi/cyp-agent/internal/backtest"
+	"github.com/wangchaozhi/cyp-agent/internal/config"
 	"github.com/wangchaozhi/cyp-agent/internal/contracts"
 	"github.com/wangchaozhi/cyp-agent/internal/control"
 	"github.com/wangchaozhi/cyp-agent/internal/data"
@@ -56,11 +57,15 @@ type Server struct {
 	watchlistStore  interface {
 		SaveWatchlist(context.Context, []string) error
 	}
-	webDir      string
-	logger      *slog.Logger
-	authToken   string
-	corsOrigins map[string]struct{}
-	handler     http.Handler
+	automationStore interface {
+		SaveAutomation(context.Context, config.AutomationConfig) error
+	}
+	ensureRuntime func() error
+	webDir        string
+	logger        *slog.Logger
+	authToken     string
+	corsOrigins   map[string]struct{}
+	handler       http.Handler
 }
 
 type Dependencies struct {
@@ -79,9 +84,13 @@ type Dependencies struct {
 	WatchlistStore  interface {
 		SaveWatchlist(context.Context, []string) error
 	}
-	WebDir   string
-	Logger   *slog.Logger
-	APIToken string
+	AutomationStore interface {
+		SaveAutomation(context.Context, config.AutomationConfig) error
+	}
+	EnsureRuntime func() error
+	WebDir        string
+	Logger        *slog.Logger
+	APIToken      string
 }
 
 func New(dependencies Dependencies) (*Server, error) {
@@ -101,6 +110,8 @@ func New(dependencies Dependencies) (*Server, error) {
 		riskState:       dependencies.RiskState,
 		historicalVenue: dependencies.HistoricalVenue,
 		watchlistStore:  dependencies.WatchlistStore,
+		automationStore: dependencies.AutomationStore,
+		ensureRuntime:   dependencies.EnsureRuntime,
 		webDir:          dependencies.WebDir, logger: logger, authToken: strings.TrimSpace(dependencies.APIToken),
 		corsOrigins: configuredCORSOrigins(),
 	}
@@ -201,6 +212,19 @@ func (s *Server) updateSettings(w http.ResponseWriter, request *http.Request) {
 		if err := s.watchlistStore.SaveWatchlist(request.Context(), s.control.Settings().WatchlistSymbols()); err != nil {
 			s.logger.ErrorContext(request.Context(), "persist_watchlist_failed", "error", err.Error())
 			writeError(w, http.StatusInternalServerError, "persist watchlist: "+err.Error())
+			return
+		}
+	}
+	if payload.Automation != nil && s.automationStore != nil {
+		if err := s.automationStore.SaveAutomation(request.Context(), s.control.Settings().Automation); err != nil {
+			s.logger.ErrorContext(request.Context(), "persist_automation_failed", "error", err.Error())
+			writeError(w, http.StatusInternalServerError, "persist automation: "+err.Error())
+			return
+		}
+	}
+	if payload.Automation != nil && s.control.Settings().Automation.Enabled && s.ensureRuntime != nil {
+		if err := s.ensureRuntime(); err != nil {
+			writeError(w, http.StatusInternalServerError, "start automation runtime: "+err.Error())
 			return
 		}
 	}

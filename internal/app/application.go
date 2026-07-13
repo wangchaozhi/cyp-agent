@@ -3,6 +3,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -179,6 +180,18 @@ func New(
 		}
 		settings = state.Settings()
 	}
+	if savedAutomation, found, loadErr := preferenceStore.LoadAutomation(ctx); loadErr != nil {
+		_ = repository.Close()
+		return nil, fmt.Errorf("restore runtime automation: %w", loadErr)
+	} else if found {
+		settings = state.Settings()
+		settings.Automation = savedAutomation
+		if validationErr := settings.Validate(); validationErr != nil {
+			_ = repository.Close()
+			return nil, fmt.Errorf("restore runtime automation: %w", validationErr)
+		}
+		state = control.New(settings)
+	}
 	runMetrics := metrics.NewRuns()
 	balances, err := executionVenue.Balances(ctx)
 	if err != nil {
@@ -221,6 +234,7 @@ func New(
 	}
 	scanner, err := runtimecore.NewScanner(runtimecore.ScannerConfig{
 		Symbols: settings.WatchlistSymbols(), Interval: time.Duration(settings.ScanInterval) * time.Second,
+		SymbolProvider: func() []string { return state.Settings().WatchlistSymbols() },
 		Run: func(_ context.Context, symbol string) error {
 			_, startErr := orch.Start(symbol)
 			return startErr
@@ -233,6 +247,10 @@ func New(
 			}
 		},
 		Safety: safety, Locks: locks, Logger: logger, Metrics: runtimeMetrics,
+		Enabled: func() bool {
+			automation := state.Settings().Automation
+			return automation.Enabled && automation.ScanEnabled
+		},
 	})
 	if err != nil {
 		orch.Close()
@@ -249,8 +267,32 @@ func New(
 		_ = repository.Close()
 		return nil, err
 	}
+	exitManager, err := runtimecore.NewAutomatedExitManager(runtimecore.AutomatedExitConfig{
+		Venue: executionVenue, Interval: time.Duration(settings.MonitorInterval) * time.Second,
+		Automation: func() config.AutomationConfig { return state.Settings().Automation },
+		State: func() runtimecore.RuntimeState {
+			current := state.Settings()
+			return runtimecore.RuntimeState{
+				Mode: current.Mode, ExecutionVenue: current.ExecutionVenue,
+				ExecutionDemo: current.OKXDemoExecutionConfigured(), Kill: current.Kill,
+			}
+		},
+		OpenedAt: func(position contracts.Position) (time.Time, bool) {
+			opened, ok := riskTracker.OpenTrade(position.Symbol, position.Instrument)
+			return opened.TS, ok
+		},
+		Exit: func(exitContext context.Context, position contracts.Position, mark contracts.Decimal, decision runtimecore.ExitDecision) error {
+			return executeAutomatedExit(exitContext, executionVenue, riskTracker, orch, bus, logger, position, mark, decision)
+		},
+		Events: bus, Logger: logger,
+	})
+	if err != nil {
+		orch.Close()
+		_ = repository.Close()
+		return nil, err
+	}
 	runtimeEngine, err := runtimecore.NewEngine(runtimecore.EngineConfig{
-		Reconciler: reconciler, Scanner: scanner, Monitor: monitor,
+		Reconciler: reconciler, Scanner: scanner, Monitor: monitor, ExitManager: exitManager,
 		Safety: safety, Logger: logger, Metrics: runtimeMetrics, AllowDegradedStart: true,
 	})
 	if err != nil {
@@ -258,7 +300,7 @@ func New(
 		_ = repository.Close()
 		return nil, err
 	}
-	if settings.RuntimeAutostart {
+	if settings.RuntimeAutostart || settings.Automation.Enabled {
 		if err := runtimeEngine.Start(ctx); err != nil {
 			orch.Close()
 			_ = repository.Close()
@@ -275,7 +317,17 @@ func New(
 		Control: state, Venue: executionVenue, Events: bus, Gate: gate, Orchestrator: orch,
 		Metrics: runMetrics, RuntimeMetrics: runtimeMetrics, Registry: registry,
 		Market: aggregator, Safety: safety, HistoricalVenue: historicalVenue,
-		RiskState: riskTracker, WatchlistStore: preferenceStore,
+		RiskState: riskTracker, WatchlistStore: preferenceStore, AutomationStore: preferenceStore,
+		EnsureRuntime: func() error {
+			if runtimeEngine.Started() {
+				return nil
+			}
+			startErr := runtimeEngine.Start(ctx)
+			if errors.Is(startErr, runtimecore.ErrRuntimeStarted) {
+				return nil
+			}
+			return startErr
+		},
 		WebDir: webDir, Logger: logger, APIToken: settings.APIToken.Reveal(),
 	})
 	if err != nil {
@@ -315,6 +367,62 @@ func buildRepository(ctx context.Context, settings config.Settings) (persistence
 		}
 		return repository, nil
 	}
+}
+
+func executeAutomatedExit(
+	ctx context.Context,
+	target venue.Venue,
+	riskTracker *riskstate.Tracker,
+	orch *orchestrator.Service,
+	bus *events.Bus,
+	logger *slog.Logger,
+	position contracts.Position,
+	mark contracts.Decimal,
+	decision runtimecore.ExitDecision,
+) error {
+	marginMode := contracts.MarginModeIsolated
+	if position.MarginMode != nil {
+		marginMode = *position.MarginMode
+	}
+	result, err := target.Place(ctx, contracts.OrderIntent{
+		ClientID: fmt.Sprintf("auto-exit-%d", time.Now().UTC().UnixNano()),
+		Symbol:   position.Symbol, Venue: target.ID(), Side: position.Side,
+		Instrument: position.Instrument, OrderType: contracts.EntryTypeMarket,
+		SizeQuote: position.SizeBase.Mul(mark), Price: &mark, Leverage: position.Leverage,
+		MarginMode: marginMode, ReduceOnly: true, TakeProfit: contracts.List[contracts.Decimal]{},
+	})
+	if err != nil {
+		return err
+	}
+	if result.Status != contracts.OrderStatusFilled {
+		if result.Error != nil && *result.Error != "" {
+			return errors.New(*result.Error)
+		}
+		return fmt.Errorf("automated exit status is %s", result.Status)
+	}
+	reference := result.ClientID
+	if opened, ok := riskTracker.OpenTrade(position.Symbol, position.Instrument); ok && opened.RunID != "" {
+		reference = opened.RunID
+	}
+	balances, balanceErr := target.Balances(ctx)
+	if balanceErr != nil {
+		logger.ErrorContext(ctx, "automated_exit_balance_failed", "error", balanceErr.Error())
+	} else {
+		equity := balances.TotalQuote
+		if !equity.IsPositive() {
+			equity = balances.FreeQuote
+		}
+		record, stateErr := riskTracker.RecordClose(ctx, reference, position, result, equity)
+		if stateErr != nil {
+			logger.ErrorContext(ctx, "automated_exit_persist_failed", "error", stateErr.Error())
+		} else if _, reviewErr := orch.ReviewClosed(ctx, position, result, record.PNLQuote, reference); reviewErr != nil {
+			logger.ErrorContext(ctx, "automated_exit_review_failed", "error", reviewErr.Error())
+		}
+	}
+	bus.Emit("automated_exit", reference, map[string]any{
+		"symbol": position.Symbol, "execution": result, "exit_decision": decision,
+	})
+	return nil
 }
 
 func (application *Application) Close() {

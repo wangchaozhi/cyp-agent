@@ -126,6 +126,27 @@ func TestHealthSettingsKillAndDashboardShapes(t *testing.T) {
 		t.Fatalf("health did not reflect killswitch: %d %s", response.StatusCode, body)
 	}
 
+	response, body = requestJSON(t, client, http.MethodPost, server.URL+"/api/settings", map[string]any{
+		"automation": map[string]any{
+			"enabled": true, "scan_enabled": false, "approval_enabled": false, "exit_enabled": false,
+			"max_risk_score": 0.4, "max_quote": "150", "min_confidence": 0.7,
+		},
+	})
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), `"automation":{"enabled":true`) ||
+		!strings.Contains(string(body), `"max_quote":"150"`) {
+		t.Fatalf("automation settings response = %d %s", response.StatusCode, body)
+	}
+
+	response, body = requestJSON(t, client, http.MethodPost, server.URL+"/api/settings", map[string]any{"mode": "live"})
+	if response.StatusCode != http.StatusUnprocessableEntity || !strings.Contains(string(body), "automation") {
+		t.Fatalf("live mode must reject enabled automation: %d %s", response.StatusCode, body)
+	}
+	response, body = requestJSON(t, client, http.MethodPost, server.URL+"/api/settings", map[string]any{
+		"automation": map[string]any{"enabled": false},
+	})
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("disable automation response = %d %s", response.StatusCode, body)
+	}
 	response, body = requestJSON(t, client, http.MethodPost, server.URL+"/api/settings", map[string]any{"mode": "live"})
 	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), `"mode":"live"`) || !strings.Contains(string(body), `"live_guard":{"ok":false`) {
 		t.Fatalf("mode switch response = %d %s", response.StatusCode, body)

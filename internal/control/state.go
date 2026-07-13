@@ -101,9 +101,63 @@ func (s *State) UpdateSettings(request contracts.SettingsUpdateRequest) error {
 			next.DeepSeekAPIKey = config.Secret(value)
 		}
 	}
+	if request.Automation != nil {
+		applyAutomationUpdate(&next.Automation, *request.Automation)
+	}
 	if err := next.Validate(); err != nil {
 		return err
 	}
 	s.settings = next
 	return nil
+}
+
+func applyAutomationUpdate(target *config.AutomationConfig, update contracts.AutomationSettingsUpdate) {
+	if update.Enabled != nil {
+		target.Enabled = *update.Enabled
+	}
+	if update.ScanEnabled != nil {
+		target.ScanEnabled = *update.ScanEnabled
+	}
+	if update.ApprovalEnabled != nil {
+		target.ApprovalEnabled = *update.ApprovalEnabled
+	}
+	if update.ExitEnabled != nil {
+		target.ExitEnabled = *update.ExitEnabled
+	}
+	if update.MaxRiskScore != nil {
+		target.MaxRiskScore = *update.MaxRiskScore
+	}
+	if update.MaxQuote != nil {
+		target.MaxQuote = *update.MaxQuote
+	}
+	if update.MinConfidence != nil {
+		target.MinConfidence = *update.MinConfidence
+	}
+	if update.MinRewardRisk != nil {
+		target.MinRewardRisk = *update.MinRewardRisk
+	}
+	if update.EWMALambda != nil {
+		target.EWMALambda = *update.EWMALambda
+	}
+	if update.VolatilityMultiplier != nil {
+		target.VolatilityMultiplier = *update.VolatilityMultiplier
+	}
+	if update.TrailActivationR != nil {
+		target.TrailActivationR = *update.TrailActivationR
+	}
+	if update.TrailGivebackR != nil {
+		target.TrailGivebackR = *update.TrailGivebackR
+	}
+	if update.MaxHoldingMinutes != nil {
+		target.MaxHoldingMinutes = *update.MaxHoldingMinutes
+	}
+	if update.TimeStopMinR != nil {
+		target.TimeStopMinR = *update.TimeStopMinR
+	}
+	if update.ExitConfirmations != nil {
+		target.ExitConfirmations = *update.ExitConfirmations
+	}
+	if update.ExitMinSamples != nil {
+		target.ExitMinSamples = *update.ExitMinSamples
+	}
 }

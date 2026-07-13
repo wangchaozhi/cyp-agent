@@ -155,10 +155,27 @@ func LoadWithOptions(options LoadOptions) (Settings, error) {
 	setString("CYP_LOG_LEVEL", &settings.LogLevel)
 	setSecret("CYP_API_TOKEN", &settings.APIToken)
 	setString("CYP_CONTRACT_WHITELIST", &settings.Risk.ContractWhitelist)
+	_, automationMasterExplicit := lookup("CYP_AUTOMATION_ENABLED")
 
 	for _, operation := range []func() error{
-		func() error { return setFloat("CYP_AUTO_MAX_RISK_SCORE", &settings.AutoMaxRiskScore) },
-		func() error { return setDecimal("CYP_AUTO_MAX_QUOTE", &settings.AutoMaxQuote) },
+		func() error { return setFloat("CYP_AUTO_MAX_RISK_SCORE", &settings.Automation.MaxRiskScore) },
+		func() error { return setDecimal("CYP_AUTO_MAX_QUOTE", &settings.Automation.MaxQuote) },
+		func() error { return setBool("CYP_AUTOMATION_ENABLED", &settings.Automation.Enabled) },
+		func() error { return setBool("CYP_AUTO_SCAN", &settings.Automation.ScanEnabled) },
+		func() error { return setBool("CYP_AUTO_APPROVE", &settings.Automation.ApprovalEnabled) },
+		func() error { return setBool("CYP_AUTO_EXIT", &settings.Automation.ExitEnabled) },
+		func() error { return setFloat("CYP_AUTO_MIN_CONFIDENCE", &settings.Automation.MinConfidence) },
+		func() error { return setFloat("CYP_AUTO_MIN_REWARD_RISK", &settings.Automation.MinRewardRisk) },
+		func() error { return setFloat("CYP_EXIT_EWMA_LAMBDA", &settings.Automation.EWMALambda) },
+		func() error {
+			return setFloat("CYP_EXIT_VOLATILITY_MULTIPLIER", &settings.Automation.VolatilityMultiplier)
+		},
+		func() error { return setFloat("CYP_EXIT_TRAIL_ACTIVATION_R", &settings.Automation.TrailActivationR) },
+		func() error { return setFloat("CYP_EXIT_TRAIL_GIVEBACK_R", &settings.Automation.TrailGivebackR) },
+		func() error { return setInt("CYP_EXIT_MAX_HOLDING_MINUTES", &settings.Automation.MaxHoldingMinutes) },
+		func() error { return setFloat("CYP_EXIT_TIME_STOP_MIN_R", &settings.Automation.TimeStopMinR) },
+		func() error { return setInt("CYP_EXIT_CONFIRMATIONS", &settings.Automation.ExitConfirmations) },
+		func() error { return setInt("CYP_EXIT_MIN_SAMPLES", &settings.Automation.ExitMinSamples) },
 		func() error { return setBool("CYP_KILL", &settings.Kill) },
 		func() error { return setBool("CYP_ALLOW_PERP", &settings.AllowPerp) },
 		func() error { return setBool("CYP_LIVE_ACK", &settings.LiveAck) },
@@ -197,6 +214,12 @@ func LoadWithOptions(options LoadOptions) (Settings, error) {
 		if err := operation(); err != nil {
 			return Settings{}, err
 		}
+	}
+	// Preserve legacy CYP_APPROVAL=auto installations once, while allowing a
+	// persisted/dashboard master switch to turn automation off definitively.
+	if settings.Approval == "auto" && !automationMasterExplicit {
+		settings.Automation.Enabled = true
+		settings.Automation.ApprovalEnabled = true
 	}
 
 	if err := settings.Validate(); err != nil {
@@ -248,11 +271,34 @@ func (s Settings) Validate() error {
 		!strings.HasPrefix(api, "http://") && !strings.HasPrefix(api, "https://") {
 		return errors.New("CYP_ONCHAIN_DATA_API must be an http(s) URL")
 	}
-	if math.IsNaN(s.AutoMaxRiskScore) || math.IsInf(s.AutoMaxRiskScore, 0) || s.AutoMaxRiskScore < 0 || s.AutoMaxRiskScore > 1 {
+	automation := s.Automation
+	if math.IsNaN(automation.MaxRiskScore) || math.IsInf(automation.MaxRiskScore, 0) || automation.MaxRiskScore < 0 || automation.MaxRiskScore > 1 {
 		return errors.New("CYP_AUTO_MAX_RISK_SCORE must be between 0 and 1")
 	}
-	if s.AutoMaxQuote.IsNegative() {
+	if automation.MaxQuote.IsNegative() {
 		return errors.New("CYP_AUTO_MAX_QUOTE cannot be negative")
+	}
+	for name, value := range map[string]float64{
+		"CYP_AUTO_MIN_CONFIDENCE":        automation.MinConfidence,
+		"CYP_AUTO_MIN_REWARD_RISK":       automation.MinRewardRisk,
+		"CYP_EXIT_EWMA_LAMBDA":           automation.EWMALambda,
+		"CYP_EXIT_VOLATILITY_MULTIPLIER": automation.VolatilityMultiplier,
+		"CYP_EXIT_TRAIL_ACTIVATION_R":    automation.TrailActivationR,
+		"CYP_EXIT_TRAIL_GIVEBACK_R":      automation.TrailGivebackR,
+		"CYP_EXIT_TIME_STOP_MIN_R":       automation.TimeStopMinR,
+	} {
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			return fmt.Errorf("%s must be finite", name)
+		}
+	}
+	if automation.MinConfidence < 0 || automation.MinConfidence > 1 || automation.MinRewardRisk <= 0 ||
+		automation.EWMALambda <= 0 || automation.EWMALambda >= 1 || automation.VolatilityMultiplier < 0 ||
+		automation.TrailActivationR <= 0 || automation.TrailGivebackR <= 0 || automation.MaxHoldingMinutes <= 0 ||
+		automation.ExitConfirmations <= 0 || automation.ExitMinSamples < 2 {
+		return errors.New("automation model parameters are outside their safe ranges")
+	}
+	if s.Mode == "live" && automation.Enabled {
+		return errors.New("strategy automation cannot be enabled in live read-only mode")
 	}
 	if len(s.WatchlistSymbols()) == 0 {
 		return errors.New("CYP_WATCHLIST must contain at least one symbol")

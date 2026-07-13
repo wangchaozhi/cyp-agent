@@ -140,9 +140,10 @@ go run ./cmd/cyp sweep --symbol BTC/USDT --bars 300 --top 5
 | `CYP_MODE` | `paper` | `paper` 或 `live`；当前 `live` 始终拒绝执行 |
 | `CYP_EXECUTION_VENUE` | `paper` | `paper` 或 `okx`；`okx` 仅允许 Demo，`binance` 执行硬禁用 |
 | `CYP_DATA_SOURCE` | `synthetic` | `synthetic` 或 `cex` |
-| `CYP_APPROVAL` | `cli` | `cli`、`dashboard` 或受白名单限制的 `auto` |
+| `CYP_APPROVAL` | `dashboard` | `dashboard` 或兼容旧配置的 `auto`；`cli` 是废弃别名 |
 | `CYP_KILL` | `0` | 开启后拒绝所有新仓，仍允许减仓/平仓路径 |
-| `CYP_RUNTIME_AUTOSTART` | `false` | 启动 watchlist 扫描与持仓监控循环 |
+| `CYP_AUTOMATION_ENABLED` | `false` | 自动扫描、数学审批和主动退出的总开关；可在 Dashboard 运行时切换 |
+| `CYP_RUNTIME_AUTOSTART` | `false` | 启动持仓监控等运行时循环；自动扫描仍受自动化开关控制 |
 | `CYP_PERSISTENCE` | `file` | `memory`、`file` 或 `postgres` |
 | `CYP_STATE_FILE` | `data/cyp-state.json` | 原子 JSON 状态文件 |
 | `CYP_DB_URL` | 本地 `5433/cyp` | PostgreSQL DSN，仅 `postgres` 模式使用 |
