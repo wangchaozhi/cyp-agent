@@ -356,7 +356,9 @@ func TestFullHTTPApprovalAndCloseLoop(t *testing.T) {
 }
 
 func TestSSEUsesDefaultDataFrames(t *testing.T) {
-	application, server := newTestApplication(t, nil)
+	application, server := newTestApplication(t, func(settings *config.Settings) {
+		settings.Automation.Enabled = false
+	})
 	client := &http.Client{Timeout: 2 * time.Second}
 	response, err := client.Get(server.URL + "/api/events")
 	if err != nil {

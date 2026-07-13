@@ -297,7 +297,7 @@ func TestRunOnceReversesOnlyAfterConfirmationAndFlatVerification(t *testing.T) {
 	}
 }
 
-func TestRunOnceAutoPolicyMismatchFallsBackToGate(t *testing.T) {
+func TestRunOnceAutoPolicyMismatchRejectsWithoutHumanQueue(t *testing.T) {
 	harness := newHarness(t, func(settings *config.Settings) {
 		settings.Automation.Enabled = true
 		settings.Automation.ApprovalEnabled = true
@@ -307,13 +307,16 @@ func TestRunOnceAutoPolicyMismatchFallsBackToGate(t *testing.T) {
 		settings.Automation.MaxQuote = contracts.MustDecimal("10000")
 	}, orchestrator.WithDataSource(bullishSource{}))
 
-	go resolveWhenPending(t, harness.gate, "run-gate", contracts.ApprovalRequest{Decision: contracts.ApprovalApprove})
 	result := harness.service.RunOnce(context.Background(), "run-gate", "BTC/USDT")
-	if result.Status != contracts.RunExecuted {
+	if result.Status != contracts.RunNotApproved {
 		t.Fatalf("status = %s, error = %v", result.Status, result.Error)
 	}
-	if result.Decision == nil || result.Decision.Operator == "auto-policy" {
-		t.Fatalf("expected human decision, got %+v", result.Decision)
+	if result.Decision == nil || result.Decision.Operator != "auto-policy" ||
+		result.Decision.Decision != contracts.ApprovalReject {
+		t.Fatalf("expected automatic rejection, got %+v", result.Decision)
+	}
+	if harness.gate.PendingCount() != 0 {
+		t.Fatalf("automatic rejection entered human queue: %d", harness.gate.PendingCount())
 	}
 }
 
@@ -339,7 +342,9 @@ func TestRunOnceKillSwitchRejectsBeforeExecution(t *testing.T) {
 }
 
 func TestRunOnceHumanRejectIsNotApproved(t *testing.T) {
-	harness := newHarness(t, nil, orchestrator.WithDataSource(bullishSource{}))
+	harness := newHarness(t, func(settings *config.Settings) {
+		settings.Automation.ApprovalEnabled = false
+	}, orchestrator.WithDataSource(bullishSource{}))
 	go resolveWhenPending(t, harness.gate, "run-reject", contracts.ApprovalRequest{Decision: contracts.ApprovalReject})
 	result := harness.service.RunOnce(context.Background(), "run-reject", "BTC/USDT")
 	if result.Status != contracts.RunNotApproved {
@@ -355,6 +360,7 @@ func TestRunOnceHumanRejectIsNotApproved(t *testing.T) {
 
 func TestRunOnceApprovalTimeoutFailsSafe(t *testing.T) {
 	harness := newHarness(t, func(settings *config.Settings) {
+		settings.Automation.ApprovalEnabled = false
 		settings.Risk.ApprovalTimeoutSeconds = 1
 	}, orchestrator.WithDataSource(bullishSource{}))
 
@@ -368,7 +374,9 @@ func TestRunOnceApprovalTimeoutFailsSafe(t *testing.T) {
 }
 
 func TestRunOnceModifyDownsizesAndRevalidates(t *testing.T) {
-	harness := newHarness(t, nil, orchestrator.WithDataSource(bullishSource{}))
+	harness := newHarness(t, func(settings *config.Settings) {
+		settings.Automation.ApprovalEnabled = false
+	}, orchestrator.WithDataSource(bullishSource{}))
 	smaller := contracts.MustDecimal("50")
 	go resolveWhenPending(t, harness.gate, "run-modify", contracts.ApprovalRequest{
 		Decision: contracts.ApprovalModify, Size: &smaller,

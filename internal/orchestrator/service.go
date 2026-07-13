@@ -673,6 +673,13 @@ func (s *Service) decide(
 		}
 		return approval.DecisionResult{Decision: decision, FinalProposal: proposal}, nil
 	}
+	if automationApprovalEnabled(settings) {
+		decision := contracts.ApprovalDecision{
+			Decision: contracts.ApprovalReject, Operator: "auto-policy",
+			TS: time.Now().UTC(), Note: "数学自动审批拒绝：" + metrics.Reason,
+		}
+		return approval.DecisionResult{Decision: decision, FinalProposal: proposal}, nil
+	}
 	return s.gate.Decide(ctx, runID, proposal, assessment)
 }
 
