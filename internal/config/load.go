@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	_ "time/tzdata" // Keep named IANA zones available in standalone Windows binaries.
 	"unicode"
 
 	"github.com/wangchaozhi/cyp-agent/internal/contracts"
