@@ -39,6 +39,8 @@ func run(arguments []string) error {
 		return runBacktest(arguments[1:])
 	case "sweep":
 		return runSweep(arguments[1:])
+	case "flatten":
+		return runFlatten(arguments[1:])
 	case "config":
 		settings, err := config.Load()
 		if err != nil {
@@ -208,6 +210,7 @@ func usage() {
 	fmt.Println("cyp-agent Go CLI")
 	fmt.Println("  cyp backtest [flags]  运行回测（-data=synthetic 合成 / -data=cex 真实历史K线）")
 	fmt.Println("  cyp sweep [flags]     扫参并做 OOS/PBO/DSR 验证")
+	fmt.Println("  cyp flatten [flags]   应急清仓：开启 Kill Switch 并平掉运行中服务的全部持仓（-yes 确认执行）")
 	fmt.Println("  cyp config            输出脱敏配置快照")
 	fmt.Println("  cyp version           输出版本")
 	fmt.Println("  cyp-server            启动 REST/SSE 服务")

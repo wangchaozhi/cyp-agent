@@ -236,8 +236,12 @@ type OrderIntent struct {
 type ProtectiveOrder struct {
 	Kind         string  `json:"kind"`
 	OrderID      string  `json:"order_id"`
+	ClientID     string  `json:"client_id,omitempty"`
+	PositionSide Side    `json:"position_side,omitempty"`
 	TriggerPrice Decimal `json:"trigger_price"`
+	SizeBase     Decimal `json:"size_base"`
 	ReduceOnly   bool    `json:"reduce_only"`
+	FullClose    bool    `json:"full_close"`
 }
 
 type ExecutionResult struct {

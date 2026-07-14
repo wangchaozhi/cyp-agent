@@ -241,6 +241,8 @@ export interface RuntimeSettings {
   okx: {
     configured: boolean;
     demo: boolean;
+    live: boolean;
+    region: "global" | "us" | "eea";
   };
   watchlist: string[];
   intervals: {

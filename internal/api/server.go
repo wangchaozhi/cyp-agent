@@ -202,7 +202,10 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	settings := s.control.Settings()
 	displayMode := settings.Mode
 	if settings.Mode == "live" {
-		displayMode = "Live 只读"
+		displayMode = "Live 未就绪"
+		if settings.OKXLiveExecutionConfigured() {
+			displayMode = "OKX 实盘"
+		}
 	} else if settings.ExecutionVenue == "okx" && settings.OKXDemo {
 		displayMode = "OKX Demo"
 	} else if settings.ExecutionVenue != "paper" {
@@ -239,7 +242,7 @@ func (s *Server) venues(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, []contracts.VenueInfo{
 		{ID: "paper", Kind: "paper", Configured: true, Spot: true, Perp: true, NativeProtectiveOrders: true, ReadOnly: false},
 		{ID: "binance", Kind: "cex", Configured: settings.CEXID == "binance" && settings.CEXTradingConfigured(), Spot: true, Perp: true, NativeProtectiveOrders: true, ReadOnly: true},
-		{ID: "okx", Kind: "cex", Configured: settings.OKXConfigured(), Spot: true, Perp: true, NativeProtectiveOrders: true, ReadOnly: !settings.OKXDemoExecutionConfigured()},
+		{ID: "okx", Kind: "cex", Configured: settings.OKXConfigured(), Spot: true, Perp: true, NativeProtectiveOrders: true, ReadOnly: !settings.OKXDemoExecutionConfigured() && !settings.OKXLiveExecutionConfigured()},
 	})
 }
 

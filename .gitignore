@@ -13,6 +13,7 @@ coverage.out
 
 # ---- 数据/运行态 ----
 /data/
+/.logs/
 *.db
 *.db-wal
 *.db-shm

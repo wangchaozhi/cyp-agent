@@ -115,7 +115,7 @@ func (manager *AutomatedExitManager) CheckOnce(ctx context.Context) error {
 			errorsSeen = append(errorsSeen, fmt.Errorf("%s automated exit protection: %w", position.Symbol, inspectErr))
 			continue
 		}
-		stop, found := stopLossPrice(orders)
+		stop, found := stopLossPrice(orders, position)
 		if !inspectable || !found {
 			errorsSeen = append(errorsSeen, fmt.Errorf("%s automated exit requires a verified stop loss", position.Symbol))
 			continue
@@ -152,9 +152,12 @@ func (manager *AutomatedExitManager) CheckOnce(ctx context.Context) error {
 	return errors.Join(errorsSeen...)
 }
 
-func stopLossPrice(orders []contracts.ProtectiveOrder) (contracts.Decimal, bool) {
+func stopLossPrice(orders []contracts.ProtectiveOrder, position contracts.Position) (contracts.Decimal, bool) {
 	for _, order := range orders {
-		if order.Kind == "stop_loss" && order.ReduceOnly && order.TriggerPrice.IsPositive() {
+		if order.Kind == "stop_loss" && order.ReduceOnly && order.TriggerPrice.IsPositive() &&
+			(order.PositionSide == "" || order.PositionSide == position.Side) &&
+			(order.FullClose || order.PositionSide == "" ||
+				(order.SizeBase.IsPositive() && order.SizeBase.Cmp(position.SizeBase) >= 0)) {
 			return order.TriggerPrice, true
 		}
 	}

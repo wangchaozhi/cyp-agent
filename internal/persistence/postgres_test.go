@@ -2,6 +2,7 @@ package persistence
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -99,6 +100,28 @@ func TestPostgresCheckpointBatchAndRetention(t *testing.T) {
 	order, exists := journal.Get(intent.ClientID)
 	if !exists || order.Status != contracts.OrderStatusCanceled {
 		t.Fatalf("replayed PostgreSQL order=%+v exists=%v", order, exists)
+	}
+
+	second, err := NewPostgresRepository(ctx, postgresDSNWithSearchPath(dsn, schema), 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	scope := fmt.Sprintf("okx-live:test:%d", time.Now().UnixNano())
+	if err := repository.AcquireExecutionLease(ctx, scope); err != nil {
+		t.Fatalf("first execution lease: %v", err)
+	}
+	if err := repository.ValidateExecutionLease(ctx); err != nil {
+		t.Fatalf("validate execution lease: %v", err)
+	}
+	if err := second.AcquireExecutionLease(ctx, scope); !errors.Is(err, ErrExecutionLeaseHeld) {
+		t.Fatalf("second owner error = %v, want ErrExecutionLeaseHeld", err)
+	}
+	if err := repository.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.AcquireExecutionLease(ctx, scope); err != nil {
+		t.Fatalf("lease was not released on close: %v", err)
 	}
 }
 

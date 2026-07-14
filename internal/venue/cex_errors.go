@@ -22,7 +22,7 @@ const (
 )
 
 var (
-	ErrCEXTradingDisabled = errors.New("真实 CEX 与非 OKX Demo 下单已硬禁用")
+	ErrCEXTradingDisabled = errors.New("CEX 下单仅允许 OKX Demo 或显式启用的 OKX 实盘；其余场所保持硬禁用")
 	ErrCEXUnsupported     = errors.New("exchange operation is unsupported")
 	ErrOrderStateUnknown  = errors.New("exchange order submission state is unknown")
 )

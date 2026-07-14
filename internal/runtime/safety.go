@@ -1,5 +1,6 @@
 // Package runtime coordinates reconciliation, scanning, and monitoring for
-// the local Paper venue and the explicitly configured OKX Demo environment.
+// the local Paper venue, the explicitly configured OKX Demo environment, and
+// the explicitly acknowledged OKX live environment.
 package runtime
 
 import (
@@ -13,7 +14,7 @@ import (
 )
 
 var (
-	ErrLiveExecutionDisabled = errors.New("live and non-demo CEX execution are hard-disabled")
+	ErrLiveExecutionDisabled = errors.New("execution target is not authorized: only Paper, OKX Demo, or explicitly enabled OKX live may execute")
 	ErrKillSwitch            = errors.New("kill switch is enabled")
 	ErrReconciliationFrozen  = errors.New("new positions are frozen pending successful reconciliation")
 	ErrReconciliationFailed  = errors.New("startup reconciliation failed")
@@ -23,6 +24,7 @@ type RuntimeState struct {
 	Mode           string
 	ExecutionVenue string
 	ExecutionDemo  bool
+	ExecutionLive  bool
 	Kill           bool
 }
 
@@ -139,14 +141,19 @@ func (state *SafetyState) CheckNewPosition(runtime RuntimeState) error {
 }
 
 // ValidateExecutionVenue is also used by monitor/reconcile paths. It permits
-// only the local Paper venue or an adapter that explicitly proves it is wired
-// to an authenticated OKX Demo account.
+// the local Paper venue or an adapter that explicitly proves it is wired to
+// an authenticated OKX Demo or live-trading account.
 func ValidateExecutionVenue(target ReconcileVenue) error {
 	if target == nil {
 		return fmt.Errorf("%w: venue is nil", ErrLiveExecutionDisabled)
 	}
-	policy, _ := ResolveModePolicy("paper")
-	return policy.ValidateExecution(executionTarget(venue.IdentifyExecution(target)))
+	identity := executionTarget(venue.IdentifyExecution(target))
+	paperPolicy, _ := ResolveModePolicy("paper")
+	if err := paperPolicy.ValidateExecution(identity); err == nil {
+		return nil
+	}
+	livePolicy, _ := ResolveModePolicy("live")
+	return livePolicy.ValidateExecution(identity)
 }
 
 // ValidatePaperVenue is retained for callers that only have venue metadata.

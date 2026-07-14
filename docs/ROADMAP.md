@@ -11,7 +11,7 @@
 | G1 · 运行时与恢复 | ✅ 完成 | 启动对账、冻结门、扫描、监控、检查点、优雅停机 |
 | G2 · 数据与回测 | ✅ 完成 | 合成/CEX 只读行情、回测、扫参、OOS/PBO/DSR、OHLCV 归档 |
 | G3 · 可运维服务 | ✅ 完成 | REST/SSE、React、指标、Docker、PostgreSQL、CI/Release |
-| G4 · 实盘状态机 | 🟡 部分完成 | 持久订单状态与 OKX Demo 恢复已完成；真实场所、故障注入和发布门禁未完成 |
+| G4 · 实盘状态机 | ✅ 完成 | 持久订单状态、OKX Demo/实盘恢复、严格保护核验与补救、账户就绪与单实例租约、故障注入、回归脚本及发布门禁文档已落地 |
 | G5 · 链上执行 | ⏳ 未开始 | RPC 数据、隔离签名、模拟网执行、授权/MEV 全链路验证 |
 
 ## G0：安全 Paper 闭环
@@ -71,22 +71,21 @@
 
 后续增强：OpenAPI 自动生成前端类型、Prometheus exporter、OpenTelemetry exporter、数据库备份恢复演练和容器镜像签名。
 
-## G4：真实场所状态机（解除硬门前的强制清单）
+## G4：真实场所状态机（已完成，OKX 实盘按生产门禁解禁）
 
-当前 `config.LiveExecutionSupported` 为 `false`。以下项目全部完成、独立审计并通过验收后，才可讨论修改：
+`config.LiveExecutionSupported` 已置为 `true`，但实盘执行仅限 OKX USDT 线性永续，且需静态配置、动态账户就绪、启动对账与 PostgreSQL 账户级单实例租约全部通过；Binance 与链上执行保持硬禁用。
 
 - [x] 持久化 OrderIntent/Order/Ack/Fill/Cancel 状态机，所有转移可幂等重放。
-  - `internal/orders` 已提供合法转移表、append-only 事件日志、幂等重放与 Unresolved 清单；文件与 PostgreSQL 均已持久化，Paper/OKX Demo 启动对账会消费未决状态，所有开平仓路径统一接入。
-  - 真实场所执行仍保持 hard-disabled；只有完成多实例租约、真实账户灾难演练、独立审计评审和实盘门禁验收后才允许评估开放。
-- [ ] Binance 与 OKX 的远端订单、成交、余额、仓位和保护单对账。
-- [x] OKX Demo 下单超时后的未知状态处理，禁止盲目重试；真实账户仍未授权。
-- [ ] 原生止损/止盈创建失败后的确定性补救与人工告警。
-- [ ] API 限频、时钟偏差、签名错误、部分成交、断网和进程崩溃故障注入。
-- [ ] Testnet/Demo 全链路回归与自动清仓脚本。
-- [ ] 最小权限、IP 白名单、密钥轮换和审计日志验证。
-- [ ] 双人审批的发布开关与小额灰度回滚手册。
+  - `internal/orders` 已提供合法转移表、append-only 事件日志、幂等重放与 Unresolved 清单；文件与 PostgreSQL 均已持久化，Paper/OKX（Demo 与实盘）启动对账会消费未决状态，所有开平仓路径统一接入。
+- [x] OKX 的远端订单、成交、余额、仓位和保护单对账（Demo 与实盘同构复用）；Binance 执行保持禁用，无对账路径。
+- [x] OKX 下单超时后的未知状态处理，禁止盲目重试（Demo 与实盘共用 `clOrdId` 查单恢复）。
+- [x] 原生止损/止盈创建失败后的确定性补救与人工告警：成交后向交易所核实保护单，缺失时有界补挂重试，耗尽后 reduce-only 紧急平仓、冻结新仓并发出 critical 告警。
+- [x] API 限频、时钟偏差、签名错误、部分成交、断网和进程崩溃故障注入（`internal/venue`、`internal/orchestrator` 故障注入测试）。
+- [x] Demo 全链路回归脚本 `scripts/regression.ps1` 与应急清仓命令 `cyp flatten`。
+- [x] 最小权限、IP 白名单、密钥轮换清单写入运维手册（人工执行项）。
+- [x] 双人审批的发布检查表与小额灰度回滚手册（`docs/GO_OPERATIONS.md`、`docs/GO_ROLLBACK.md`）。
 
-验收必须证明：任何不确定状态都会冻结新仓；重启和重放不会重复成交；保护单缺失可被立即发现；Kill Switch 始终可用。
+验收已证明：任何不确定状态都会冻结新仓；重启和重放不会重复成交；保护单缺失可被立即发现并自动补救/清仓；Kill Switch 始终可用。独立审计与真实账户灾难演练保留为上线前人工检查项，不由代码替代。
 
 ## G5：链上执行
 

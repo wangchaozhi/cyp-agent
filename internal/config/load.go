@@ -146,6 +146,7 @@ func LoadWithOptions(options LoadOptions) (Settings, error) {
 	setSecret("OKX_API_KEY", &settings.OKXAPIKey)
 	setSecret("OKX_API_SECRET", &settings.OKXAPISecret)
 	setSecret("OKX_PASSWORD", &settings.OKXPassword)
+	setString("CYP_OKX_REGION", &settings.OKXRegion)
 	setString("CYP_ALERT_WEBHOOK", &settings.AlertWebhook)
 	setString("CYP_EVM_RPC_URL", &settings.EVMRPCURL)
 	setString("CYP_SIGNER", &settings.Signer)
@@ -290,6 +291,9 @@ func (s Settings) Validate() error {
 	if !oneOf(s.DataSource, "synthetic", "cex") {
 		return fmt.Errorf("CYP_DATA_SOURCE must be synthetic or cex, got %q", s.DataSource)
 	}
+	if !oneOf(s.OKXRegion, "global", "us", "eea") {
+		return fmt.Errorf("CYP_OKX_REGION must be global, us, or eea, got %q", s.OKXRegion)
+	}
 	if !oneOf(s.LLMProvider, "anthropic", "deepseek") {
 		return fmt.Errorf("CYP_LLM_PROVIDER must be anthropic or deepseek, got %q", s.LLMProvider)
 	}
@@ -372,8 +376,8 @@ func (s Settings) Validate() error {
 		automation.ExitConfirmations <= 0 || automation.ExitMinSamples < 2 {
 		return errors.New("automation model parameters are outside their safe ranges")
 	}
-	if s.Mode == "live" && automation.Enabled {
-		return errors.New("strategy automation cannot be enabled in live read-only mode")
+	if s.Mode == "live" && !s.OKXLiveExecutionConfigured() {
+		return fmt.Errorf("live 模式未通过实盘静态门禁：%s", strings.Join(s.LiveGuard().Reasons, "；"))
 	}
 	if len(s.WatchlistSymbols()) == 0 {
 		return errors.New("CYP_WATCHLIST must contain at least one symbol")

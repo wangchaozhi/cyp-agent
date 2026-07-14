@@ -13,10 +13,11 @@ import (
 )
 
 var (
-	ErrInvalidRuntimeMode  = errors.New("mode must be paper or live")
-	ErrInvalidLLMProvider  = errors.New("llm_provider must be anthropic or deepseek")
-	ErrRuntimeLLMBaseURL   = errors.New("llm_base_url is startup-only; set CYP_LLM_BASE_URL and restart")
-	ErrInvalidScanInterval = errors.New("scan_interval must be one of 60, 300, 600, 900, or 1800 seconds")
+	ErrInvalidRuntimeMode    = errors.New("mode must be paper or live")
+	ErrInvalidLLMProvider    = errors.New("llm_provider must be anthropic or deepseek")
+	ErrRuntimeLLMBaseURL     = errors.New("llm_base_url is startup-only; set CYP_LLM_BASE_URL and restart")
+	ErrInvalidScanInterval   = errors.New("scan_interval must be one of 60, 300, 600, 900, or 1800 seconds")
+	ErrRuntimeLiveModeSwitch = errors.New("实盘执行的启停必须重启进程完成：请修改 CYP_MODE 后重启，仪表盘不能在进程内切换实盘")
 )
 
 type State struct {
@@ -78,12 +79,17 @@ func (s *State) UpdateSettingsPersist(
 		if mode != "paper" && mode != "live" {
 			return ErrInvalidRuntimeMode
 		}
-		next.Mode = mode
+		// Live execution wiring (venue adapter flags, risk scope, and mode
+		// policy) is validated once at startup. Allowing an HTTP caller to
+		// flip mode in-process would desynchronize those guarantees.
+		if mode != next.Mode {
+			return ErrRuntimeLiveModeSwitch
+		}
 	}
 	if request.Watchlist != nil {
 		watchlist, err := normalizeRuntimeWatchlist(
 			*request.Watchlist,
-			next.ExecutionVenue == "okx" && next.OKXDemo,
+			next.ExecutionVenue == "okx",
 		)
 		if err != nil {
 			return err
@@ -128,11 +134,6 @@ func (s *State) UpdateSettingsPersist(
 	}
 	if request.Automation != nil {
 		applyAutomationUpdate(&next.Automation, *request.Automation)
-	}
-	if next.Mode == "live" && (request.Automation == nil || request.Automation.Enabled == nil) {
-		// Entering live read-only mode must never inherit an active paper/demo
-		// automation master switch.
-		next.Automation.Enabled = false
 	}
 	if err := next.Validate(); err != nil {
 		return err

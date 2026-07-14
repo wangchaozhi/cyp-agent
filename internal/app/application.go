@@ -108,9 +108,11 @@ func New(
 		return nil, fmt.Errorf("build Binance venue: %w", err)
 	}
 	okx, err := venue.NewOKXVenue(venue.CEXConfig{
-		APIKey: settings.OKXAPIKey.Reveal(), APISecret: settings.OKXAPISecret.Reveal(),
+		BaseURL: settings.OKXBaseURL(),
+		APIKey:  settings.OKXAPIKey.Reveal(), APISecret: settings.OKXAPISecret.Reveal(),
 		Passphrase: settings.OKXPassword.Reveal(), Demo: settings.OKXDemo,
 		EnableDemoTrading: settings.OKXDemoExecutionConfigured(),
+		EnableLiveTrading: settings.OKXLiveExecutionConfigured(),
 	})
 	if err != nil {
 		_ = binance.Close()
@@ -188,6 +190,30 @@ func New(
 			_ = binance.Close()
 			_ = okx.Close()
 			return nil, err
+		}
+	}
+	if settings.OKXLiveExecutionConfigured() {
+		leaser, ok := repository.(persistence.ExecutionLeaser)
+		if !ok {
+			_ = repository.Close()
+			return nil, errors.New("OKX live execution requires a PostgreSQL execution lease")
+		}
+		leaseContext, cancelLease := context.WithTimeout(ctx, 10*time.Second)
+		leaseScope := "okx-live:" + settings.OKXRegion + ":" + settings.OKXAPIKey.Reveal()
+		if leaseErr := leaser.AcquireExecutionLease(leaseContext, leaseScope); leaseErr != nil {
+			cancelLease()
+			_ = repository.Close()
+			return nil, fmt.Errorf("acquire exclusive OKX live execution lease: %w", leaseErr)
+		}
+		cancelLease()
+		okx.SetMutationGuard(leaser.ValidateExecutionLease)
+
+		readinessContext, cancelReadiness := context.WithTimeout(ctx, 15*time.Second)
+		readinessErr := okx.ValidateLiveReadiness(readinessContext)
+		cancelReadiness()
+		if readinessErr != nil {
+			_ = repository.Close()
+			return nil, fmt.Errorf("OKX live account readiness rejected startup: %w", readinessErr)
 		}
 	}
 	preferenceStore := runtimeprefs.New(repository)
@@ -360,6 +386,13 @@ func New(
 		return llm.FromSettingsWithObserver(current, usageTracker)
 	}
 	baseLLM := llmFactory(settings)
+	alerter, err := alerts.Build(logger, runtimeMetrics, settings.AlertWebhook)
+	if err != nil {
+		closeTokenUsage(context.Background())
+		closeArchive(context.Background())
+		_ = repository.Close()
+		return nil, err
+	}
 	// Scanner, manual API runs, and the orchestrator itself serialize on this
 	// single per-symbol lock instance instead of maintaining separate maps.
 	locks := runtimecore.NewSymbolLocks()
@@ -367,20 +400,13 @@ func New(
 		orchestrator.WithDataSource(source), orchestrator.WithRepository(repository),
 		orchestrator.WithOrderJournal(orderJournal),
 		orchestrator.WithRiskState(riskTracker), orchestrator.WithSafety(safety), orchestrator.WithLLM(baseLLM),
+		orchestrator.WithAlerter(alerter),
 		orchestrator.WithSymbolLocks(locks))
 
 	reconciler, err := runtimecore.NewVenueReconciler(
 		executionVenue, bus, logger, runtimecore.WithPositionState(riskTracker), runtimecore.WithOrderState(orch),
 		runtimecore.WithMinimumMarginRatio(settings.Risk.MinMarginRatio),
 	)
-	if err != nil {
-		closeTokenUsage(context.Background())
-		closeArchive(context.Background())
-		orch.Close()
-		_ = repository.Close()
-		return nil, err
-	}
-	alerter, err := alerts.Build(logger, runtimeMetrics, settings.AlertWebhook)
 	if err != nil {
 		closeTokenUsage(context.Background())
 		closeArchive(context.Background())
@@ -405,7 +431,8 @@ func New(
 			current := state.Settings()
 			return runtimecore.RuntimeState{
 				Mode: current.Mode, ExecutionVenue: current.ExecutionVenue,
-				ExecutionDemo: current.OKXDemoExecutionConfigured(), Kill: current.Kill,
+				ExecutionDemo: current.OKXDemoExecutionConfigured(),
+				ExecutionLive: current.OKXLiveExecutionConfigured(), Kill: current.Kill,
 			}
 		},
 		Safety: safety, Locks: locks, Logger: logger, Metrics: runtimeMetrics,
@@ -440,7 +467,8 @@ func New(
 			current := state.Settings()
 			return runtimecore.RuntimeState{
 				Mode: current.Mode, ExecutionVenue: current.ExecutionVenue,
-				ExecutionDemo: current.OKXDemoExecutionConfigured(), Kill: current.Kill,
+				ExecutionDemo: current.OKXDemoExecutionConfigured(),
+				ExecutionLive: current.OKXLiveExecutionConfigured(), Kill: current.Kill,
 			}
 		},
 		OpenedAt: func(position contracts.Position) (time.Time, bool) {

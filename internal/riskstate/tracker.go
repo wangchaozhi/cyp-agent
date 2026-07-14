@@ -213,7 +213,8 @@ func (tracker *Tracker) RecordOpen(
 	execution contracts.ExecutionResult,
 	equity contracts.Decimal,
 ) error {
-	if tracker == nil || execution.Status != contracts.OrderStatusFilled {
+	if tracker == nil || !execution.FilledBase.IsPositive() ||
+		(execution.Status != contracts.OrderStatusFilled && execution.Status != contracts.OrderStatusPartiallyFilled) {
 		return nil
 	}
 	tracker.mu.Lock()

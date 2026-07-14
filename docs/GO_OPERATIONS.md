@@ -4,14 +4,18 @@
 
 ## 安全边界
 
-当前版本允许本地 Paper，以及显式配置的 OKX Demo 执行。默认安全组合为：
+当前版本允许本地 Paper、显式配置的 OKX Demo 执行，以及通过完整生产门禁后显式启用的 OKX 实盘执行。默认安全组合为：
 
 ```dotenv
 CYP_MODE=paper
 CYP_EXECUTION_VENUE=paper
 ```
 
-OKX Demo 执行需使用 Demo Trading 中单独创建的 API key，并设置 `CYP_MODE=paper`、`CYP_EXECUTION_VENUE=okx`、`CYP_OKX_DEMO=true` 和完整凭据；当前只支持 USDT 线性永续。Binance 和真实 OKX 下单仍硬禁用，`CYP_LIVE_ACK=1` 不会启用真实执行。
+OKX Demo 执行需使用 Demo Trading 中单独创建的 API key，并设置 `CYP_MODE=paper`、`CYP_EXECUTION_VENUE=okx`、`CYP_OKX_DEMO=true` 和完整凭据；当前只支持 USDT 线性永续。
+
+OKX 实盘门禁包括静态配置、启动时账户校验、启动对账和持续持有的 PostgreSQL 单实例租约，缺一不可，详见下文“OKX 实盘运维手册”。
+
+实盘范围与 Demo 一致，只开放 USDT 线性永续。Binance 与链上执行保持硬禁用。运行中的进程不允许通过 Dashboard 或 `POST /api/settings` 把 mode 切到 `live`——实盘切换必须修改环境变量并重启进程，让启动对账重新验证真实账户。
 
 所有非 GET/HEAD/OPTIONS 请求都经过同源、JSON Content-Type 和可选 Bearer token 校验。回环监听可不配置 token；监听 `0.0.0.0`、局域网地址或容器地址时，`cyp-server` 强制要求 `CYP_API_TOKEN`，否则 fail-closed 退出。公网部署仍必须增加 TLS、访问控制和审计。
 
@@ -141,9 +145,13 @@ go run ./cmd/cyp config
 go run ./cmd/cyp backtest -symbol BTC/USDT -bars 300 -window 60
 go run ./cmd/cyp backtest -json
 go run ./cmd/cyp sweep -thresholds 0.08,0.12,0.18 -top 5
+go run ./cmd/cyp flatten -base http://127.0.0.1:8000            # 预览待平仓位
+go run ./cmd/cyp flatten -base http://127.0.0.1:8000 -yes       # 应急清仓
 ```
 
 `cyp config` 只输出脱敏快照，不输出 API Key 或数据库 DSN。`backtest` 默认使用可复现的合成数据；HTTP 回测可将 `data` 设为 `cex` 拉取所选 CEX 的公共历史 K 线。
+
+`cyp flatten` 是应急清仓工具：先开启 Kill Switch（可用 `-no-kill` 跳过，不建议），然后通过 REST API 逐个平掉当前执行场所全部持仓并清理保护单，最后复核仓位归零。默认只做预览，必须加 `-yes` 才会真正执行；服务配置了 `CYP_API_TOKEN` 时通过 `-token` 或环境变量传入。
 
 ## 配置规则
 
@@ -153,8 +161,11 @@ go run ./cmd/cyp sweep -thresholds 0.08,0.12,0.18 -top 5
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `CYP_MODE` | `paper` | 当前仅 Paper 可执行 |
-| `CYP_EXECUTION_VENUE` | `paper` | 执行场所；非 Paper 不会下单 |
+| `CYP_MODE` | `paper` | `paper` 或 `live`；`live` 需满足 OKX 实盘生产门禁，且不能在运行中切换 |
+| `CYP_EXECUTION_VENUE` | `paper` | 执行场所；`okx` 支持 Demo 或显式启用的实盘，其余只读 |
+| `CYP_OKX_DEMO` | `true` | `true` 用 OKX 模拟盘；实盘必须显式设为 `false` |
+| `CYP_OKX_REGION` | `global` | 账户注册区域 `global`、`us` 或 `eea`；映射到固定官方 API 域名 |
+| `CYP_LIVE_ACK` | `0` | 实盘显式确认；只在生产门禁其他条件齐备时生效 |
 | `CYP_DATA_SOURCE` | `synthetic` | `synthetic` 或 `cex` |
 | `CYP_CEX_ID` | `binance` | 公共/只读行情选择 `binance` 或 `okx` |
 | `CYP_APPROVAL` | `dashboard` | 人工审批进入 pending 队列（`cli` 为废弃别名，等同 `dashboard`）；`auto` 受白名单、风险和额度限制 |
@@ -295,6 +306,73 @@ curl.exe -N "$base/api/events"
 ```
 
 SSE 只发送连接后的实时事件；断线重连后应通过 REST 重新读取 run、pending 和 positions 快照。
+
+## OKX 实盘运维手册
+
+本节是把服务切到 OKX 真实账户前的强制流程。实盘只开放 OKX USDT 线性永续；Binance 与链上执行保持硬禁用。
+
+### 生产门禁清单
+
+启动实盘前逐项核对；静态项不满足会拒绝启动或在 `/api/ready` 的 `reasons` 中列出，动态账户校验或租约失败会直接拒绝启动/写操作：
+
+| # | 静态条件 | 配置 |
+| --- | --- | --- |
+| 1 | 运行模式为 live | `CYP_MODE=live` |
+| 2 | 执行场所为 OKX | `CYP_EXECUTION_VENUE=okx` |
+| 3 | 关闭模拟盘标记 | `CYP_OKX_DEMO=false` |
+| 4 | 真实账户凭据齐全 | `OKX_API_KEY`、`OKX_API_SECRET`、`OKX_PASSWORD` |
+| 5 | 显式实盘确认 | `CYP_LIVE_ACK=1` |
+| 6 | Kill Switch 关闭 | `CYP_KILL=0` 且未通过 API 开启 |
+| 7 | 控制 API 强制鉴权 | 配置高强度 `CYP_API_TOKEN` |
+| 8 | 风险告警可达 | 配置并验证 `CYP_ALERT_WEBHOOK` |
+| 9 | 持久状态与进程租约 | `CYP_PERSISTENCE=postgres` 且数据库高可用 |
+| 10 | 同场所实时行情 | `CYP_DATA_SOURCE=cex`、`CYP_CEX_ID=okx` |
+| 11 | 合约与保证金边界 | `CYP_ALLOW_PERP=1`、`CYP_FORCE_ISOLATED=true` |
+| 12 | 正确账户区域 | `CYP_OKX_REGION=global/us/eea` 与注册区域一致 |
+
+启动还会向 OKX 核验：服务器时钟偏差不超过 2 秒、账户为 `net_mode`、账户等级为非组合保证金模式、key 含 Trade 且不含 Withdraw 权限并已绑定 IP。随后服务取得基于区域和 API key 的 PostgreSQL advisory lease；第二实例无法取得租约，已有实例若租约连接丢失，每个交易所写操作都会 fail-closed。标的使用 `BTC/USDT:USDT` 永续格式。运行中的进程拒绝把 mode 切到 `live`；实盘切换必须重启进程，让启动对账重新验证真实账户的持仓、余额、保证金率与保护单。
+
+### 密钥要求
+
+- **最小权限**：实盘 key 只授予“读取 + 交易”，必须禁用提现与转账权限；
+- **IP 白名单**：key 必须绑定运行服务器的出口 IP，禁止空白名单；
+- **独立 key**：不与其他系统或人工终端共用；泄漏疑似发生时立即在 OKX 后台删除；
+- **定期轮换**：建议至多 90 天轮换一次。轮换流程：开 Kill Switch → 等待无在途订单 → 更新 `.env` → 重启 → 确认 `/api/ready` 通过后关闭 Kill Switch；
+- 服务对配置快照、日志与 LLM 上下文中的密钥统一脱敏，但 `.env` 本身仍需按密钥文件管理权限。
+
+### 上线前检查表
+
+1. 全量测试通过：`gofmt`、`go vet ./...`、`go test -race -count=1 ./...`；
+2. Demo 全链路回归通过：在 OKX Demo 配置下运行 `pwsh scripts/regression.ps1`，覆盖 health/ready → run → 审批 → 持仓 → 平仓 → 对账 → 审计导出，必须全绿；
+3. Demo 灰度：以最终实盘同版本、同配置（仅 Demo 凭据）连续运行至少一周，期间无冻结、无保护单缺口、无未解决对账差异；
+4. 风控参数显式收紧：实盘初期建议关闭数学自动审批（`CYP_AUTO_APPROVE=false`）、调低 `CYP_AUTO_MAX_QUOTE` 与 `CYP_MAX_RISK_PER_TRADE`，只放可承受全损的小额资金；
+5. 应急演练完成（见下节）；
+6. 双人确认：一人修改配置、另一人核对生产门禁与检查表后才允许启动（记录在值班日志）；
+7. 独立审计与真实账户灾难演练属于人工检查项，不能由代码或本清单替代。
+
+### 应急清仓与 Kill Switch 演练
+
+上线前和每次值班交接时演练一次（Demo 环境即可）：
+
+```powershell
+# 1. 开启 Kill Switch，确认新开仓被拒绝
+Invoke-RestMethod -Method Post -Uri "$base/api/killswitch" -ContentType "application/json" -Body '{"on":true}'
+
+# 2. 应急清仓：预览 → 确认执行
+go run ./cmd/cyp flatten -base $base
+go run ./cmd/cyp flatten -base $base -yes
+
+# 3. 复核：持仓为空、对账通过、审计可导出
+Invoke-RestMethod "$base/api/positions"
+Invoke-RestMethod -Method Post -Uri "$base/api/reconcile" -ContentType "application/json" -Body "{}"
+Invoke-WebRequest "$base/api/audit/export" -OutFile cyp-audit.json
+```
+
+实盘运行期间的自动保护：下单使用短时 `expTime`；部分成交会撤销余量并查单确认终态。任何正成交量都必须向交易所核实止损/止盈 algo 单真实存在，且客户端标识、方向、reduce-only 和覆盖数量均匹配；核实失败进入有界补挂重试，重试耗尽会自动 reduce-only 紧急平仓、冻结新开仓并发出 critical 告警。收到 `protective_remediation_exhausted` 或 `emergency_flattened` 告警时，按“运行时与故障定位”一节处理，不要在未查明原因前解除冻结。
+
+### 回滚
+
+实盘异常时按 [GO_ROLLBACK.md](GO_ROLLBACK.md) 的“Go 服务版本回滚与灰度”执行：先 Kill、后清仓（视情况）、再回滚版本或降级回 Demo/Paper 配置。
 
 ## Kill Switch 与平仓
 

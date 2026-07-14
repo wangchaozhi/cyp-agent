@@ -603,16 +603,22 @@ func (v *PaperVenue) makeProtectiveLocked(
 		orders = append(orders, contracts.ProtectiveOrder{
 			Kind:         "stop_loss",
 			OrderID:      v.nextIDLocked("sl"),
+			ClientID:     intent.ClientID,
+			PositionSide: intent.Side,
 			TriggerPrice: *intent.StopLoss,
 			ReduceOnly:   true,
+			FullClose:    true,
 		})
 	}
 	for _, price := range intent.TakeProfit {
 		orders = append(orders, contracts.ProtectiveOrder{
 			Kind:         "take_profit",
 			OrderID:      v.nextIDLocked("tp"),
+			ClientID:     intent.ClientID,
+			PositionSide: intent.Side,
 			TriggerPrice: price,
 			ReduceOnly:   true,
+			FullClose:    true,
 		})
 	}
 	return orders

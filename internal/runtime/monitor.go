@@ -157,7 +157,7 @@ func (monitor *PositionMonitor) CheckOnce(ctx context.Context) (report MonitorRe
 			report.Alerts = append(report.Alerts,
 				fmt.Sprintf("%s 无原生保护单，保护依赖监控存活", position.Symbol))
 			unsafeProtection[position.Symbol] = struct{}{}
-		} else if !inspectionFailedBySymbol[position.Symbol] && (!inspectable || !hasStopLoss(orders)) {
+		} else if !inspectionFailedBySymbol[position.Symbol] && (!inspectable || !hasStopLossForPosition(orders, position)) {
 			report.Alerts = append(report.Alerts, fmt.Sprintf("%s 缺少止损保护单", position.Symbol))
 			unsafeProtection[position.Symbol] = struct{}{}
 		}

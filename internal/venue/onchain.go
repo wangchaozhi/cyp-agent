@@ -8,7 +8,6 @@ import (
 	"strings"
 	"sync"
 
-	runtimeconfig "github.com/wangchaozhi/cyp-agent/internal/config"
 	"github.com/wangchaozhi/cyp-agent/internal/contracts"
 )
 
@@ -95,8 +94,13 @@ type OnchainVenue struct {
 
 var _ Venue = (*OnchainVenue)(nil)
 
+// onchainExecutionSupported stays false even though the CEX live gate
+// (config.LiveExecutionSupported) has been opened for OKX. Onchain execution
+// has its own unfinished acceptance checklist and remains hard-disabled.
+const onchainExecutionSupported = false
+
 func NewOnchainVenue(config OnchainConfig, client OnchainClient) (*OnchainVenue, error) {
-	return newOnchainVenue(config, client, runtimeconfig.LiveExecutionSupported)
+	return newOnchainVenue(config, client, onchainExecutionSupported)
 }
 
 // newOnchainVenue keeps transaction mechanics testable while the exported

@@ -55,6 +55,14 @@ type Repository interface {
 	Close() error
 }
 
+// ExecutionLeaser provides exclusive ownership of a real execution account.
+// Implementations must bind the lease to a live storage session and fail
+// validation when that session is lost.
+type ExecutionLeaser interface {
+	AcquireExecutionLease(context.Context, string) error
+	ValidateExecutionLease(context.Context) error
+}
+
 type lessonRecord struct {
 	ID        uint64    `json:"id"`
 	Symbol    string    `json:"symbol"`

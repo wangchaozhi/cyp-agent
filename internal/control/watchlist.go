@@ -17,7 +17,7 @@ var (
 // normalizeRuntimeWatchlist is the policy boundary shared by every runtime
 // settings caller. Venue-specific execution constraints stay out of handlers
 // and UI code, so API mutations cannot bypass them.
-func normalizeRuntimeWatchlist(source []string, requireOKXDemoPerpetual bool) ([]string, error) {
+func normalizeRuntimeWatchlist(source []string, requireOKXPerpetual bool) ([]string, error) {
 	if len(source) == 0 || len(source) > maxRuntimeWatchlistSize {
 		return nil, ErrInvalidWatchlist
 	}
@@ -28,9 +28,9 @@ func normalizeRuntimeWatchlist(source []string, requireOKXDemoPerpetual bool) ([
 		if !runtimeSymbolPattern.MatchString(symbol) {
 			return nil, fmt.Errorf("%w: invalid symbol %q", ErrInvalidWatchlist, raw)
 		}
-		if requireOKXDemoPerpetual && !strings.HasSuffix(symbol, "/USDT:USDT") {
+		if requireOKXPerpetual && !strings.HasSuffix(symbol, "/USDT:USDT") {
 			return nil, fmt.Errorf(
-				"%w: OKX Demo requires USDT perpetual symbols such as BTC/USDT:USDT",
+				"%w: OKX execution requires USDT perpetual symbols such as BTC/USDT:USDT",
 				ErrInvalidWatchlist,
 			)
 		}

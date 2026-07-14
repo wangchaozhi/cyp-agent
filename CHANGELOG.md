@@ -6,6 +6,31 @@
 
 暂无。
 
+## [1.10.0] - 2026-07-14
+
+### OKX 实盘解禁（G4 收尾）
+
+- `config.LiveExecutionSupported` 置为 `true`，实盘执行仅限 OKX USDT 线性永续；静态门禁除 live/OKX/非 Demo/凭据/显式确认/Kill 外，强制 API 鉴权、风险告警、PostgreSQL、OKX 实时行情、永续与逐仓配置。Binance 与链上执行保持硬禁用。
+- 启动时用 OKX 官方时间和账户配置做动态就绪检查：限制时钟偏差，要求 net mode、非 portfolio margin、Trade 且无 Withdraw 权限、API key 绑定 IP；`CYP_OKX_REGION` 只允许映射 global/us/eea 固定官方域名。
+- 实盘进程在 PostgreSQL 独占账户级 session advisory lease；每次交易所写操作前重新验证租约，连接丢失或第二实例竞争时 fail-closed，防止重复扫描与重复下单。
+- Venue 层交易门禁由 Demo 专用泛化为 `TradingEnabled()`（Demo 或显式启用的实盘），OKX 下单/撤单/查单/保护单代码 Demo 与实盘同构复用，仅差模拟盘请求头；构造时校验实盘仅限 OKX、凭据齐全且与 Demo 互斥。
+- Runtime mode policy 允许经适配器证明的 `okx live writable` 执行目标，风险账本 scope 使用 `live:okx` 与 paper/demo 隔离；运行中的设置更新拒绝把 mode 切到 `live`，实盘切换必须重启并重新通过启动对账。
+
+### 保护单核验与确定性补救
+
+- 修复保护单假阳性：成交后不再从下单意图回填保护单，改为调用交易所接口核实 algo 单真实存在；核实通过才进入 `protective_placed`，否则落入 `protective_failed` 强制补救。
+- 保护单核验进一步绑定确定性 `algoClOrdId`、持仓方向、reduce-only 与成交数量全覆盖；同币种的无关 algo 单不再可能误报为有效保护。
+- 部分成交不再作为普通失败收尾：有余量时先撤单并查询确认远端终态，任何正成交量都进入持久保护/补救路径；调用方超时后关键 journal、保护核验和紧急补救继续在有界后台上下文完成。
+- OKX 下单带 5 秒 `expTime` 防止网络延迟后意外开仓；撤单 ACK 后必须查单确认终态，模糊提交仍只通过原 `clOrdId` 查单恢复，绝不盲目重发 POST。
+- 新增独立补挂能力（`PlaceProtectiveOrders`）与编排器补救器：`protective_failed` 时有界重试补挂并再次向交易所核实；重试耗尽自动 reduce-only 紧急平仓（`flattening` 状态入 journal）、冻结新开仓并发出 critical 告警。
+
+### 故障注入与工具
+
+- 新增实盘门禁下的故障注入测试：时钟偏差签名拒绝（不重试 POST）、部分成交、断网后 `clOrdId` 查单恢复、进程崩溃 journal 重放 + 启动对账、限流 429 下 POST 不重试改走对账、保护单补救全路径（补挂成功 / 耗尽 → 平仓 → 冻结）。
+- `cyp` CLI 新增 `flatten` 应急清仓命令：默认预览，`-yes` 确认后开启 Kill Switch 并通过 REST 逐个平掉当前执行场所全部持仓、清理保护单并复核归零。
+- 新增 `scripts/regression.ps1` Demo 全链路回归脚本（health/ready → run → 审批 → 持仓 → 平仓 → 对账 → 审计导出），作为实盘发布前的强制回归。
+- 文档：`GO_OPERATIONS.md` 新增实盘运维手册（静态/动态门禁、密钥最小权限/IP 白名单/轮换、上线前检查表、应急演练），`GO_ROLLBACK.md` 新增 Go 服务版本回滚与小额灰度回滚手册（双人确认、先 Kill 后回滚、状态恢复）；README/ARCHITECTURE/ROADMAP/.env.example 同步更新。
+
 ## [1.9.0] - 2026-07-14
 
 ### 持久订单状态与恢复

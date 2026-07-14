@@ -52,6 +52,7 @@ type Service struct {
 	repository   persistence.Repository
 	riskState    *riskstate.Tracker
 	safety       *runtimecore.SafetyState
+	alerter      runtimecore.AlertSender
 
 	pipelineMu  sync.RWMutex
 	llm         *llm.Client
@@ -106,6 +107,12 @@ func WithRiskState(tracker *riskstate.Tracker) Option {
 
 func WithSafety(safety *runtimecore.SafetyState) Option {
 	return func(service *Service) { service.safety = safety }
+}
+
+// WithAlerter routes protective remediation and emergency flatten outcomes to
+// the operator alert channel in addition to the SSE event bus.
+func WithAlerter(alerter runtimecore.AlertSender) Option {
+	return func(service *Service) { service.alerter = alerter }
 }
 
 func WithLLM(client *llm.Client) Option {
@@ -722,22 +729,39 @@ func (s *Service) run(ctx context.Context, runID, symbol string) contracts.RunRe
 		}
 		return fail(result, errors.Join(fmt.Errorf("execute: %w", err), journalErr))
 	}
-	journalErr := s.recordExecution(ctx, runID, orderIntent.ClientID, execution)
+	// After an exchange acknowledgement/fill, caller cancellation must not
+	// interrupt journaling, protection remediation, or risk-state persistence.
+	// Bound the detached critical section so shutdown still completes.
+	postExecutionContext, cancelPostExecution := context.WithTimeout(context.WithoutCancel(ctx), 45*time.Second)
+	defer cancelPostExecution()
+	journalErr := s.recordExecution(postExecutionContext, runID, orderIntent, execution)
 	if journalErr != nil {
 		s.freezeDurability("execution result journal persistence failed")
 	}
 	result.Execution = &execution
+	if journalErr != nil {
+		return fail(result, fmt.Errorf("persist execution result: %w", journalErr))
+	}
+	// A full or terminalized partial entry whose protection the venue did not
+	// verify must be remediated (or emergency-flattened) before any noncritical
+	// checkpoint/review work may run.
+	if order, tracked := s.journal.Get(orderIntent.ClientID); tracked &&
+		order.Status == contracts.OrderStatusProtectiveFailed {
+		if remediationErr := s.remediateProtection(postExecutionContext, runID, orderIntent, mark); remediationErr != nil {
+			return fail(result, fmt.Errorf("protective remediation: %w", remediationErr))
+		}
+	}
 	s.events.Emit("executed", runID, map[string]any{"symbol": symbol, "execution": execution})
-	if reversing && execution.Status == contracts.OrderStatusFilled {
+	if reversing && executionOpenedPosition(execution) {
 		s.events.Emit("reversal_opened", runID, map[string]any{
 			"symbol": symbol, "side": finalProposal.Side, "execution": execution,
 		})
 	}
-	if err := s.checkpoint(ctx, runID, "execution", execution); err != nil {
+	if err := s.checkpoint(postExecutionContext, runID, "execution", execution); err != nil {
 		return fail(result, err)
 	}
-	if s.riskState != nil && execution.Status == contracts.OrderStatusFilled {
-		balancesAfter, balanceErr := s.venue.Balances(ctx)
+	if s.riskState != nil && executionOpenedPosition(execution) {
+		balancesAfter, balanceErr := s.venue.Balances(postExecutionContext)
 		if balanceErr != nil {
 			return fail(result, fmt.Errorf("post-execution balances: %w", balanceErr))
 		}
@@ -745,15 +769,11 @@ func (s *Service) run(ctx context.Context, runID, symbol string) contracts.RunRe
 		if !equityAfter.IsPositive() {
 			equityAfter = balancesAfter.FreeQuote
 		}
-		if err := s.riskState.RecordOpen(ctx, runID, finalProposal, execution, equityAfter); err != nil {
+		if err := s.riskState.RecordOpen(postExecutionContext, runID, finalProposal, execution, equityAfter); err != nil {
 			s.freezeDurability("executed trade risk state persistence failed")
 			return fail(result, fmt.Errorf("persist executed trade risk state: %w", err))
 		}
 	}
-	if journalErr != nil {
-		return fail(result, fmt.Errorf("persist execution result: %w", journalErr))
-	}
-
 	reviewSpan := startSpan(ctx, "review")
 	review, err := s.reviewer.Run(ctx, finalProposal, execution, agentContext, runID)
 	reviewSpan.End(err)
@@ -764,13 +784,13 @@ func (s *Service) run(ctx context.Context, runID, symbol string) contracts.RunRe
 	s.events.Emit("reviewed", runID, map[string]any{"symbol": symbol, "review": review})
 	if s.repository != nil {
 		if err := s.repository.AppendLessons(ctx, symbol, review.Lessons); err != nil {
-			if execution.Status == contracts.OrderStatusFilled {
+			if executionOpenedPosition(execution) {
 				s.freezeDurability("executed trade review persistence failed")
 			}
 			return fail(result, fmt.Errorf("persist lessons: %w", err))
 		}
 	}
-	if execution.Status == contracts.OrderStatusFilled {
+	if executionOpenedPosition(execution) {
 		result.Status = contracts.RunExecuted
 	} else {
 		result.Status = contracts.RunExecutionFailed
@@ -829,32 +849,56 @@ func (s *Service) checkNewPosition(settings config.Settings) error {
 	if s.safety != nil {
 		return s.safety.CheckNewPosition(runtimecore.RuntimeState{
 			Mode: settings.Mode, ExecutionVenue: settings.ExecutionVenue,
-			ExecutionDemo: settings.OKXDemoExecutionConfigured(), Kill: settings.Kill,
+			ExecutionDemo: settings.OKXDemoExecutionConfigured(),
+			ExecutionLive: settings.OKXLiveExecutionConfigured(), Kill: settings.Kill,
 		})
 	}
 	if !settings.NewPositionAllowed() {
-		return errors.New("only Paper or a configured OKX Demo account may open positions")
+		return errors.New("only Paper, a configured OKX Demo, or an explicitly enabled OKX live account may open positions")
 	}
 	return nil
 }
 
 // recordExecution journals the venue outcome. The journal only accepts legal
 // transitions, so a venue reporting an unexpected status leaves the order in
-// its last consistent state instead of corrupting the log.
-func (s *Service) recordExecution(ctx context.Context, runID, clientID string, execution contracts.ExecutionResult) error {
+// its last consistent state instead of corrupting the log. For a filled entry
+// that requested protection, the lifecycle fails closed: verified protective
+// orders advance to protective_placed, anything else lands in
+// protective_failed so remediation is forced to run.
+func (s *Service) recordExecution(ctx context.Context, runID string, intent contracts.OrderIntent, execution contracts.ExecutionResult) error {
 	status := execution.Status
 	if !orders.CanTransition(contracts.OrderStatusSubmitting, status) {
 		status = contracts.OrderStatusUnknown
 	}
-	if err := s.journal.TransitionContext(ctx, runID+":result", clientID, status, &execution, ""); err != nil {
+	if err := s.journal.TransitionContext(ctx, runID+":result", intent.ClientID, status, &execution, ""); err != nil {
 		return err
 	}
-	if execution.Status == contracts.OrderStatusFilled && len(execution.ProtectiveOrders) > 0 {
-		if err := s.journal.TransitionContext(ctx, runID+":protective", clientID, contracts.OrderStatusProtectivePlaced, nil, ""); err != nil {
-			return err
-		}
+	if !executionOpenedPosition(execution) {
+		return nil
+	}
+	if s.protectionSatisfied(intent, execution.FilledBase, execution.ProtectiveOrders) {
+		return s.journal.TransitionContext(ctx, runID+":protective", intent.ClientID, contracts.OrderStatusProtectivePlaced, nil, "")
+	}
+	if intentExpectsProtection(intent) {
+		return s.journal.TransitionContext(ctx, runID+":protective", intent.ClientID, contracts.OrderStatusProtectiveFailed, nil,
+			"venue did not verify the requested protective orders")
 	}
 	return nil
+}
+
+func executionOpenedPosition(execution contracts.ExecutionResult) bool {
+	return execution.FilledBase.IsPositive() &&
+		(execution.Status == contracts.OrderStatusFilled || execution.Status == contracts.OrderStatusPartiallyFilled)
+}
+
+func intentExpectsProtection(intent contracts.OrderIntent) bool {
+	if intent.ReduceOnly {
+		return false
+	}
+	if intent.StopLoss != nil && intent.StopLoss.IsPositive() {
+		return true
+	}
+	return len(intent.TakeProfit) > 0 && intent.TakeProfit[0].IsPositive()
 }
 
 // Order exposes the journaled state of one order for reconciliation and the

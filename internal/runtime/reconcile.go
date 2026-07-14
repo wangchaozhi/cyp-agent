@@ -147,7 +147,7 @@ func (reconciler *VenueReconciler) Reconcile(ctx context.Context) (ReconcileRepo
 		case !inspectable:
 			report.ProtectiveGaps = append(report.ProtectiveGaps,
 				fmt.Sprintf("%s 无法核验原生保护单", position.Symbol))
-		case !hasStopLoss(orders):
+		case !hasStopLossForPosition(orders, position):
 			report.ProtectiveGaps = append(report.ProtectiveGaps,
 				fmt.Sprintf("%s 缺少止损保护单", position.Symbol))
 		}
@@ -216,9 +216,21 @@ func inspectProtectiveOrders(
 	return nil, false, nil
 }
 
-func hasStopLoss(orders []contracts.ProtectiveOrder) bool {
+func hasStopLossForPosition(orders []contracts.ProtectiveOrder, position contracts.Position) bool {
 	for _, order := range orders {
-		if strings.EqualFold(order.Kind, "stop_loss") && order.ReduceOnly && order.TriggerPrice.IsPositive() {
+		if !strings.EqualFold(order.Kind, "stop_loss") || !order.ReduceOnly || !order.TriggerPrice.IsPositive() {
+			continue
+		}
+		if order.PositionSide != "" && order.PositionSide != position.Side {
+			continue
+		}
+		if order.FullClose || (order.SizeBase.IsPositive() && order.SizeBase.Cmp(position.SizeBase) >= 0) {
+			return true
+		}
+		// Legacy/Paper readers did not expose coverage metadata. OKX readers
+		// always expose PositionSide, so only metadata-free local orders use
+		// this compatibility path.
+		if order.PositionSide == "" {
 			return true
 		}
 	}

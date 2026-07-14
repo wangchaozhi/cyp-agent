@@ -34,6 +34,10 @@ var transitions = map[contracts.OrderStatus][]contracts.OrderStatus{
 	contracts.OrderStatusPartiallyFilled: {
 		contracts.OrderStatusPartiallyFilled, contracts.OrderStatusFilled,
 		contracts.OrderStatusCanceled, contracts.OrderStatusUnknown,
+		// The exchange remainder may be canceled while the filled quantity
+		// remains open and therefore must enter the normal protection lifecycle.
+		contracts.OrderStatusProtectivePlaced, contracts.OrderStatusProtectiveFailed,
+		contracts.OrderStatusFlattening,
 	},
 	contracts.OrderStatusFilled: {
 		contracts.OrderStatusProtectivePlaced, contracts.OrderStatusProtectiveFailed,
@@ -43,6 +47,10 @@ var transitions = map[contracts.OrderStatus][]contracts.OrderStatus{
 		contracts.OrderStatusFlattening, contracts.OrderStatusClosed,
 	},
 	contracts.OrderStatusProtectiveFailed: {
+		// protective_failed -> protective_placed is the deterministic
+		// remediation path: a standalone TP/SL algo was re-submitted and then
+		// verified against the exchange.
+		contracts.OrderStatusProtectivePlaced,
 		contracts.OrderStatusFlattening, contracts.OrderStatusClosed,
 	},
 	contracts.OrderStatusFlattening: {

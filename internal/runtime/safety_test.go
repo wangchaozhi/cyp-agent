@@ -26,10 +26,19 @@ func TestSafetyStateRequiresSuccessfulReconcileAndRejectsLive(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("OKX Demo position rejected after reconcile: %v", err)
 	}
+	if err := safety.CheckNewPosition(RuntimeState{
+		Mode: "live", ExecutionVenue: "okx", ExecutionLive: true,
+	}); err != nil {
+		t.Fatalf("explicitly enabled OKX live position rejected after reconcile: %v", err)
+	}
 	for _, state := range []RuntimeState{
 		{Mode: "live", ExecutionVenue: "paper"},
+		{Mode: "live", ExecutionVenue: "binance", ExecutionLive: true},
+		{Mode: "live", ExecutionVenue: "okx"},
+		{Mode: "live", ExecutionVenue: "okx", ExecutionDemo: true},
 		{Mode: "paper", ExecutionVenue: "binance"},
 		{Mode: "paper", ExecutionVenue: "okx"},
+		{Mode: "paper", ExecutionVenue: "okx", ExecutionLive: true},
 	} {
 		if err := safety.CheckNewPosition(state); !errors.Is(err, ErrLiveExecutionDisabled) {
 			t.Fatalf("unsafe state %#v error = %v", state, err)
@@ -88,7 +97,29 @@ func TestModePolicySeparatesPaperDemoAndLiveRiskScopes(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := live.ValidateExecution(demo); !errors.Is(err, ErrLiveExecutionDisabled) {
-		t.Fatalf("live policy unexpectedly allowed execution: %v", err)
+		t.Fatalf("live policy unexpectedly allowed demo execution: %v", err)
+	}
+	okxLive := ExecutionTarget{
+		VenueID: "okx", Kind: "cex", Environment: "live", Writable: true,
+	}
+	if err := live.ValidateExecution(okxLive); err != nil {
+		t.Fatalf("live policy rejected writable OKX live target: %v", err)
+	}
+	if scope := live.RiskStateScope(okxLive); scope != "live:okx" ||
+		scope == policy.RiskStateScope(demo) || scope == policy.RiskStateScope(local) {
+		t.Fatalf("live risk scope is not isolated: %q", scope)
+	}
+	for _, target := range []ExecutionTarget{
+		{VenueID: "binance", Kind: "cex", Environment: "live", Writable: true},
+		{VenueID: "okx", Kind: "cex", Environment: "live", Writable: false},
+		{VenueID: "okx", Kind: "onchain", Environment: "live", Writable: true},
+	} {
+		if err := live.ValidateExecution(target); !errors.Is(err, ErrLiveExecutionDisabled) {
+			t.Fatalf("live policy accepted unsafe target %#v: %v", target, err)
+		}
+	}
+	if err := policy.ValidateExecution(okxLive); !errors.Is(err, ErrLiveExecutionDisabled) {
+		t.Fatalf("paper policy unexpectedly allowed live execution: %v", err)
 	}
 }
 

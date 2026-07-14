@@ -1,13 +1,14 @@
 openapi: 3.1.0
 info:
   title: cyp-agent HTTP API
-  version: 1.9.0
+  version: 1.10.0
   description: |
     React 仪表盘使用的 REST 与 SSE 契约。
 
-    真实 CEX 下单和 `live` 模式均为 hard-disabled。执行仅允许本地 Paper，或在
-    `mode=paper`、`execution_venue=okx`、Demo 标识和完整 Demo 凭据同时满足时使用
-    OKX 模拟环境；OKX Demo 当前只开放 USDT 线性永续合约。
+    执行仅允许本地 Paper、显式配置的 OKX Demo，或通过静态配置、动态账户就绪、
+    启动对账和 PostgreSQL 单实例租约门禁的 OKX 实盘。OKX 执行只开放 USDT 线性
+    永续合约。Binance 与链上下单保持 hard-disabled；运行时设置接口拒绝把 mode
+    切换为 live，实盘切换必须重启进程。
 
     交易金额、价格、数量、PnL、费率和风险阈值在响应 JSON 中使用十进制字符串，
     避免经过二进制浮点。回测研究指标和运行计数仍使用 JSON number。集合与嵌套
@@ -887,12 +888,17 @@ components:
         okx:
           type: object
           additionalProperties: false
-          required: [configured, demo]
+          required: [configured, demo, live, region]
           properties:
             configured:
               type: boolean
             demo:
               type: boolean
+            live:
+              type: boolean
+            region:
+              type: string
+              enum: [global, us, eea]
         watchlist:
           type: array
           items:
@@ -1036,7 +1042,7 @@ components:
         mode:
           type: string
           enum: [paper, live]
-          description: 运行时模式；paper 可使用本地 Paper 或 OKX Demo，live 仅开放只读分析并硬禁真实执行。
+          description: 运行时模式；paper 可使用本地 Paper 或 OKX Demo；live 仅允许通过启动安全门禁的 OKX 实盘且不能在运行中切换。
         watchlist:
           type: array
           minItems: 1

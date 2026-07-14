@@ -29,18 +29,23 @@ const maxCEXResponseBytes = 4 << 20
 const (
 	defaultCEXGETRetries = 2
 	maxCEXRetryDelay     = 2 * time.Second
+	okxOrderExpiry       = 5 * time.Second
 )
 
 type CEXConfig struct {
-	ExchangeID           string
-	BaseURL              string
-	FuturesBaseURL       string
-	HTTPClient           *http.Client
-	APIKey               string
-	APISecret            string
-	Passphrase           string
-	Demo                 bool
-	EnableDemoTrading    bool
+	ExchangeID        string
+	BaseURL           string
+	FuturesBaseURL    string
+	HTTPClient        *http.Client
+	APIKey            string
+	APISecret         string
+	Passphrase        string
+	Demo              bool
+	EnableDemoTrading bool
+	// EnableLiveTrading unlocks order mutation against the real OKX account.
+	// It is only honored for exchange "okx" with Demo=false and a complete
+	// credential tuple; every other combination fails construction.
+	EnableLiveTrading    bool
 	QuoteCurrency        string
 	EstimatedSlippageBPS contracts.Decimal
 	Clock                func() time.Time
@@ -55,8 +60,9 @@ type MarketPrecision struct {
 }
 
 // CEXVenue exposes public and signed exchange APIs. Order mutation is enabled
-// only for an explicitly selected, fully configured OKX Demo account. Real CEX
-// trading remains unavailable even when production credentials are present.
+// only for an explicitly selected, fully configured OKX Demo account or an
+// explicitly enabled OKX live account. Binance trading remains hard-disabled
+// even when production credentials are present.
 type CEXVenue struct {
 	id             string
 	baseURL        string
@@ -67,11 +73,13 @@ type CEXVenue struct {
 	passphrase     string
 	demo           bool
 	demoTrading    bool
+	liveTrading    bool
 	quoteCurrency  string
 	slippageBPS    contracts.Decimal
 	now            func() time.Time
 	getRetries     int
 	retryDelay     func(attempt int, retryAfter time.Duration) time.Duration
+	mutationGuard  func(context.Context) error
 
 	placeMu     sync.Mutex
 	mu          sync.RWMutex
@@ -136,11 +144,17 @@ func NewCEXVenue(config CEXConfig) (*CEXVenue, error) {
 	if config.RetryDelay == nil {
 		config.RetryDelay = cexRetryDelay
 	}
+	if config.EnableDemoTrading && config.EnableLiveTrading {
+		return nil, &CEXError{
+			Kind: CEXErrorValidation, Exchange: exchange, Operation: "construct",
+			Message: "demo and live trading cannot be enabled on the same adapter",
+		}
+	}
 	if config.EnableDemoTrading {
 		if exchange != "okx" || !config.Demo {
 			return nil, &CEXError{
 				Kind: CEXErrorValidation, Exchange: exchange, Operation: "construct",
-				Message: "CEX order execution is allowed only for OKX Demo",
+				Message: "CEX demo order execution is allowed only for OKX Demo",
 			}
 		}
 		if strings.TrimSpace(config.APIKey) == "" || strings.TrimSpace(config.APISecret) == "" || strings.TrimSpace(config.Passphrase) == "" {
@@ -150,12 +164,27 @@ func NewCEXVenue(config CEXConfig) (*CEXVenue, error) {
 			}
 		}
 	}
+	if config.EnableLiveTrading {
+		if exchange != "okx" || config.Demo {
+			return nil, &CEXError{
+				Kind: CEXErrorValidation, Exchange: exchange, Operation: "construct",
+				Message: "CEX live order execution is allowed only for a non-demo OKX account",
+			}
+		}
+		if strings.TrimSpace(config.APIKey) == "" || strings.TrimSpace(config.APISecret) == "" || strings.TrimSpace(config.Passphrase) == "" {
+			return nil, &CEXError{
+				Kind: CEXErrorAuth, Exchange: exchange, Operation: "construct",
+				Message: "OKX live trading requires API key, secret, and passphrase",
+			}
+		}
+	}
 	return &CEXVenue{
 		id: exchange, baseURL: strings.TrimRight(config.BaseURL, "/"),
 		futuresBaseURL: strings.TrimRight(config.FuturesBaseURL, "/"), httpClient: config.HTTPClient,
 		apiKey: config.APIKey, apiSecret: config.APISecret, passphrase: config.Passphrase,
-		demo: config.Demo, demoTrading: config.EnableDemoTrading, quoteCurrency: config.QuoteCurrency,
-		slippageBPS: config.EstimatedSlippageBPS, now: config.Clock,
+		demo: config.Demo, demoTrading: config.EnableDemoTrading, liveTrading: config.EnableLiveTrading,
+		quoteCurrency: config.QuoteCurrency,
+		slippageBPS:   config.EstimatedSlippageBPS, now: config.Clock,
 		getRetries: getRetries, retryDelay: config.RetryDelay,
 		precision: make(map[string]MarketPrecision), instruments: make(map[string]okxInstrumentSpec),
 		fills: make(map[string]contracts.ExecutionResult), orderRefs: make(map[string]okxOrderRef),
@@ -181,11 +210,11 @@ func (venue *CEXVenue) ExecutionIdentity() ExecutionIdentity {
 	}
 	return ExecutionIdentity{
 		VenueID: venue.ID(), Kind: venue.Kind(), Environment: environment,
-		Writable: venue.DemoTradingEnabled(),
+		Writable: venue.TradingEnabled(),
 	}
 }
 func (venue *CEXVenue) Caps() Caps {
-	return Caps{Spot: true, Perp: true, NativeProtectiveOrders: true, ReadOnly: !venue.DemoTradingEnabled()}
+	return Caps{Spot: true, Perp: true, NativeProtectiveOrders: true, ReadOnly: !venue.TradingEnabled()}
 }
 
 // IsConfigured reports public/read-only availability. PrivateConfigured is the
@@ -208,9 +237,47 @@ func (venue *CEXVenue) DemoTradingEnabled() bool {
 	return venue != nil && venue.id == "okx" && venue.demo && venue.demoTrading && venue.PrivateConfigured()
 }
 
+// LiveTradingEnabled proves the adapter was explicitly constructed for real
+// OKX order mutation: non-demo environment, live flag, and complete
+// credentials. Binance adapters can never satisfy this.
+func (venue *CEXVenue) LiveTradingEnabled() bool {
+	return venue != nil && venue.id == "okx" && !venue.demo && venue.liveTrading && venue.PrivateConfigured()
+}
+
+// TradingEnabled is the single order-mutation gate shared by Place, Cancel,
+// order reconciliation, and protective order management.
+func (venue *CEXVenue) TradingEnabled() bool {
+	return venue.DemoTradingEnabled() || venue.LiveTradingEnabled()
+}
+
+// SetMutationGuard installs a fail-closed process ownership check. Live OKX
+// wires this to its PostgreSQL advisory lease so a second or disconnected
+// process cannot continue mutating the same account.
+func (venue *CEXVenue) SetMutationGuard(guard func(context.Context) error) {
+	venue.mu.Lock()
+	venue.mutationGuard = guard
+	venue.mu.Unlock()
+}
+
+func (venue *CEXVenue) checkMutationGuard(ctx context.Context) error {
+	venue.mu.RLock()
+	guard := venue.mutationGuard
+	venue.mu.RUnlock()
+	if guard == nil {
+		return nil
+	}
+	if err := guard(ctx); err != nil {
+		return &CEXError{
+			Kind: CEXErrorDisabled, Exchange: venue.id, Operation: "execution_lease",
+			Message: "execution ownership lease is unavailable", Err: err,
+		}
+	}
+	return nil
+}
+
 func (venue *CEXVenue) String() string {
-	return fmt.Sprintf("CEXVenue(id=%s,demo=%t,private_configured=%t,demo_trading=%t)",
-		venue.id, venue.demo, venue.PrivateConfigured(), venue.DemoTradingEnabled())
+	return fmt.Sprintf("CEXVenue(id=%s,demo=%t,private_configured=%t,demo_trading=%t,live_trading=%t)",
+		venue.id, venue.demo, venue.PrivateConfigured(), venue.DemoTradingEnabled(), venue.LiveTradingEnabled())
 }
 
 func (venue *CEXVenue) GoString() string { return venue.String() }
@@ -292,7 +359,7 @@ func (venue *CEXVenue) Place(ctx context.Context, intent contracts.OrderIntent) 
 	if ok {
 		return cloneExecution(existing), nil
 	}
-	if !venue.DemoTradingEnabled() {
+	if !venue.TradingEnabled() {
 		message := ErrCEXTradingDisabled.Error()
 		result := contracts.ExecutionResult{
 			ClientID: intent.ClientID, Status: contracts.OrderStatusRejected,
@@ -301,7 +368,10 @@ func (venue *CEXVenue) Place(ctx context.Context, intent contracts.OrderIntent) 
 		venue.rememberCEXResult(intent.ClientID, result, okxOrderRef{})
 		return cloneExecution(result), nil
 	}
-	result, reference, err := venue.placeOKXDemo(ctx, intent)
+	if err := venue.checkMutationGuard(ctx); err != nil {
+		return contracts.ExecutionResult{}, err
+	}
+	result, reference, err := venue.placeOKX(ctx, intent)
 	if err != nil {
 		return contracts.ExecutionResult{}, err
 	}
@@ -310,11 +380,14 @@ func (venue *CEXVenue) Place(ctx context.Context, intent contracts.OrderIntent) 
 }
 
 func (venue *CEXVenue) Cancel(ctx context.Context, clientID string) error {
-	if !venue.DemoTradingEnabled() {
+	if !venue.TradingEnabled() {
 		return &CEXError{
 			Kind: CEXErrorDisabled, Exchange: venue.id, Operation: "cancel",
 			Message: ErrCEXTradingDisabled.Error(), Err: ErrCEXTradingDisabled,
 		}
+	}
+	if err := venue.checkMutationGuard(ctx); err != nil {
+		return err
 	}
 	venue.mu.RLock()
 	reference, ok := venue.orderRefs[clientID]
@@ -322,7 +395,7 @@ func (venue *CEXVenue) Cancel(ctx context.Context, clientID string) error {
 	if !ok || reference.OrderID == "" || reference.InstrumentID == "" {
 		return &CEXError{Kind: CEXErrorValidation, Exchange: venue.id, Operation: "cancel", Message: "unknown client order id"}
 	}
-	return venue.cancelOKXDemo(ctx, reference)
+	return venue.cancelOKX(ctx, reference)
 }
 
 func (venue *CEXVenue) rememberCEXResult(clientID string, result contracts.ExecutionResult, reference okxOrderRef) {
@@ -452,7 +525,8 @@ func (venue *CEXVenue) newHTTPRequestAt(
 		request.Header.Set("X-MBX-APIKEY", venue.apiKey)
 	}
 	if private && venue.id == "okx" {
-		timestamp := venue.now().UTC().Format("2006-01-02T15:04:05.000Z")
+		requestTime := venue.now().UTC()
+		timestamp := requestTime.Format("2006-01-02T15:04:05.000Z")
 		requestPath := path
 		if encoded := query.Encode(); encoded != "" {
 			requestPath += "?" + encoded
@@ -462,6 +536,11 @@ func (venue *CEXVenue) newHTTPRequestAt(
 		request.Header.Set("OK-ACCESS-SIGN", hmacBase64(venue.apiSecret, prehash))
 		request.Header.Set("OK-ACCESS-TIMESTAMP", timestamp)
 		request.Header.Set("OK-ACCESS-PASSPHRASE", venue.passphrase)
+		if method == http.MethodPost && path == "/api/v5/trade/order" {
+			// OKX discards a delayed placement after this deadline instead of
+			// unexpectedly opening a position after the caller has timed out.
+			request.Header.Set("expTime", strconv.FormatInt(requestTime.Add(okxOrderExpiry).UnixMilli(), 10))
+		}
 		if venue.demo {
 			request.Header.Set("x-simulated-trading", "1")
 		}

@@ -51,7 +51,7 @@ func (s *Service) ExecuteReduceOnly(
 		}
 		return contracts.ExecutionResult{}, errors.Join(err, journalErr)
 	}
-	if err := s.recordExecution(ctx, eventPrefix, intent.ClientID, execution); err != nil {
+	if err := s.recordExecution(ctx, eventPrefix, intent, execution); err != nil {
 		s.freezeDurability("reduce-only result journal persistence failed")
 		return execution, fmt.Errorf("persist reduce-only execution result: %w", err)
 	}
@@ -76,7 +76,7 @@ func (s *Service) CompleteReduceOnly(ctx context.Context, eventPrefix, clientID 
 			continue
 		}
 		if source.Status != contracts.OrderStatusFilled && source.Status != contracts.OrderStatusProtectivePlaced &&
-			source.Status != contracts.OrderStatusProtectiveFailed {
+			source.Status != contracts.OrderStatusProtectiveFailed && source.Status != contracts.OrderStatusFlattening {
 			continue
 		}
 		sourceEventID := eventPrefix + ":source:" + source.ClientID + ":closed"

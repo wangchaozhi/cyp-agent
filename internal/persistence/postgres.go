@@ -2,10 +2,13 @@ package persistence
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -19,7 +22,14 @@ import (
 type PostgresRepository struct {
 	pool       *pgxpool.Pool
 	maxLessons int
+	leaseMu    sync.Mutex
+	leaseConn  *pgxpool.Conn
+	leaseKey   int64
+	leasePID   int32
+	leaseScope string
 }
+
+var ErrExecutionLeaseHeld = errors.New("execution account is already owned by another process")
 
 func NewPostgresRepository(ctx context.Context, dsn string, maxLessons int) (*PostgresRepository, error) {
 	if ctx == nil {
@@ -97,6 +107,79 @@ func (repository *PostgresRepository) ensureSchema(ctx context.Context) error {
 		if _, err := repository.pool.Exec(ctx, statement); err != nil {
 			return fmt.Errorf("initialize PostgreSQL repository schema: %w", err)
 		}
+	}
+	return nil
+}
+
+// AcquireExecutionLease takes a session-level PostgreSQL advisory lock and
+// retains that exact pool connection for the process lifetime. The hashed
+// scope avoids storing an API key or account identifier in pg_locks.
+func (repository *PostgresRepository) AcquireExecutionLease(ctx context.Context, scope string) error {
+	if repository == nil || repository.pool == nil {
+		return errors.New("PostgreSQL repository is closed")
+	}
+	if ctx == nil {
+		return errors.New("execution lease context is required")
+	}
+	scope = strings.TrimSpace(scope)
+	if scope == "" {
+		return errors.New("execution lease scope is required")
+	}
+	repository.leaseMu.Lock()
+	defer repository.leaseMu.Unlock()
+	if repository.leaseConn != nil {
+		if repository.leaseScope != scope {
+			return errors.New("repository already owns a different execution lease")
+		}
+		return repository.validateExecutionLeaseLocked(ctx)
+	}
+
+	digest := sha256.Sum256([]byte(scope))
+	key := int64(binary.BigEndian.Uint64(digest[:8]))
+	connection, err := repository.pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire PostgreSQL execution lease connection: %w", err)
+	}
+	var acquired bool
+	var backendPID int32
+	if err := connection.QueryRow(ctx,
+		`SELECT pg_try_advisory_lock($1), pg_backend_pid()`, key).Scan(&acquired, &backendPID); err != nil {
+		connection.Release()
+		return fmt.Errorf("acquire PostgreSQL execution lease: %w", err)
+	}
+	if !acquired {
+		connection.Release()
+		return ErrExecutionLeaseHeld
+	}
+	repository.leaseConn = connection
+	repository.leaseKey = key
+	repository.leasePID = backendPID
+	repository.leaseScope = scope
+	return nil
+}
+
+// ValidateExecutionLease proves the retained PostgreSQL session is still the
+// one that acquired the advisory lock. Any disconnect fails closed before an
+// exchange mutation can be attempted.
+func (repository *PostgresRepository) ValidateExecutionLease(ctx context.Context) error {
+	if repository == nil {
+		return errors.New("PostgreSQL repository is closed")
+	}
+	repository.leaseMu.Lock()
+	defer repository.leaseMu.Unlock()
+	return repository.validateExecutionLeaseLocked(ctx)
+}
+
+func (repository *PostgresRepository) validateExecutionLeaseLocked(ctx context.Context) error {
+	if repository.leaseConn == nil {
+		return errors.New("execution lease is not acquired")
+	}
+	var backendPID int32
+	if err := repository.leaseConn.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&backendPID); err != nil {
+		return fmt.Errorf("validate PostgreSQL execution lease: %w", err)
+	}
+	if backendPID != repository.leasePID {
+		return errors.New("PostgreSQL execution lease session changed")
 	}
 	return nil
 }
@@ -437,7 +520,21 @@ func (repository *PostgresRepository) GetLessons(
 }
 
 func (repository *PostgresRepository) Close() error {
-	if repository != nil && repository.pool != nil {
+	if repository == nil {
+		return nil
+	}
+	repository.leaseMu.Lock()
+	if repository.leaseConn != nil {
+		var unlocked bool
+		unlockContext, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		_ = repository.leaseConn.QueryRow(unlockContext,
+			`SELECT pg_advisory_unlock($1)`, repository.leaseKey).Scan(&unlocked)
+		cancel()
+		repository.leaseConn.Release()
+		repository.leaseConn = nil
+	}
+	repository.leaseMu.Unlock()
+	if repository.pool != nil {
 		repository.pool.Close()
 	}
 	return nil
@@ -451,3 +548,4 @@ func maxInt(left, right int) int {
 }
 
 var _ Repository = (*PostgresRepository)(nil)
+var _ ExecutionLeaser = (*PostgresRepository)(nil)

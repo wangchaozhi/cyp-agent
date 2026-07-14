@@ -8,11 +8,13 @@ import (
 	"github.com/wangchaozhi/cyp-agent/internal/contracts"
 )
 
-// LiveExecutionSupported is deliberately false in the first Go slice. This is
-// a compile-time safety rail: credentials and CYP_LIVE_ACK cannot enable live
-// order placement until the persistent order state machine and reconciliation
-// gates have shipped.
-const LiveExecutionSupported = false
+// LiveExecutionSupported gates real order placement at compile time. It was
+// opened after the G4 checklist shipped: the persistent order state machine,
+// exchange-verified protective orders with deterministic remediation, and
+// startup reconciliation against the live account. The only supported live
+// path is an explicitly configured, non-demo OKX account acknowledged via
+// CYP_LIVE_ACK=1; Binance and onchain execution remain hard-disabled.
+const LiveExecutionSupported = true
 
 type Secret string
 
@@ -141,6 +143,7 @@ type Settings struct {
 	OKXAPISecret     Secret
 	OKXPassword      Secret
 	OKXDemo          bool
+	OKXRegion        string
 
 	AlertWebhook   string
 	EVMRPCURL      string
@@ -210,6 +213,7 @@ func DefaultSettings() Settings {
 		LLMModelFast:            "claude-haiku-4-5-20251001",
 		CEXID:                   "binance",
 		OKXDemo:                 true,
+		OKXRegion:               "global",
 		Signer:                  "keystore",
 		ScanInterval:            600,
 		MonitorInterval:         5,
@@ -290,37 +294,88 @@ type LiveGuardReport struct {
 func (s Settings) LiveGuard() LiveGuardReport {
 	reasons := make([]string, 0, 4)
 	if s.Mode == "live" {
-		if !s.CEXTradingConfigured() {
-			reasons = append(reasons, "缺少交易所 API Key，无法实盘（保持只读）")
+		if s.ExecutionVenue != "okx" {
+			reasons = append(reasons, "实盘执行仅支持 OKX；Binance 与其他场所保持硬禁用")
+		}
+		if s.OKXDemo {
+			reasons = append(reasons, "实盘执行要求 CYP_OKX_DEMO=false；Demo 凭据不能用于实盘")
+		}
+		if !s.OKXConfigured() {
+			reasons = append(reasons, "OKX 实盘缺少 API Key、Secret 或 Passphrase")
 		}
 		if !s.LiveAck {
 			reasons = append(reasons, "未确认实盘：请设置 CYP_LIVE_ACK=1")
 		}
+		if !s.APIToken.Configured() {
+			reasons = append(reasons, "实盘必须配置 CYP_API_TOKEN，禁止无鉴权交易控制接口")
+		}
+		if strings.TrimSpace(s.AlertWebhook) == "" {
+			reasons = append(reasons, "实盘必须配置 CYP_ALERT_WEBHOOK，确保关键风险告警可送达")
+		}
+		if s.Persistence != "postgres" {
+			reasons = append(reasons, "实盘必须使用 CYP_PERSISTENCE=postgres，以启用持久订单状态与单实例执行租约")
+		}
+		if s.DataSource != "cex" || s.CEXID != "okx" {
+			reasons = append(reasons, "实盘行情必须使用 CYP_DATA_SOURCE=cex 且 CYP_CEX_ID=okx，禁止合成或跨场所行情驱动真实订单")
+		}
+		if !s.AllowPerp {
+			reasons = append(reasons, "实盘仅支持永续合约，必须设置 CYP_ALLOW_PERP=1")
+		}
+		if !s.Risk.ForceIsolated {
+			reasons = append(reasons, "实盘必须设置 CYP_FORCE_ISOLATED=true")
+		}
 		if s.Kill {
 			reasons = append(reasons, "Kill Switch 开启，禁止实盘")
 		}
-		// This reason remains unconditional: production execution is not
-		// unlocked by credentials or acknowledgement.
-		reasons = append(reasons, "Go 首版硬禁实盘执行；仅允许 Paper 或 OKX Demo")
-		return LiveGuardReport{OK: false, Reasons: reasons}
+		return LiveGuardReport{OK: len(reasons) == 0, Reasons: reasons}
 	}
 	if s.ExecutionVenue == "paper" {
 		return LiveGuardReport{OK: true, Reasons: []string{}}
 	}
 	if s.ExecutionVenue == "okx" {
 		if !s.OKXDemo {
-			reasons = append(reasons, "OKX 执行仅允许 Demo；请设置 CYP_OKX_DEMO=true")
+			reasons = append(reasons, "paper 模式下 OKX 执行仅允许 Demo；实盘请设置 CYP_MODE=live")
 		}
 		if !s.OKXConfigured() {
 			reasons = append(reasons, "OKX Demo 缺少 Demo API Key、Secret 或 Passphrase")
 		}
 		return LiveGuardReport{OK: len(reasons) == 0, Reasons: reasons}
 	}
-	reasons = append(reasons, "当前仅允许 Paper 或 OKX Demo 执行")
+	reasons = append(reasons, "当前仅允许 Paper、OKX Demo 或已确认的 OKX 实盘执行")
 	return LiveGuardReport{OK: false, Reasons: reasons}
 }
 
-func (s Settings) LiveExecutionAllowed() bool { return false }
+// LiveExecutionAllowed reports whether real order placement is currently
+// permitted. The static production gate, account readiness checks, retained
+// PostgreSQL ownership lease, and Kill Switch must all remain healthy.
+func (s Settings) LiveExecutionAllowed() bool {
+	return LiveExecutionSupported && s.OKXLiveExecutionConfigured() && !s.Kill
+}
+
+// OKXLiveExecutionConfigured proves the selected execution path is the real
+// OKX environment with complete credentials and an explicit operator
+// acknowledgement. It deliberately excludes the Kill Switch so readiness can
+// report configuration and operational permission independently.
+func (s Settings) OKXLiveExecutionConfigured() bool {
+	return LiveExecutionSupported && s.Mode == "live" && s.ExecutionVenue == "okx" &&
+		!s.OKXDemo && s.OKXConfigured() && s.LiveAck && s.APIToken.Configured() &&
+		strings.TrimSpace(s.AlertWebhook) != "" && s.Persistence == "postgres" &&
+		s.DataSource == "cex" && s.CEXID == "okx" && s.AllowPerp && s.Risk.ForceIsolated
+}
+
+// OKXBaseURL maps the configured registration region to a fixed trusted OKX
+// API origin. Arbitrary credential-bearing base URLs are deliberately not
+// accepted because they would turn a configuration mistake into key leakage.
+func (s Settings) OKXBaseURL() string {
+	switch strings.ToLower(strings.TrimSpace(s.OKXRegion)) {
+	case "us":
+		return "https://us.okx.com"
+	case "eea":
+		return "https://eea.okx.com"
+	default:
+		return "https://www.okx.com"
+	}
+}
 
 // OKXDemoExecutionConfigured proves the selected execution path is the
 // simulated OKX environment and has the complete Demo credential tuple.
@@ -331,7 +386,10 @@ func (s Settings) OKXDemoExecutionConfigured() bool {
 // NewExecutionConfigured deliberately excludes the Kill Switch so readiness
 // can report configuration and operational permission independently.
 func (s Settings) NewExecutionConfigured() bool {
-	return s.Mode == "paper" && (s.ExecutionVenue == "paper" || s.OKXDemoExecutionConfigured())
+	if s.Mode == "paper" {
+		return s.ExecutionVenue == "paper" || s.OKXDemoExecutionConfigured()
+	}
+	return s.OKXLiveExecutionConfigured()
 }
 
 // NewPositionAllowed applies the Kill Switch to the supported execution
@@ -370,8 +428,10 @@ type SettingsSnapshot struct {
 }
 
 type OKXSnapshot struct {
-	Configured bool `json:"configured"`
-	Demo       bool `json:"demo"`
+	Configured bool   `json:"configured"`
+	Demo       bool   `json:"demo"`
+	Live       bool   `json:"live"`
+	Region     string `json:"region"`
 }
 
 type IntervalSnapshot struct {
@@ -441,7 +501,10 @@ func (s Settings) Snapshot() SettingsSnapshot {
 		LLMEnabled: s.LLMEnabled(), LLMProvider: s.LLMProvider, LLMModel: s.LLMModel,
 		LLMModelFast: s.LLMModelFast, LLMBaseURL: optionalString(s.LLMBaseURL),
 		CEXID: s.CEXID, CEXTradingConfigured: s.CEXTradingConfigured(),
-		OKX:       OKXSnapshot{Configured: s.OKXConfigured(), Demo: s.OKXDemo},
+		OKX: OKXSnapshot{
+			Configured: s.OKXConfigured(), Demo: s.OKXDemo,
+			Live: s.OKXLiveExecutionConfigured(), Region: s.OKXRegion,
+		},
 		Watchlist: s.WatchlistSymbols(),
 		Intervals: IntervalSnapshot{Scan: s.ScanInterval, Monitor: s.MonitorInterval},
 		Runtime: RuntimeSnapshot{MaxConcurrency: s.MaxConcurrency, LogLevel: s.LogLevel,

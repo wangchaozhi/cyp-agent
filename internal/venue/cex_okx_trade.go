@@ -14,7 +14,10 @@ import (
 	"github.com/wangchaozhi/cyp-agent/internal/contracts"
 )
 
-const okxOrderPollAttempts = 12
+const (
+	okxOrderPollAttempts = 12
+	okxSettlementTimeout = 15 * time.Second
+)
 
 type okxInstrumentSpec struct {
 	InstrumentID          string
@@ -61,13 +64,14 @@ type okxOrderDetailEnvelope struct {
 	Data []okxOrderDetail `json:"data"`
 }
 
-// ReconcileOrder authoritatively looks up an OKX Demo order by the same
-// deterministic clOrdId used during submission. It never retries Place.
+// ReconcileOrder authoritatively looks up an OKX order (Demo or explicitly
+// enabled live) by the same deterministic clOrdId used during submission. It
+// never retries Place.
 func (venue *CEXVenue) ReconcileOrder(ctx context.Context, intent contracts.OrderIntent) (contracts.ExecutionResult, bool, error) {
 	if ctx == nil {
 		return contracts.ExecutionResult{}, false, errors.New("OKX order reconcile context is required")
 	}
-	if !venue.DemoTradingEnabled() || venue.id != "okx" {
+	if !venue.TradingEnabled() || venue.id != "okx" {
 		return contracts.ExecutionResult{}, false, ErrCEXTradingDisabled
 	}
 	instrumentID := okxInstrumentID(intent.Symbol)
@@ -86,7 +90,7 @@ func (venue *CEXVenue) ReconcileOrder(ctx context.Context, intent contracts.Orde
 	}
 	result, reference, found, err := venue.recoverOKXOrder(
 		ctx, intent, referencePrice, spec, instrumentID,
-		SanitizeOKXClientID(intent.ClientID, ""), okxProtectiveOrders(intent),
+		SanitizeOKXClientID(intent.ClientID, ""), okxProtectiveOrders(intent), false,
 	)
 	if err != nil || !found {
 		return contracts.ExecutionResult{}, found, err
@@ -97,7 +101,7 @@ func (venue *CEXVenue) ReconcileOrder(ctx context.Context, intent contracts.Orde
 
 var _ OrderReconciler = (*CEXVenue)(nil)
 
-func (venue *CEXVenue) placeOKXDemo(
+func (venue *CEXVenue) placeOKX(
 	ctx context.Context,
 	intent contracts.OrderIntent,
 ) (contracts.ExecutionResult, okxOrderRef, error) {
@@ -107,17 +111,17 @@ func (venue *CEXVenue) placeOKXDemo(
 		}
 	}
 	if !strings.EqualFold(strings.TrimSpace(intent.Venue), "okx") {
-		return rejectedOKXDemo(intent.ClientID, "订单场所与 OKX Demo 执行器不匹配"), okxOrderRef{}, nil
+		return rejectedOKX(intent.ClientID, "订单场所与 OKX 执行器不匹配"), okxOrderRef{}, nil
 	}
 	if intent.Instrument != contracts.InstrumentPerp ||
 		!strings.HasSuffix(strings.ToUpper(strings.TrimSpace(intent.Symbol)), ":USDT") {
-		return rejectedOKXDemo(intent.ClientID, "OKX Demo 当前仅开放 USDT 永续合约执行"), okxOrderRef{}, nil
+		return rejectedOKX(intent.ClientID, "OKX 当前仅开放 USDT 永续合约执行"), okxOrderRef{}, nil
 	}
 	if intent.Side != contracts.SideLong && intent.Side != contracts.SideShort {
-		return rejectedOKXDemo(intent.ClientID, "OKX Demo 下单方向必须为 long 或 short"), okxOrderRef{}, nil
+		return rejectedOKX(intent.ClientID, "OKX 下单方向必须为 long 或 short"), okxOrderRef{}, nil
 	}
 	if !intent.SizeQuote.IsPositive() {
-		return rejectedOKXDemo(intent.ClientID, "OKX Demo 下单金额必须大于 0"), okxOrderRef{}, nil
+		return rejectedOKX(intent.ClientID, "OKX 下单金额必须大于 0"), okxOrderRef{}, nil
 	}
 
 	instrumentID := okxInstrumentID(intent.Symbol)
@@ -137,7 +141,7 @@ func (venue *CEXVenue) placeOKXDemo(
 	}
 	orderSize, err := okxContractOrderSize(intent.SizeQuote, sizingPrice, spec)
 	if err != nil {
-		return rejectedOKXDemo(intent.ClientID, err.Error()), okxOrderRef{}, nil
+		return rejectedOKX(intent.ClientID, err.Error()), okxOrderRef{}, nil
 	}
 	positionMode, err := venue.okxPositionMode(ctx)
 	if err != nil {
@@ -173,7 +177,7 @@ func (venue *CEXVenue) placeOKXDemo(
 		}
 		price, err = QuantizeDown(price, spec.TickSize)
 		if err != nil || !price.IsPositive() {
-			return rejectedOKXDemo(intent.ClientID, "OKX Demo 限价无效"), okxOrderRef{}, nil
+			return rejectedOKX(intent.ClientID, "OKX 限价无效"), okxOrderRef{}, nil
 		}
 		orderType = "limit"
 		body["ordType"] = orderType
@@ -192,8 +196,10 @@ func (venue *CEXVenue) placeOKXDemo(
 		// before the response was lost. Reconcile by the deterministic clOrdId
 		// first so a transport timeout cannot become a duplicate order.
 		if isAmbiguousOKXSubmission(err) {
+			recoveryContext, cancelRecovery := context.WithTimeout(context.WithoutCancel(ctx), okxSettlementTimeout)
+			defer cancelRecovery()
 			result, reference, recovered, recoveryErr := venue.recoverOKXOrder(
-				ctx, intent, referencePrice, spec, instrumentID, clientOrderID, protective,
+				recoveryContext, intent, referencePrice, spec, instrumentID, clientOrderID, protective, true,
 			)
 			if recovered {
 				return result, reference, recoveryErr
@@ -207,29 +213,69 @@ func (venue *CEXVenue) placeOKXDemo(
 		return contracts.ExecutionResult{}, okxOrderRef{}, err
 	}
 	if len(accepted.Data) == 0 {
-		return contracts.ExecutionResult{}, okxOrderRef{}, &CEXError{
+		decodeErr := &CEXError{
 			Kind: CEXErrorDecode, Exchange: venue.id, Operation: "place", Message: "empty OKX order acknowledgement",
 		}
+		return venue.recoverMalformedOKXAcknowledgement(
+			ctx, intent, referencePrice, spec, instrumentID, clientOrderID, protective, decodeErr,
+		)
 	}
 	ack := accepted.Data[0]
 	if ack.Code != "" && ack.Code != "0" {
 		message := strings.TrimSpace(ack.Message)
 		if message == "" {
-			message = "OKX Demo 拒绝订单"
+			message = "OKX 拒绝订单"
 		}
-		return rejectedOKXDemo(intent.ClientID, message), okxOrderRef{}, nil
+		return rejectedOKX(intent.ClientID, message), okxOrderRef{}, nil
 	}
 	if ack.OrderID == "" {
-		return contracts.ExecutionResult{}, okxOrderRef{}, &CEXError{
+		decodeErr := &CEXError{
 			Kind: CEXErrorDecode, Exchange: venue.id, Operation: "place", Message: "OKX acknowledgement omitted ordId",
 		}
+		return venue.recoverMalformedOKXAcknowledgement(
+			ctx, intent, referencePrice, spec, instrumentID, clientOrderID, protective, decodeErr,
+		)
 	}
 	reference := okxOrderRef{InstrumentID: instrumentID, OrderID: ack.OrderID}
-	result, err := venue.waitOKXOrder(ctx, intent, referencePrice, spec, reference, protective)
+	// Once OKX acknowledged the order, caller cancellation must not stop
+	// authoritative settlement. Continue on a bounded detached context so the
+	// process either observes a terminal state or cancels and confirms it.
+	settlementContext, cancelSettlement := context.WithTimeout(context.WithoutCancel(ctx), okxSettlementTimeout)
+	defer cancelSettlement()
+	result, err := venue.waitOKXOrder(settlementContext, intent, referencePrice, spec, reference, protective, true)
 	if err != nil {
-		return contracts.ExecutionResult{}, reference, err
+		// The exchange already acknowledged this order. Any later read/cancel
+		// failure is an unknown remote state and must freeze execution until
+		// startup reconciliation proves the outcome.
+		return contracts.ExecutionResult{}, reference, errors.Join(ErrOrderStateUnknown, err)
 	}
 	return result, reference, nil
+}
+
+func (venue *CEXVenue) recoverMalformedOKXAcknowledgement(
+	ctx context.Context,
+	intent contracts.OrderIntent,
+	referencePrice contracts.Decimal,
+	spec okxInstrumentSpec,
+	instrumentID, clientOrderID string,
+	protective contracts.List[contracts.ProtectiveOrder],
+	acknowledgementErr error,
+) (contracts.ExecutionResult, okxOrderRef, error) {
+	recoveryContext, cancelRecovery := context.WithTimeout(context.WithoutCancel(ctx), okxSettlementTimeout)
+	defer cancelRecovery()
+	result, reference, recovered, recoveryErr := venue.recoverOKXOrder(
+		recoveryContext, intent, referencePrice, spec, instrumentID, clientOrderID, protective, true,
+	)
+	if recovered {
+		return result, reference, recoveryErr
+	}
+	if recoveryErr != nil {
+		return contracts.ExecutionResult{}, okxOrderRef{}, errors.Join(
+			ErrOrderStateUnknown, acknowledgementErr,
+			fmt.Errorf("reconcile malformed OKX acknowledgement: %w", recoveryErr),
+		)
+	}
+	return contracts.ExecutionResult{}, okxOrderRef{}, errors.Join(ErrOrderStateUnknown, acknowledgementErr)
 }
 
 func isAmbiguousOKXSubmission(err error) bool {
@@ -244,6 +290,7 @@ func (venue *CEXVenue) recoverOKXOrder(
 	spec okxInstrumentSpec,
 	instrumentID, clientOrderID string,
 	protective contracts.List[contracts.ProtectiveOrder],
+	cancelActive bool,
 ) (contracts.ExecutionResult, okxOrderRef, bool, error) {
 	var payload okxOrderDetailEnvelope
 	err := venue.doJSON(ctx, http.MethodGet, "/api/v5/trade/order", url.Values{
@@ -256,7 +303,7 @@ func (venue *CEXVenue) recoverOKXOrder(
 		return contracts.ExecutionResult{}, okxOrderRef{}, false, nil
 	}
 	reference := okxOrderRef{InstrumentID: instrumentID, OrderID: payload.Data[0].OrderID}
-	result, err := venue.waitOKXOrder(ctx, intent, referencePrice, spec, reference, protective)
+	result, err := venue.waitOKXOrder(ctx, intent, referencePrice, spec, reference, protective, cancelActive)
 	return result, reference, true, err
 }
 
@@ -355,7 +402,7 @@ func okxContractOrderSize(
 	spec okxInstrumentSpec,
 ) (contracts.Decimal, error) {
 	if !quoteSize.IsPositive() || !price.IsPositive() || !spec.ContractValue.IsPositive() {
-		return contracts.Zero(), fmt.Errorf("OKX Demo 无法从无效金额或价格换算合约张数")
+		return contracts.Zero(), fmt.Errorf("OKX 无法从无效金额或价格换算合约张数")
 	}
 	baseSize, err := quoteSize.Quo(price)
 	if err != nil {
@@ -370,7 +417,7 @@ func okxContractOrderSize(
 		return contracts.Zero(), err
 	}
 	if contractsSize.Cmp(spec.MinSize) < 0 {
-		return contracts.Zero(), fmt.Errorf("OKX Demo 下单张数 %s 低于最小值 %s", contractsSize.String(), spec.MinSize.String())
+		return contracts.Zero(), fmt.Errorf("OKX 下单张数 %s 低于最小值 %s", contractsSize.String(), spec.MinSize.String())
 	}
 	return contractsSize, nil
 }
@@ -476,19 +523,15 @@ func (venue *CEXVenue) waitOKXOrder(
 	spec okxInstrumentSpec,
 	reference okxOrderRef,
 	protective contracts.List[contracts.ProtectiveOrder],
+	cancelActive bool,
 ) (contracts.ExecutionResult, error) {
 	var last okxOrderDetail
 	for attempt := 0; attempt < okxOrderPollAttempts; attempt++ {
-		var payload okxOrderDetailEnvelope
-		if err := venue.doJSON(ctx, http.MethodGet, "/api/v5/trade/order", url.Values{
-			"instId": {reference.InstrumentID}, "ordId": {reference.OrderID},
-		}, true, &payload); err != nil {
+		detail, err := venue.loadOKXOrderDetail(ctx, reference)
+		if err != nil {
 			return contracts.ExecutionResult{}, err
 		}
-		if len(payload.Data) == 0 {
-			return contracts.ExecutionResult{}, &CEXError{Kind: CEXErrorDecode, Exchange: venue.id, Operation: "order", Message: "empty OKX order detail"}
-		}
-		last = payload.Data[0]
+		last = detail
 		if last.State == "filled" || last.State == "canceled" || last.State == "mmp_canceled" {
 			break
 		}
@@ -502,7 +545,76 @@ func (venue *CEXVenue) waitOKXOrder(
 			}
 		}
 	}
-	return okxExecutionResult(intent, referencePrice, spec, reference, protective, last)
+	if cancelActive && last.State != "filled" && last.State != "canceled" && last.State != "mmp_canceled" {
+		// A live/partially-filled order may otherwise remain on the book after
+		// this method returns. OKX cancel acknowledgement is not authoritative,
+		// therefore always poll the order again until a terminal state is seen.
+		cancelErr := venue.cancelOKX(ctx, reference)
+		terminal, confirmErr := venue.confirmOKXOrderTerminal(ctx, reference)
+		if confirmErr != nil {
+			return contracts.ExecutionResult{}, errors.Join(ErrOrderStateUnknown, cancelErr, confirmErr)
+		}
+		last = terminal
+		if last.State != "filled" && last.State != "canceled" && last.State != "mmp_canceled" {
+			return contracts.ExecutionResult{}, errors.Join(ErrOrderStateUnknown, cancelErr,
+				fmt.Errorf("OKX order remained %s after cancellation", last.State))
+		}
+	}
+	result, err := okxExecutionResult(intent, referencePrice, spec, reference, protective, last)
+	if err != nil {
+		return result, err
+	}
+	// The attached-algo template only proves what was requested. For a filled
+	// entry the exchange is the sole authority on whether protection actually
+	// exists, so replace the template with verified pending algos. A failed or
+	// empty verification deliberately reports no protection and lets the
+	// caller run deterministic remediation instead of trusting the request.
+	if result.Status == contracts.OrderStatusFilled && !intent.ReduceOnly && len(protective) > 0 {
+		verified, verifyErr := venue.ProtectiveOrders(ctx, intent.Symbol)
+		if verifyErr != nil {
+			result.ProtectiveOrders = contracts.List[contracts.ProtectiveOrder]{}
+		} else {
+			result.ProtectiveOrders = append(contracts.List[contracts.ProtectiveOrder]{}, verified...)
+		}
+	}
+	return result, nil
+}
+
+func (venue *CEXVenue) loadOKXOrderDetail(ctx context.Context, reference okxOrderRef) (okxOrderDetail, error) {
+	var payload okxOrderDetailEnvelope
+	if err := venue.doJSON(ctx, http.MethodGet, "/api/v5/trade/order", url.Values{
+		"instId": {reference.InstrumentID}, "ordId": {reference.OrderID},
+	}, true, &payload); err != nil {
+		return okxOrderDetail{}, err
+	}
+	if len(payload.Data) == 0 {
+		return okxOrderDetail{}, &CEXError{Kind: CEXErrorDecode, Exchange: venue.id, Operation: "order", Message: "empty OKX order detail"}
+	}
+	return payload.Data[0], nil
+}
+
+func (venue *CEXVenue) confirmOKXOrderTerminal(ctx context.Context, reference okxOrderRef) (okxOrderDetail, error) {
+	var last okxOrderDetail
+	for attempt := 0; attempt < okxOrderPollAttempts; attempt++ {
+		detail, err := venue.loadOKXOrderDetail(ctx, reference)
+		if err != nil {
+			return okxOrderDetail{}, err
+		}
+		last = detail
+		if last.State == "filled" || last.State == "canceled" || last.State == "mmp_canceled" {
+			return last, nil
+		}
+		if attempt+1 < okxOrderPollAttempts {
+			timer := time.NewTimer(100 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return okxOrderDetail{}, ctx.Err()
+			case <-timer.C:
+			}
+		}
+	}
+	return last, nil
 }
 
 func okxExecutionResult(
@@ -552,12 +664,17 @@ func okxExecutionResult(
 		result.ProtectiveOrders = append(result.ProtectiveOrders, protective...)
 	}
 	if status == contracts.OrderStatusCanceled {
-		result.Error = stringPointer("OKX Demo 订单在完全成交前被取消")
+		if result.FilledBase.IsPositive() {
+			result.Status = contracts.OrderStatusPartiallyFilled
+			result.Error = stringPointer("OKX 订单部分成交后，未成交余量已撤销并确认")
+		} else {
+			result.Error = stringPointer("OKX 订单在成交前被取消")
+		}
 	}
 	return result, nil
 }
 
-func (venue *CEXVenue) cancelOKXDemo(ctx context.Context, reference okxOrderRef) error {
+func (venue *CEXVenue) cancelOKX(ctx context.Context, reference okxOrderRef) error {
 	var payload okxOrderAckEnvelope
 	if err := venue.okxPrivatePOST(ctx, "/api/v5/trade/cancel-order", map[string]any{
 		"instId": reference.InstrumentID, "ordId": reference.OrderID,
@@ -570,11 +687,11 @@ func (venue *CEXVenue) cancelOKXDemo(ctx context.Context, reference okxOrderRef)
 	return nil
 }
 
-// ProtectiveOrders reads untriggered conditional orders from the OKX Demo
-// account so restart reconciliation can fail closed when a position lacks a
-// stop loss.
+// ProtectiveOrders reads untriggered conditional orders from the OKX account
+// (Demo or explicitly enabled live) so restart reconciliation can fail closed
+// when a position lacks a stop loss.
 func (venue *CEXVenue) ProtectiveOrders(ctx context.Context, symbol string) ([]contracts.ProtectiveOrder, error) {
-	if !venue.DemoTradingEnabled() {
+	if !venue.TradingEnabled() {
 		return nil, &CEXError{Kind: CEXErrorDisabled, Exchange: venue.id, Operation: "protective_orders", Message: ErrCEXTradingDisabled.Error(), Err: ErrCEXTradingDisabled}
 	}
 	orders := make([]contracts.ProtectiveOrder, 0, 4)
@@ -585,9 +702,16 @@ func (venue *CEXVenue) ProtectiveOrders(ctx context.Context, symbol string) ([]c
 		var payload struct {
 			Code string `json:"code"`
 			Data []struct {
-				AlgoID     string `json:"algoId"`
-				StopLoss   any    `json:"slTriggerPx"`
-				TakeProfit any    `json:"tpTriggerPx"`
+				AlgoID        string `json:"algoId"`
+				AlgoClientID  string `json:"algoClOrdId"`
+				InstrumentID  string `json:"instId"`
+				Side          string `json:"side"`
+				PositionSide  string `json:"posSide"`
+				ReduceOnly    any    `json:"reduceOnly"`
+				CloseFraction any    `json:"closeFraction"`
+				Size          any    `json:"sz"`
+				StopLoss      any    `json:"slTriggerPx"`
+				TakeProfit    any    `json:"tpTriggerPx"`
 			} `json:"data"`
 		}
 		if err := venue.doJSON(ctx, http.MethodGet, "/api/v5/trade/orders-algo-pending", url.Values{
@@ -595,8 +719,17 @@ func (venue *CEXVenue) ProtectiveOrders(ctx context.Context, symbol string) ([]c
 		}, true, &payload); err != nil {
 			return nil, err
 		}
+		spec, specErr := venue.okxInstrument(ctx, okxInstrumentID(symbol))
+		if specErr != nil {
+			return nil, specErr
+		}
 		for _, row := range payload.Data {
-			for _, order := range protectiveOrdersFromOKXAlgo(row.AlgoID, row.StopLoss, row.TakeProfit) {
+			metadata := okxProtectiveMetadata{
+				AlgoID: row.AlgoID, ClientID: row.AlgoClientID, Side: row.Side,
+				PositionSide: row.PositionSide, ReduceOnly: row.ReduceOnly,
+				CloseFraction: row.CloseFraction, Size: row.Size,
+			}
+			for _, order := range protectiveOrdersFromOKXAlgo(metadata, row.StopLoss, row.TakeProfit, spec) {
 				key := order.Kind + "\x00" + order.OrderID + "\x00" + order.TriggerPrice.String()
 				if _, exists := seen[key]; exists {
 					continue
@@ -609,10 +742,96 @@ func (venue *CEXVenue) ProtectiveOrders(ctx context.Context, symbol string) ([]c
 	return orders, nil
 }
 
+// PlaceProtectiveOrders submits a standalone reduce-only TP/SL algo for an
+// existing position after attached protection failed or went missing. It is
+// the deterministic remediation path; callers must re-verify the result with
+// ProtectiveOrders because acknowledgement alone does not prove protection.
+func (venue *CEXVenue) PlaceProtectiveOrders(
+	ctx context.Context,
+	clientID string,
+	symbol string,
+	side contracts.Side,
+	marginMode contracts.MarginMode,
+	stopLoss *contracts.Decimal,
+	takeProfit *contracts.Decimal,
+) error {
+	if ctx == nil {
+		return &CEXError{Kind: CEXErrorValidation, Exchange: venue.id, Operation: "place_protective", Message: "context is required"}
+	}
+	if !venue.TradingEnabled() || venue.id != "okx" {
+		return &CEXError{Kind: CEXErrorDisabled, Exchange: venue.id, Operation: "place_protective", Message: ErrCEXTradingDisabled.Error(), Err: ErrCEXTradingDisabled}
+	}
+	if err := venue.checkMutationGuard(ctx); err != nil {
+		return err
+	}
+	if strings.TrimSpace(clientID) == "" {
+		return &CEXError{Kind: CEXErrorValidation, Exchange: venue.id, Operation: "place_protective", Message: "client id is required"}
+	}
+	hasStop := stopLoss != nil && stopLoss.IsPositive()
+	hasTake := takeProfit != nil && takeProfit.IsPositive()
+	if !hasStop && !hasTake {
+		return &CEXError{Kind: CEXErrorValidation, Exchange: venue.id, Operation: "place_protective", Message: "protective remediation requires a stop loss or take profit price"}
+	}
+	if side != contracts.SideLong && side != contracts.SideShort {
+		return &CEXError{Kind: CEXErrorValidation, Exchange: venue.id, Operation: "place_protective", Message: "protective remediation requires a long or short position"}
+	}
+	instrumentID := okxInstrumentID(symbol)
+	positionMode, err := venue.okxPositionMode(ctx)
+	if err != nil {
+		return err
+	}
+	if positionMode != "net_mode" {
+		return &CEXError{
+			Kind: CEXErrorUnsupported, Exchange: venue.id, Operation: "place_protective",
+			Message: "full-position protective remediation requires OKX net_mode",
+		}
+	}
+	// The algo closes the position, so its order side is the opposite of the
+	// position side. closeFraction=1 avoids re-deriving contract sizes and can
+	// never grow the position.
+	orderSide := "sell"
+	if side == contracts.SideShort {
+		orderSide = "buy"
+	}
+	orderType := "conditional"
+	if hasStop && hasTake {
+		orderType = "oco"
+	}
+	body := map[string]any{
+		"instId": instrumentID, "tdMode": string(marginMode), "side": orderSide,
+		"ordType": orderType, "closeFraction": "1", "reduceOnly": true,
+		"algoClOrdId": SanitizeOKXClientID(clientID, "protect"),
+	}
+	if hasStop {
+		body["slTriggerPx"] = stopLoss.String()
+		body["slOrdPx"] = "-1"
+		body["slTriggerPxType"] = "mark"
+	}
+	if hasTake {
+		body["tpTriggerPx"] = takeProfit.String()
+		body["tpOrdPx"] = "-1"
+		body["tpTriggerPxType"] = "mark"
+	}
+	var payload okxOrderAckEnvelope
+	if err := venue.okxPrivatePOST(ctx, "/api/v5/trade/order-algo", body, &payload); err != nil {
+		return err
+	}
+	if len(payload.Data) == 0 {
+		return &CEXError{Kind: CEXErrorDecode, Exchange: venue.id, Operation: "place_protective", Message: "empty OKX algo acknowledgement"}
+	}
+	if ack := payload.Data[0]; ack.Code != "" && ack.Code != "0" {
+		return &CEXError{Kind: CEXErrorUpstream, Exchange: venue.id, Operation: "place_protective", Code: ack.Code, Message: ack.Message}
+	}
+	return nil
+}
+
 // CancelProtectiveOrders removes pending TP/SL algos only after the caller has
 // verified that the old position is flat. This prevents stale reduce-only
 // orders from attaching semantically to a newly opened reverse position.
 func (venue *CEXVenue) CancelProtectiveOrders(ctx context.Context, symbol string) error {
+	if err := venue.checkMutationGuard(ctx); err != nil {
+		return err
+	}
 	orders, err := venue.ProtectiveOrders(ctx, symbol)
 	if err != nil {
 		return err
@@ -656,19 +875,69 @@ func (venue *CEXVenue) CancelProtectiveOrders(ctx context.Context, symbol string
 	return nil
 }
 
-func protectiveOrdersFromOKXAlgo(algoID string, stopLoss, takeProfit any) []contracts.ProtectiveOrder {
+type okxProtectiveMetadata struct {
+	AlgoID        string
+	ClientID      string
+	Side          string
+	PositionSide  string
+	ReduceOnly    any
+	CloseFraction any
+	Size          any
+}
+
+func protectiveOrdersFromOKXAlgo(
+	metadata okxProtectiveMetadata,
+	stopLoss, takeProfit any,
+	spec okxInstrumentSpec,
+) []contracts.ProtectiveOrder {
 	orders := make([]contracts.ProtectiveOrder, 0, 2)
+	positionSide := contracts.Side(strings.ToLower(strings.TrimSpace(metadata.PositionSide)))
+	if positionSide != contracts.SideLong && positionSide != contracts.SideShort {
+		switch strings.ToLower(strings.TrimSpace(metadata.Side)) {
+		case "sell":
+			positionSide = contracts.SideLong
+		case "buy":
+			positionSide = contracts.SideShort
+		default:
+			positionSide = contracts.SideFlat
+		}
+	}
+	reduceOnly := boolFromAny(metadata.ReduceOnly)
+	fullClose := false
+	if fraction, err := decimalFromAny(metadata.CloseFraction); err == nil &&
+		fraction.Cmp(contracts.NewDecimalFromInt64(1)) == 0 {
+		fullClose = true
+	}
+	sizeBase := contracts.Zero()
+	if size, err := decimalFromAny(metadata.Size); err == nil && size.IsPositive() {
+		sizeBase = size.Mul(spec.ContractValue)
+	}
+	makeOrder := func(kind string, price contracts.Decimal) contracts.ProtectiveOrder {
+		return contracts.ProtectiveOrder{
+			Kind: kind, OrderID: metadata.AlgoID, ClientID: metadata.ClientID,
+			PositionSide: positionSide, TriggerPrice: price, SizeBase: sizeBase,
+			ReduceOnly: reduceOnly, FullClose: fullClose,
+		}
+	}
 	if price, err := decimalFromAny(stopLoss); err == nil && price.IsPositive() {
-		orders = append(orders, contracts.ProtectiveOrder{
-			Kind: "stop_loss", OrderID: algoID, TriggerPrice: price, ReduceOnly: true,
-		})
+		orders = append(orders, makeOrder("stop_loss", price))
 	}
 	if price, err := decimalFromAny(takeProfit); err == nil && price.IsPositive() {
-		orders = append(orders, contracts.ProtectiveOrder{
-			Kind: "take_profit", OrderID: algoID, TriggerPrice: price, ReduceOnly: true,
-		})
+		orders = append(orders, makeOrder("take_profit", price))
 	}
 	return orders
+}
+
+func boolFromAny(value any) bool {
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	case string:
+		parsed, err := strconv.ParseBool(strings.TrimSpace(typed))
+		return err == nil && parsed
+	default:
+		return strings.EqualFold(strings.TrimSpace(fmt.Sprint(value)), "true")
+	}
 }
 
 func (venue *CEXVenue) okxPrivatePOST(ctx context.Context, path string, body any, target any) error {
@@ -679,7 +948,7 @@ func (venue *CEXVenue) okxPrivatePOST(ctx context.Context, path string, body any
 	return venue.doJSONBody(ctx, http.MethodPost, path, nil, encoded, true, target)
 }
 
-func rejectedOKXDemo(clientID, message string) contracts.ExecutionResult {
+func rejectedOKX(clientID, message string) contracts.ExecutionResult {
 	return contracts.ExecutionResult{
 		ClientID: clientID, Status: contracts.OrderStatusRejected,
 		FilledBase: contracts.Zero(), FeeQuote: contracts.Zero(),

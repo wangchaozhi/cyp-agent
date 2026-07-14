@@ -67,7 +67,15 @@ func (paperModePolicy) RiskStateScope(target ExecutionTarget) string {
 
 func (liveModePolicy) Name() string { return "live" }
 
+// ValidateExecution for live mode accepts exactly one target: an OKX CEX
+// adapter that has proven live-writable capability. Binance, onchain, and any
+// non-writable adapter remain rejected.
 func (liveModePolicy) ValidateExecution(target ExecutionTarget) error {
+	okxLive := target.Environment == venue.EnvironmentLive &&
+		target.Kind == venue.KindCEX && target.VenueID == "okx" && target.Writable
+	if okxLive {
+		return nil
+	}
 	return unsupportedExecution(target)
 }
 
@@ -104,6 +112,8 @@ func (state RuntimeState) executionTarget() ExecutionTarget {
 		target.Writable = true
 	} else if state.ExecutionDemo {
 		target.Environment = venue.EnvironmentDemo
+		target.Writable = true
+	} else if state.ExecutionLive {
 		target.Writable = true
 	}
 	return target

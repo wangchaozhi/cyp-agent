@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestDefaultSettingsArePaperAndLiveExecutionIsCompileTimeDisabled(t *testing.T) {
+func TestDefaultSettingsArePaperAndNeverEnableLive(t *testing.T) {
 	t.Parallel()
 	settings := DefaultSettings()
 	if settings.Mode != "paper" || settings.ExecutionVenue != "paper" {
@@ -17,8 +17,8 @@ func TestDefaultSettingsArePaperAndLiveExecutionIsCompileTimeDisabled(t *testing
 	if !settings.LiveGuard().OK || !settings.NewPaperPositionAllowed() {
 		t.Fatal("default paper settings should permit a new paper position")
 	}
-	if LiveExecutionSupported || settings.LiveExecutionAllowed() {
-		t.Fatal("first Go slice must never enable live execution")
+	if settings.LiveExecutionAllowed() || settings.OKXLiveExecutionConfigured() {
+		t.Fatal("default settings must never enable live execution")
 	}
 	if settings.ScanInterval != 600 {
 		t.Fatalf("default scan interval=%d, want 600", settings.ScanInterval)
@@ -33,16 +33,77 @@ func TestDefaultSettingsArePaperAndLiveExecutionIsCompileTimeDisabled(t *testing
 		t.Fatalf("token usage defaults: runtime=%+v budget=%+v", settings.Snapshot().Runtime, settings.Budget)
 	}
 
+	// Binance credentials plus acknowledgement must not unlock live
+	// execution: the only supported live path is OKX.
 	settings.Mode = "live"
 	settings.LiveAck = true
 	settings.BinanceAPIKey = "key"
 	settings.BinanceAPISecret = "secret"
 	report := settings.LiveGuard()
 	if report.OK || settings.LiveExecutionAllowed() {
-		t.Fatal("credentials and acknowledgement must not unlock first-release live execution")
+		t.Fatal("Binance credentials and acknowledgement must not unlock live execution")
 	}
-	if !strings.Contains(strings.Join(report.Reasons, " "), "首版硬禁实盘") {
-		t.Fatalf("hard-disable reason missing: %v", report.Reasons)
+	if !strings.Contains(strings.Join(report.Reasons, " "), "仅支持 OKX") {
+		t.Fatalf("OKX-only live reason missing: %v", report.Reasons)
+	}
+}
+
+func TestOKXLiveExecutionRequiresAllStaticSafetyGates(t *testing.T) {
+	t.Parallel()
+	configured := func() Settings {
+		settings := DefaultSettings()
+		settings.Mode = "live"
+		settings.ExecutionVenue = "okx"
+		settings.OKXDemo = false
+		settings.OKXAPIKey = "live-key"
+		settings.OKXAPISecret = "live-secret"
+		settings.OKXPassword = "live-passphrase"
+		settings.LiveAck = true
+		settings.APIToken = "control-token"
+		settings.AlertWebhook = "https://alerts.example.test/cyp"
+		settings.Persistence = "postgres"
+		settings.DataSource = "cex"
+		settings.CEXID = "okx"
+		settings.AllowPerp = true
+		settings.Kill = false
+		return settings
+	}
+	full := configured()
+	if !full.OKXLiveExecutionConfigured() || !full.LiveGuard().OK ||
+		!full.LiveExecutionAllowed() || !full.NewPositionAllowed() {
+		t.Fatalf("fully configured OKX live should be executable: %#v", full.LiveGuard())
+	}
+	breakers := map[string]func(*Settings){
+		"mode":        func(s *Settings) { s.Mode = "paper" },
+		"venue":       func(s *Settings) { s.ExecutionVenue = "binance" },
+		"demo":        func(s *Settings) { s.OKXDemo = true },
+		"creds":       func(s *Settings) { s.OKXPassword = "" },
+		"ack":         func(s *Settings) { s.LiveAck = false },
+		"api token":   func(s *Settings) { s.APIToken = "" },
+		"alert":       func(s *Settings) { s.AlertWebhook = "" },
+		"persistence": func(s *Settings) { s.Persistence = "file" },
+		"data":        func(s *Settings) { s.DataSource = "synthetic" },
+		"data venue":  func(s *Settings) { s.CEXID = "binance" },
+		"perp":        func(s *Settings) { s.AllowPerp = false },
+		"margin mode": func(s *Settings) { s.Risk.ForceIsolated = false },
+	}
+	for name, mutate := range breakers {
+		settings := configured()
+		mutate(&settings)
+		if settings.Mode == "live" && (settings.OKXLiveExecutionConfigured() || settings.LiveGuard().OK) {
+			t.Fatalf("%s: missing condition unexpectedly allowed live execution", name)
+		}
+		if settings.LiveExecutionAllowed() && settings.Mode == "live" {
+			t.Fatalf("%s: LiveExecutionAllowed bypassed the guard", name)
+		}
+	}
+	killed := configured()
+	killed.Kill = true
+	if killed.LiveExecutionAllowed() || killed.LiveGuard().OK || killed.NewPositionAllowed() {
+		t.Fatal("kill switch must block live execution")
+	}
+	if !killed.OKXLiveExecutionConfigured() {
+		t.Fatal("kill switch should not report the configuration itself as missing")
 	}
 }
 
@@ -59,12 +120,28 @@ func TestOnlyConfiguredOKXDemoUnlocksCEXExecution(t *testing.T) {
 	}
 	settings.OKXDemo = false
 	if settings.NewPositionAllowed() || settings.LiveGuard().OK {
-		t.Fatal("production OKX must stay hard-disabled")
+		t.Fatal("production OKX must remain disabled without the live safety gates")
 	}
 	settings.OKXDemo = true
 	settings.Mode = "live"
 	if settings.NewPositionAllowed() || settings.LiveGuard().OK || settings.LiveExecutionAllowed() {
-		t.Fatal("live mode must stay hard-disabled even with Demo credentials")
+		t.Fatal("live mode must reject Demo credentials")
+	}
+}
+
+func TestOKXRegionUsesOnlyTrustedOfficialOrigins(t *testing.T) {
+	t.Parallel()
+	tests := map[string]string{
+		"global": "https://www.okx.com",
+		"us":     "https://us.okx.com",
+		"eea":    "https://eea.okx.com",
+	}
+	for region, expected := range tests {
+		settings := DefaultSettings()
+		settings.OKXRegion = region
+		if actual := settings.OKXBaseURL(); actual != expected {
+			t.Fatalf("region %s base URL = %s, want %s", region, actual, expected)
+		}
 	}
 }
 
@@ -146,6 +223,7 @@ func TestLoadRejectsInvalidValuesWithoutFallback(t *testing.T) {
 	t.Parallel()
 	tests := map[string]string{
 		"CYP_MODE":                  "production",
+		"CYP_OKX_REGION":            "custom-host",
 		"CYP_KILL":                  "sometimes",
 		"CYP_MAX_RISK_PER_TRADE":    "NaN",
 		"CYP_MAX_CONCURRENCY":       "0",

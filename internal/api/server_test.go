@@ -175,22 +175,20 @@ func TestHealthSettingsKillAndDashboardShapes(t *testing.T) {
 		t.Fatalf("automation settings response = %d %s", response.StatusCode, body)
 	}
 
-	response, body = requestJSON(t, client, http.MethodPost, server.URL+"/api/settings", map[string]any{
-		"mode": "live", "automation": map[string]any{"enabled": true},
-	})
-	if response.StatusCode != http.StatusUnprocessableEntity || !strings.Contains(string(body), "automation") {
-		t.Fatalf("live mode must reject explicitly enabled automation: %d %s", response.StatusCode, body)
-	}
+	// Live execution wiring is validated at startup, so runtime mode switches
+	// must be rejected and require a restart with the new CYP_MODE.
 	response, body = requestJSON(t, client, http.MethodPost, server.URL+"/api/settings", map[string]any{"mode": "live"})
-	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), `"mode":"live"`) || !strings.Contains(string(body), `"live_guard":{"ok":false`) {
-		t.Fatalf("mode switch response = %d %s", response.StatusCode, body)
-	}
-	if !strings.Contains(string(body), `"automation":{"enabled":false`) {
-		t.Fatalf("live mode did not disable inherited automation: %d %s", response.StatusCode, body)
+	if response.StatusCode != http.StatusUnprocessableEntity || !strings.Contains(string(body), "重启") {
+		t.Fatalf("runtime mode switch must be rejected: %d %s", response.StatusCode, body)
 	}
 	response, body = requestJSON(t, client, http.MethodGet, server.URL+"/api/health", nil)
-	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), `"mode":"live"`) {
-		t.Fatalf("health did not reflect mode switch: %d %s", response.StatusCode, body)
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), `"mode":"paper"`) {
+		t.Fatalf("health should keep the startup mode: %d %s", response.StatusCode, body)
+	}
+	// Re-sending the current mode remains a harmless no-op.
+	response, body = requestJSON(t, client, http.MethodPost, server.URL+"/api/settings", map[string]any{"mode": "paper"})
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), `"mode":"paper"`) {
+		t.Fatalf("same-mode update response = %d %s", response.StatusCode, body)
 	}
 
 	response, body = requestJSON(t, client, http.MethodPost, server.URL+"/api/settings", map[string]any{"llm_provider": "invalid"})

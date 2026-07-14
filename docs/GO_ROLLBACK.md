@@ -1,3 +1,64 @@
+# 回滚手册
+
+本文分两部分：**Go 服务自身的版本回滚与灰度回滚**（实盘/Demo 运行事故的主路径），以及历史 Python 归档分支的应急审计用法。
+
+## Go 服务版本回滚与灰度
+
+适用于新版本上线后行为异常（下单/对账/风控错误、保护单缺口、频繁冻结）需要退回上一已知良好版本，或实盘灰度需要退回 Demo/Paper 的场景。
+
+### 原则
+
+- **双人确认**：回滚由一人执行、另一人核对目标版本与配置差异后才允许操作，全程记录值班日志；
+- **先 Kill 后回滚**：任何回滚前先开启 Kill Switch，阻断新开仓；持仓是否清掉由值班判断——怀疑执行链路本身出错时先 `cyp flatten -yes` 清仓再回滚；
+- **状态兼容优先**：优先回滚二进制、保持状态不动；只有状态被新版本写坏时才恢复状态备份；
+- **回滚后必须重新对账**：启动对账通过、`/api/ready` 全绿之前不得关闭 Kill Switch。
+
+### 版本回滚步骤
+
+```powershell
+$base = "http://127.0.0.1:8000"
+
+# 1. 开 Kill Switch，确认无在途审批/订单
+Invoke-RestMethod -Method Post -Uri "$base/api/killswitch" -ContentType "application/json" -Body '{"on":true}'
+Invoke-RestMethod "$base/api/pending"
+Invoke-RestMethod "$base/api/orders?unresolved=true"
+
+# 2.（视情况）应急清仓 + 导出审计快照留证
+go run ./cmd/cyp flatten -base $base -yes
+Invoke-WebRequest "$base/api/audit/export" -OutFile "cyp-audit-before-rollback.json"
+
+# 3. 停止服务（Ctrl+C 或按端口停止）
+
+# 4. 回滚代码到上一已知良好 tag 并重建
+git fetch --tags
+git checkout v<上一良好版本>
+go build -trimpath -o ./bin/cyp-server.exe ./cmd/cyp-server
+go build -trimpath -o ./bin/cyp.exe ./cmd/cyp
+
+# 5. 启动并验证：启动对账必须通过
+./bin/cyp-server.exe -host 127.0.0.1 -port 8000
+Invoke-RestMethod "$base/api/ready"
+
+# 6. 双人核对 ready/positions/风险账本后，才关闭 Kill Switch
+Invoke-RestMethod -Method Post -Uri "$base/api/killswitch" -ContentType "application/json" -Body '{"on":false}'
+```
+
+Docker 部署将第 3–5 步替换为固定镜像 tag 后 `docker compose up -d --build backend`，禁止在事故中使用 `latest`。
+
+### 状态文件与数据库恢复
+
+只在状态本身损坏（JSON 解析失败、账本与交易所严重不符且无法通过对账修复）时执行：
+
+- **文件模式**：停止服务后备份现场（`Copy-Item data/cyp-state.json data/cyp-state.broken.json`），再用最近一次已知良好备份或同目录 `.bak` 覆盖恢复；绝不在服务运行时手工编辑状态文件；
+- **PostgreSQL 模式**：停止服务后按数据库备份策略恢复（`pg_restore`/时间点恢复），恢复目标时间必须早于故障引入时间；
+- 恢复后的首次启动对账会把持久账本与交易所实际持仓双向核对；出现差异时保持冻结并人工核对 `cyp-audit-before-rollback.json` 与交易所流水，禁止为了“让它跑起来”而跳过差异。
+
+### 实盘小额灰度与降级
+
+- 实盘启用初期只放可承受全损的小额资金，收紧 `CYP_AUTO_MAX_QUOTE` 与 `CYP_MAX_RISK_PER_TRADE`，建议关闭数学自动审批；
+- 灰度期出现任何未解释的冻结、保护单缺口或对账差异：先 Kill、清仓，再把配置降回 Demo（`CYP_MODE=paper` + `CYP_OKX_DEMO=true`）或 Paper，重启复现排查；
+- 降级与恢复实盘都必须重新走 [GO_OPERATIONS.md](GO_OPERATIONS.md) 的“上线前检查表”，包括回归脚本与双人确认。
+
 # 历史归档使用与回退
 
 主分支没有旧后端切换开关，也不包含旧运行时依赖。需要审计或应急验证旧实现时，只能从历史归档分支 `archive/python-backend-20260710` 创建**独立 Git worktree**。不要切换当前 `main`，不要把归档文件复制回主工作树。

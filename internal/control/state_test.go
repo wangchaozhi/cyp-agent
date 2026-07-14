@@ -65,25 +65,27 @@ func TestInvalidProviderDoesNotPartiallyMutate(t *testing.T) {
 	}
 }
 
-func TestRuntimeModeUpdateKeepsLiveExecutionReadOnly(t *testing.T) {
+func TestRuntimeModeSwitchRequiresRestart(t *testing.T) {
 	state := New(config.DefaultSettings())
 	live := " LIVE "
-	if err := state.UpdateSettings(contracts.SettingsUpdateRequest{Mode: &live}); err != nil {
-		t.Fatalf("UpdateSettings() error = %v", err)
+	if err := state.UpdateSettings(contracts.SettingsUpdateRequest{Mode: &live}); !errors.Is(err, ErrRuntimeLiveModeSwitch) {
+		t.Fatalf("mode switch error = %v, want ErrRuntimeLiveModeSwitch", err)
 	}
-	settings := state.Settings()
-	if settings.Mode != "live" {
-		t.Fatalf("mode = %q, want live", settings.Mode)
+	if state.Settings().Mode != "paper" {
+		t.Fatalf("mode = %q, want paper (unchanged)", state.Settings().Mode)
 	}
-	if settings.LiveGuard().OK || settings.LiveExecutionAllowed() {
-		t.Fatal("runtime mode update bypassed the live execution safety rail")
+
+	// Re-sending the current mode is a harmless no-op for idempotent clients.
+	same := "paper"
+	if err := state.UpdateSettings(contracts.SettingsUpdateRequest{Mode: &same}); err != nil {
+		t.Fatalf("same-mode update error = %v", err)
 	}
 
 	invalid := "production"
 	if err := state.UpdateSettings(contracts.SettingsUpdateRequest{Mode: &invalid}); !errors.Is(err, ErrInvalidRuntimeMode) {
 		t.Fatalf("invalid mode error = %v", err)
 	}
-	if state.Settings().Mode != "live" {
+	if state.Settings().Mode != "paper" {
 		t.Fatal("invalid mode partially mutated settings")
 	}
 }

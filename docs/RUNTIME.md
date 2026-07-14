@@ -1,6 +1,6 @@
 # Go 运行时：对账、扫描与持仓监控
 
-`internal/runtime` 协调启动对账、机会扫描、只读持仓监控和主动退出。Runtime 只允许连接本地 `PaperVenue`，或能显式证明 `DemoTradingEnabled` 的 OKX Demo 适配器；其他 CEX 在读取持仓前即被拒绝。
+`internal/runtime` 协调启动对账、机会扫描、只读持仓监控和主动退出。Runtime 只允许连接本地 `PaperVenue`、能显式证明 Demo 交易已启用的 OKX Demo 适配器，或已通过静态配置、账户就绪和进程租约门禁的 OKX 实盘适配器；其他 CEX 在读取持仓前即被拒绝。
 
 ## 安全状态机
 
@@ -17,8 +17,8 @@
 
 只有 `CompleteReconcile` 的成功路径可以解除冻结。对账期间若监控线程产生更新的冻结，旧对账结果不能覆盖它。每次新仓前，编排器和扫描器都会调用 `CheckNewPosition`，同时校验：
 
-- `CYP_MODE=paper`；
-- `CYP_EXECUTION_VENUE=paper`，或完整配置的 `okx` Demo 执行路径；
+- `CYP_MODE=paper` 时：`CYP_EXECUTION_VENUE=paper`，或完整配置的 `okx` Demo 执行路径；
+- `CYP_MODE=live` 时：仅接受通过生产门禁的 OKX 执行目标，风险账本 scope 为 `live:okx`；
 - Kill Switch 未开启；
 - 对账不在进行且 SafetyState 未冻结。
 
@@ -29,7 +29,7 @@
 应用组装位于 `internal/app/application.go`：
 
 1. 加载并校验 `.env`/进程环境变量。
-2. 创建 Paper、Binance、OKX 场所注册表；只把 Paper 或显式启用的 OKX Demo 接到执行链。
+2. 创建 Paper、Binance、OKX 场所注册表；只把 Paper、显式启用的 OKX Demo 或通过生产门禁的 OKX 实盘接到执行链。
 3. 创建数据源、仓储、事件总线、审批门、多供应商模型用量 Tracker 和 Orchestrator。
 4. 创建 `VenueReconciler`、`Scanner`、`PositionMonitor`、`AutomatedExitManager` 和 `Engine`。
 5. 若 `CYP_RUNTIME_AUTOSTART=true` 或自动化总开关开启，`Engine.Start` 先对账再启动后台循环。
@@ -42,7 +42,7 @@
 
 软件停机期间确实不会实时采集，因此 Backfiller 会在每次启动立即比较数据库时间点与完整保留窗口，并按缺口分页向 Binance/OKX 补录；之后每 6 小时重复检查。唯一键 `(venue, symbol, timeframe, ts)` 使重复补录幂等，交易所临时失败的缺口会留到下一轮重试。每天按 `CYP_OHLCV_RETENTION_DAYS` 清理过期数据，默认 730 天可覆盖两年季节性和不同市场状态，同时对 1 小时 K 线保持较小存储量。
 
-对账读取当前模拟执行场所的持仓，并验证持久订单日志、风险账本、保证金率以及每个有仓 symbol 的有效 reduce-only 止损保护单；OKX Demo 通过确定性 `clOrdId` 和私有订单/策略订单接口核验。远端订单查不清时保持冻结且不重试提交。报告包含 `positions`、`discrepancies`、`protective_gaps` 和 `ok`。
+对账读取当前执行场所的持仓，并验证持久订单日志、风险账本、保证金率以及每个有仓 symbol 的有效 reduce-only 止损保护单；OKX（Demo 与实盘）通过确定性 `clOrdId` 和私有订单/策略订单接口核验。远端订单查不清时保持冻结且不重试提交。报告包含 `positions`、`discrepancies`、`protective_gaps` 和 `ok`。
 
 Dashboard 可调用 `POST /api/reconcile` 安全地重新对账；这不是通用解冻按钮。`GET /api/orders` 提供持久订单状态机视图，`GET /api/audit/export` 导出安全状态、订单事件和成交账本。
 
@@ -94,7 +94,7 @@ CYP_MAX_CONCURRENCY=2
 
 警报写结构化日志，发布 `position_monitor` SSE 事件，并可发送到 `CYP_ALERT_WEBHOOK`。Webhook 失败被隔离并计入指标，不会让监控 goroutine panic。
 
-监控是告警层，不是止损执行器。Paper 保护单由 `PaperVenue` 模拟；OKX Demo 下单时附加交易所原生止盈止损，不能把进程存活当成唯一保护。
+监控是告警层，不是止损执行器。Paper 保护单由 `PaperVenue` 模拟；OKX（Demo 与实盘）下单时附加交易所原生止盈止损，成交后向交易所核实保护单真实存在，核实失败自动补挂、补挂耗尽自动紧急平仓并冻结，不能把进程存活当成唯一保护。
 
 ## 策略自动化
 
@@ -107,7 +107,7 @@ CYP_MAX_CONCURRENCY=2
 - 主动退出：理想收益达到 `profit_target_r`、行情恶化至 `-loss_cut_r`、EWMA 动态跟踪底线被击穿或最长持仓时间止损任一成立时退出；价格距离全部按开仓价到原始止损的距离归一化为 `R`，且连续命中配置次数后才执行。
 - 自动反向：相反方向信号必须在窗口内连续确认，且满足更高的置信度和盈亏比阈值；随后按 `reduce-only 平旧仓 → 核验归零 → 撤销残余保护单 → 重新读取权益与持仓 → 再次风控 → 开反向仓并挂新保护单` 执行。冷却时间和每日次数上限抑制来回打脸；任何步骤失败都会停止后续开仓。
 
-主动退出只对能核验有效 reduce-only 止损的仓位工作，最终只发送 reduce-only 市价单。自动加仓、扫描与退出共享标的锁，不会对同一币种并发开平仓。自动反向不会使用普通反向订单直接冲销旧仓。Live 只读模式不能开启自动化。关闭总开关会停止扫描、自动开仓、自动加仓、自动审批、主动退出和自动反向，但不会撤销或关闭交易所侧原生止损止盈。
+主动退出只对能核验有效 reduce-only 且覆盖持仓方向/数量的止损仓位工作，最终只发送 reduce-only 市价单。自动加仓、扫描与退出共享标的锁，不会对同一币种并发开平仓。自动反向不会使用普通反向订单直接冲销旧仓。未通过生产门禁的 live 配置会拒绝启动；通过门禁后可运行自动化。关闭总开关会停止扫描、自动开仓、自动加仓、自动审批、主动退出和自动反向，但不会撤销或关闭交易所侧原生止损止盈。
 
 ## 检查点与恢复
 

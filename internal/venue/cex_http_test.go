@@ -251,6 +251,7 @@ func TestOKXOHLCVRangePaginatesBackward(t *testing.T) {
 
 func TestOKXDemoPlacesPerpetualWithNativeProtection(t *testing.T) {
 	const secret = "okx-demo-secret"
+	protectClientID := SanitizeOKXClientID("run-eth-demo", "protect")
 	var placed atomic.Int32
 	var conditionalQueries atomic.Int32
 	var ocoQueries atomic.Int32
@@ -273,14 +274,14 @@ func TestOKXDemoPlacesPerpetualWithNativeProtection(t *testing.T) {
 		case "/api/v5/market/ticker":
 			_, _ = response.Write([]byte(`{"code":"0","data":[{"last":"2000"}]}`))
 		case "/api/v5/account/config":
-			_, _ = response.Write([]byte(`{"code":"0","data":[{"posMode":"long_short_mode"}]}`))
+			_, _ = response.Write([]byte(`{"code":"0","data":[{"posMode":"net_mode"}]}`))
 		case "/api/v5/account/set-leverage":
 			assertOKXDemoPOSTSignature(t, request, secret)
 			var body map[string]any
 			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 				t.Error(err)
 			}
-			if body["instId"] != "ETH-USDT-SWAP" || body["lever"] != "2" || body["posSide"] != "long" {
+			if body["instId"] != "ETH-USDT-SWAP" || body["lever"] != "2" || body["posSide"] != nil {
 				t.Errorf("set leverage body=%#v", body)
 			}
 			_, _ = response.Write([]byte(`{"code":"0","data":[{}]}`))
@@ -294,7 +295,7 @@ func TestOKXDemoPlacesPerpetualWithNativeProtection(t *testing.T) {
 				}
 				attached, _ := body["attachAlgoOrds"].([]any)
 				if body["instId"] != "ETH-USDT-SWAP" || body["side"] != "buy" ||
-					body["posSide"] != "long" || body["sz"] != "10" || len(attached) != 1 {
+					body["posSide"] != nil || body["sz"] != "10" || len(attached) != 1 {
 					t.Errorf("order body=%#v", body)
 				}
 				_, _ = response.Write([]byte(`{"code":"0","data":[{"ordId":"demo-order-1","clOrdId":"runethdemo","sCode":"0","sMsg":""}]}`))
@@ -310,7 +311,7 @@ func TestOKXDemoPlacesPerpetualWithNativeProtection(t *testing.T) {
 			default:
 				t.Errorf("unexpected protective ordType=%q", request.URL.Query().Get("ordType"))
 			}
-			_, _ = response.Write([]byte(`{"code":"0","data":[{"algoId":"protect-1","slTriggerPx":"1800","tpTriggerPx":"2200"}]}`))
+			_, _ = fmt.Fprintf(response, `{"code":"0","data":[{"algoId":"protect-1","algoClOrdId":%q,"side":"sell","posSide":"net","reduceOnly":"true","closeFraction":"1","slTriggerPx":"1800","tpTriggerPx":"2200"}]}`, protectClientID)
 		case "/api/v5/account/positions":
 			_, _ = response.Write([]byte(`{"code":"0","data":[{"instId":"ETH-USDT-SWAP","pos":"10","posSide":"long","avgPx":"2001","lever":"2","liqPx":"1100","mgnMode":"isolated"}]}`))
 		case "/api/v5/trade/cancel-order":
@@ -351,11 +352,23 @@ func TestOKXDemoPlacesPerpetualWithNativeProtection(t *testing.T) {
 	if err != nil || rejected.Status != contracts.OrderStatusRejected || placed.Load() != 1 {
 		t.Fatalf("misrouted order=%#v placed=%d err=%v", rejected, placed.Load(), err)
 	}
+	// A filled entry now triggers one verification round (conditional+oco)
+	// inside Place, and the protective orders in the result must come from
+	// the exchange, not the request template.
+	if !hasProtectiveKind(result.ProtectiveOrders, "stop_loss") ||
+		!hasProtectiveKind(result.ProtectiveOrders, "take_profit") ||
+		result.ProtectiveOrders[0].OrderID != "protect-1" {
+		t.Fatalf("fill did not carry exchange-verified protection: %#v", result.ProtectiveOrders)
+	}
+	if conditionalQueries.Load() != 1 || ocoQueries.Load() != 1 {
+		t.Fatalf("fill verification queries: conditional=%d oco=%d",
+			conditionalQueries.Load(), ocoQueries.Load())
+	}
 	protective, err := target.ProtectiveOrders(context.Background(), intent.Symbol)
 	if err != nil || !hasProtectiveKind(protective, "stop_loss") || !hasProtectiveKind(protective, "take_profit") {
 		t.Fatalf("protective=%#v err=%v", protective, err)
 	}
-	if conditionalQueries.Load() != 1 || ocoQueries.Load() != 1 || len(protective) != 2 {
+	if conditionalQueries.Load() != 2 || ocoQueries.Load() != 2 || len(protective) != 2 {
 		t.Fatalf("protective queries: conditional=%d oco=%d orders=%#v",
 			conditionalQueries.Load(), ocoQueries.Load(), protective)
 	}
@@ -374,16 +387,19 @@ func TestOKXDemoCancelsResidualProtectiveAlgos(t *testing.T) {
 	var cancelCalls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		response.Header().Set("Content-Type", "application/json")
-		if request.Header.Get("x-simulated-trading") != "1" {
+		if (strings.HasPrefix(request.URL.Path, "/api/v5/account/") || strings.HasPrefix(request.URL.Path, "/api/v5/trade/")) &&
+			request.Header.Get("x-simulated-trading") != "1" {
 			t.Error("private Demo request is missing x-simulated-trading=1")
 		}
 		switch request.URL.Path {
+		case "/api/v5/public/instruments":
+			_, _ = response.Write([]byte(`{"code":"0","data":[{"instId":"ETH-USDT-SWAP","baseCcy":"ETH","quoteCcy":"USDT","settleCcy":"USDT","ctType":"linear","ctValCcy":"ETH","ctVal":"0.1","lotSz":"1","minSz":"1","tickSz":"0.01","state":"live"}]}`))
 		case "/api/v5/trade/orders-algo-pending":
 			if canceled.Load() || request.URL.Query().Get("ordType") == "oco" {
 				_, _ = response.Write([]byte(`{"code":"0","data":[]}`))
 				return
 			}
-			_, _ = response.Write([]byte(`{"code":"0","data":[{"algoId":"algo-1","slTriggerPx":"1800","tpTriggerPx":"2200"}]}`))
+			_, _ = response.Write([]byte(`{"code":"0","data":[{"algoId":"algo-1","algoClOrdId":"residual-protect","side":"sell","posSide":"net","reduceOnly":"true","closeFraction":"1","slTriggerPx":"1800","tpTriggerPx":"2200"}]}`))
 		case "/api/v5/trade/cancel-algos":
 			cancelCalls.Add(1)
 			raw := assertOKXDemoPOSTSignature(t, request, secret)

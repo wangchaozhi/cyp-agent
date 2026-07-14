@@ -11,7 +11,7 @@
 - 前端：`apps/web` 的 React/Vite 应用；
 - 默认运行：合成行情 + Mock/规则 LLM + PaperVenue + 原子 JSON 持久化；
 - 可选持久化：memory、file、PostgreSQL；
-- 当前执行边界：仅 Paper，CEX/链上真实下单硬禁用；
+- 当前执行边界：默认 Paper；OKX Demo/实盘仅在对应安全门禁全部通过后开放 USDT 线性永续，Binance 与链上下单硬禁用；
 - 旧实现：仅冻结在 `archive/python-backend-20260710`，使用方式见 [`GO_ROLLBACK.md`](GO_ROLLBACK.md)。
 
 主分支没有后端、执行器、风控或智能体的旧实现兼容开关；不应重新引入双栈选择器。
@@ -58,7 +58,7 @@
 - auto 审批只有在 symbol 白名单、风险分数和 quote 上限全部满足时生效；
 - Kill Switch、SafetyState、运行模式和 Venue 在执行前分层检查；
 - PaperVenue 支持预检、幂等下单、持仓、余额、保护单和关闭仓位；
-- Binance/OKX 实现公共行情、签名请求与错误分类，但交易操作硬禁用；
+- Binance 实现公共行情与签名只读请求但交易硬禁用；OKX 复用 Demo/实盘交易状态机，实盘由静态配置、账户就绪、启动对账和 PostgreSQL 单实例租约共同门禁；
 - 链上适配器包含白名单、MEV、gas/价格冲击预检与隔离 signer 边界，未接入默认执行路径。
 
 ### 数据、运行时与恢复
@@ -66,7 +66,7 @@
 - 默认合成行情可无密钥运行；
 - CEX 源可读取 ticker、OHLCV、order book 等公共数据；
 - MarketAggregator 提供跨场所行情与资金费摘要；
-- 每次启动都先对 Paper 持仓和保护单执行 reconcile；
+- 每次启动都先对当前执行场所的持仓、风险账本、订单 journal 和保护单执行 reconcile；
 - 只有成功 reconcile 可以解除新仓冻结；
 - 可选 Scanner 与 PositionMonitor 常驻循环，支持 symbol 锁、并发限制和告警；
 - 关闭时通过 context 取消所有后台 goroutine 和等待者。
@@ -154,9 +154,9 @@ if ($OldSources) { $OldSources; throw "发现未移除的旧后端文件" }
 5. 人工 approve/reject/modify 与超时路径正确；
 6. Paper 成交后 positions、portfolio、metrics 和 SSE 更新；
 7. Kill Switch 阻止新仓但允许关闭已有 Paper 仓位；
-8. `mode=live` 或非 Paper execution venue 无法执行；
-9. CEX `Place`/`Cancel` 无论凭据如何均拒绝；
-10. 重启后 file/PostgreSQL 检查点与 lessons 可读取。
+8. 未通过生产门禁的 `mode=live` 必须拒绝启动，运行中不能切换到 live；
+9. Binance/链上以及未显式启用交易的 CEX `Place`/`Cancel` 必须拒绝；OKX Demo/实盘需覆盖部分成交、未知提交、保护补救和紧急平仓；
+10. 重启后 file/PostgreSQL 检查点、订单事件与 lessons 可恢复，实盘第二实例无法取得执行租约。
 
 ## 发布门禁
 
@@ -175,15 +175,15 @@ if ($OldSources) { $OldSources; throw "发现未移除的旧后端文件" }
 
 以下项目不是重构遗漏，而是当前版本明确的安全边界：
 
-- 不支持真实 CEX 或链上下单；
-- 不支持通过配置解除 live 硬门禁；
+- 真实执行仅支持通过生产门禁的 OKX USDT 线性永续；Binance 与链上下单不支持；
+- 不支持运行时切换到 live，也不支持绕过静态/动态账户和单实例租约门禁；
 - 不提供主分支到旧后端的运行时回退；
 - SSE 总线不做持久事件回放；
 - 文件 Repository 只支持单实例；
 - 写 API 已支持 `CYP_API_TOKEN`，非回环监听强制启用；公网仍需 TLS、访问控制和审计；
-- 多实例租约、持久订单状态机和远端真实账户 reconcile 尚未达到实盘门禁要求。
+- Paper/file 仍只适合单实例；OKX 实盘强制 PostgreSQL 并独占账户级执行租约。
 
-若未来要增加实盘能力，应作为新的、独立审计的安全项目推进：先实现持久订单状态机、远端对账、未知订单恢复、原生保护单、细粒度授权和 testnet/demo 故障演练，再讨论受控启用。不得通过删除当前 guard 或把常量改为 `true` 的方式上线。
+若未来扩展其他实盘场所，必须作为新的、独立审计的安全项目推进，并达到当前 OKX 路径的持久状态机、远端对账、未知订单恢复、原生保护、最小权限、单实例租约和 Demo 故障演练基线；不得复用配置开关绕过验收。
 
 ## 维护规则
 
