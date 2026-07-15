@@ -162,7 +162,7 @@ export function SettingsPanel({ settings, venues, focusSection = "general", onSa
               <span>主模型</span>
               <input
                 value={currentForm.llm_model}
-                placeholder={currentForm.llm_provider === "deepseek" ? "deepseek-chat" : "claude-opus-4-8"}
+                placeholder={currentForm.llm_provider === "deepseek" ? "deepseek-v4-pro" : "claude-opus-4-8"}
                 onChange={(event) => updateField("llm_model", event.target.value)}
               />
             </label>
@@ -170,7 +170,7 @@ export function SettingsPanel({ settings, venues, focusSection = "general", onSa
               <span>快速模型</span>
               <input
                 value={currentForm.llm_model_fast}
-                placeholder={currentForm.llm_provider === "deepseek" ? "deepseek-chat" : "claude-haiku-4-5-20251001"}
+                placeholder={currentForm.llm_provider === "deepseek" ? "deepseek-v4-flash" : "claude-haiku-4-5-20251001"}
                 onChange={(event) => updateField("llm_model_fast", event.target.value)}
               />
             </label>

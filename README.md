@@ -66,6 +66,18 @@ Windows 下可同时启动后端和 Vite 开发服务器：
 .\start-dev.bat -BackendPort 8001 -FrontendPort 5174 -AllowMultipleBackends
 ```
 
+### 本地告警接收器
+
+可选的告警接收器只监听本机回环地址，将接收的 JSON 告警追加保存到 `data/alerts.jsonl`：
+
+```powershell
+.\start-alert-receiver.bat
+# 健康检查：http://127.0.0.1:8081/health
+# 查看最近告警：http://127.0.0.1:8081/alerts
+```
+
+将 `.env` 的 `CYP_ALERT_WEBHOOK` 配置为 `http://127.0.0.1:8081/webhook/alerts` 后，cyp-agent 会把告警投递到该服务。接收器默认拒绝非回环监听；若需远程通知，请在具备 HTTPS 和鉴权的反向代理之后部署。
+
 其他平台可分别启动：
 
 ```bash
