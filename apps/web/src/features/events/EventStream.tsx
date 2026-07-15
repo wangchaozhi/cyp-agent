@@ -212,7 +212,7 @@ export function EventStream({ events, status }: EventStreamProps) {
 	const visibleEvents = events.slice(0, visibleLimit);
   return (
     <Panel
-      className="panel--events"
+      className={`panel--events ${events.length ? "" : "panel--compact-empty"}`.trim()}
       title="运行时间线"
       icon={<ListTree size={16} />}
 	  actions={<><span className="stream-badge">{events.length} 条</span><span className={`stream-badge stream-badge--${status}`}>{streamLabel(status)}</span></>}
@@ -233,7 +233,10 @@ export function EventStream({ events, status }: EventStreamProps) {
 		  ) : null}
         </div>
       ) : (
-        <EmptyState>等待事件</EmptyState>
+        <EmptyState compact>
+          <strong>等待运行事件</strong>
+          <span>运行分析后，这里会按时间显示采集、风控、审批和执行结果。</span>
+        </EmptyState>
       )}
     </Panel>
   );

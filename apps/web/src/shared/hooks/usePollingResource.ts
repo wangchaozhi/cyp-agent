@@ -4,6 +4,8 @@ export interface ResourceState<T> {
   data: T | null;
   error: string | null;
   loading: boolean;
+  lastUpdatedAt: number | null;
+  stale: boolean;
   refresh: () => Promise<void>;
 }
 
@@ -18,6 +20,8 @@ export function usePollingResource<T>(
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
+  const [stale, setStale] = useState(false);
 
   useEffect(() => {
     loaderRef.current = loader;
@@ -42,9 +46,12 @@ export function usePollingResource<T>(
           setData(next);
         }
         setError(null);
+        setLastUpdatedAt(Date.now());
+        setStale(false);
       } catch (err) {
         if (!mountedRef.current) return;
         setError(err instanceof Error ? err.message : "请求失败");
+        setStale(true);
       } finally {
         if (mountedRef.current) setLoading(false);
       }
@@ -84,5 +91,5 @@ export function usePollingResource<T>(
     };
   }, [intervalMs, refresh]);
 
-  return { data, error, loading, refresh };
+  return { data, error, loading, lastUpdatedAt, stale, refresh };
 }

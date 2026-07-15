@@ -95,6 +95,7 @@ export function SystemHeader({
           className={`automation-control ${automationEnabled ? "is-on" : ""}`}
           type="button"
           aria-pressed={automationEnabled}
+          aria-label={automationEnabled ? "关闭策略自动化" : "开启策略自动化"}
           onClick={onToggleAutomation}
           disabled={switchingAutomation || !health || mode === "live"}
           title={mode === "live" ? "Live 只读模式不能开启策略自动化" : automationEnabled ? "关闭自动扫描、Kelly 开仓、审批、主动退出与反向；原生保护单不受影响" : "开启已配置的自动化策略"}
@@ -153,6 +154,7 @@ export function SystemHeader({
           type="button"
           onClick={onRun}
           disabled={running || Boolean(runDisabledReason)}
+          aria-label={running ? "分析运行中" : runDisabledReason ? `运行分析暂不可用：${runDisabledReason}` : `运行 ${analysisSymbol} 分析`}
           title={runDisabledReason ?? `运行 ${analysisSymbol} 一轮分析与决策`}
         >
           <Play size={16} fill="currentColor" />
@@ -164,6 +166,7 @@ export function SystemHeader({
           onClick={onOpenSettings}
           aria-expanded={settingsOpen}
           aria-controls="settings-drawer"
+          aria-label="打开系统设置"
           title="系统设置"
         >
           <Settings size={17} />
@@ -174,6 +177,7 @@ export function SystemHeader({
           type="button"
           onClick={onToggleKill}
           disabled={switchingKill}
+          aria-label={killOn ? "解除安全停机" : "立即安全停机"}
           title={killOn ? "解除安全停机" : "立即安全停机"}
         >
           <Power size={17} />

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { X } from "lucide-react";
+import { AlertTriangle, CheckCircle2, RefreshCw, ShieldAlert, X } from "lucide-react";
 
 import { PendingApprovals } from "../features/approvals/PendingApprovals";
 import { BacktestPanel } from "../features/backtest/BacktestPanel";
@@ -9,7 +9,7 @@ import { SystemHeader } from "../features/health/SystemHeader";
 import { MarketPanel } from "../features/market/MarketPanel";
 import { OverviewStrip } from "../features/overview/OverviewStrip";
 import { PortfolioPanel } from "../features/portfolio/PortfolioPanel";
-import { PositionsPanel } from "../features/positions/PositionsPanel";
+import { positionKey, PositionsPanel } from "../features/positions/PositionsPanel";
 import { RiskPanel } from "../features/risk/RiskPanel";
 import { SettingsPanel } from "../features/settings/SettingsPanel";
 import { TokenUsagePanel } from "../features/token-usage/TokenUsagePanel";
@@ -17,6 +17,8 @@ import { cypApi } from "../shared/api/client";
 import type { ApprovalRequest, DashboardEvent, Position, RuntimeMode, RuntimeSettingsUpdate } from "../shared/api/types";
 import { useEventStream } from "../shared/hooks/useEventStream";
 import { usePollingResource } from "../shared/hooks/usePollingResource";
+import { formatAmount, formatCompact, sideLabel } from "../shared/lib/format";
+import { ConfirmDialog } from "../shared/ui/ConfirmDialog";
 import { SectionHeading } from "../shared/ui/SectionHeading";
 
 const MAX_EVENTS = 160;
@@ -28,6 +30,10 @@ export function positionPollingInterval(positionCount: number): number {
 }
 
 type Notice = { tone: "ok" | "warn" | "bad"; message: string } | null;
+type Confirmation =
+  | { kind: "clear-kill" }
+  | { kind: "close-position"; position: Position }
+  | null;
 
 function refreshAll(resources: Array<() => Promise<void>>) {
   void Promise.allSettled(resources.map((refresh) => refresh()));
@@ -35,6 +41,11 @@ function refreshAll(resources: Array<() => Promise<void>>) {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "操作失败";
+}
+
+function formatUpdatedAt(timestamp: number | null): string {
+  if (!timestamp) return "尚未完成同步";
+  return new Date(timestamp).toLocaleTimeString("zh-CN", { hour12: false });
 }
 
 export default function App() {
@@ -56,6 +67,9 @@ export default function App() {
   const [switchingAutomation, setSwitchingAutomation] = useState(false);
   const [switchingKill, setSwitchingKill] = useState(false);
 	const [reconciling, setReconciling] = useState(false);
+  const [refreshingCritical, setRefreshingCritical] = useState(false);
+  const [confirmation, setConfirmation] = useState<Confirmation>(null);
+  const [confirmingAction, setConfirmingAction] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<"general" | "symbols">("general");
   const [notice, setNotice] = useState<Notice>(null);
@@ -78,6 +92,28 @@ export default function App() {
     const source = configured.length ? configured : marketSymbols;
     return [...new Set(source.map((symbol) => symbol.trim()).filter(Boolean))];
   }, [marketSymbols, runtimeSettings.data?.watchlist]);
+  const criticalTimestamps = [
+    readiness.lastUpdatedAt,
+    positions.lastUpdatedAt,
+    risk.lastUpdatedAt,
+    portfolio.lastUpdatedAt,
+  ].filter((value): value is number => value !== null);
+  const criticalLastUpdatedAt = criticalTimestamps.length ? Math.min(...criticalTimestamps) : null;
+  const criticalStale = readiness.stale || positions.stale || risk.stale || portfolio.stale;
+  const criticalInitialLoading = !criticalLastUpdatedAt
+    && (readiness.loading || positions.loading || risk.loading || portfolio.loading);
+
+  const refreshCritical = useCallback(async () => {
+    if (refreshingCritical) return;
+    setRefreshingCritical(true);
+    await Promise.allSettled([
+      readiness.refresh(),
+      positions.refresh(),
+      risk.refresh(),
+      portfolio.refresh(),
+    ]);
+    setRefreshingCritical(false);
+  }, [portfolio.refresh, positions.refresh, readiness.refresh, refreshingCritical, risk.refresh]);
 
   const scheduleRefresh = useCallback((resources: Array<() => Promise<void>>) => {
     resources.forEach((refresh) => queuedRefreshesRef.current.add(refresh));
@@ -252,19 +288,28 @@ export default function App() {
     }
   };
 
-  const toggleKill = async () => {
+  const setKillState = async (next: boolean): Promise<boolean> => {
     setSwitchingKill(true);
     setNotice(null);
     try {
-      const next = !health.data?.kill;
       await cypApi.setKillSwitch(next);
       await Promise.all([health.refresh(), readiness.refresh(), risk.refresh(), runtimeSettings.refresh()]);
       setNotice({ tone: "ok", message: next ? "Kill Switch 已启用" : "Kill Switch 已解除" });
+      return true;
     } catch (error) {
       setNotice({ tone: "bad", message: `切换失败：${errorMessage(error)}` });
+      return false;
     } finally {
       setSwitchingKill(false);
     }
+  };
+
+  const requestToggleKill = () => {
+    if (health.data?.kill) {
+      setConfirmation({ kind: "clear-kill" });
+      return;
+    }
+    void setKillState(true);
   };
 
   const toggleAutomation = async () => {
@@ -331,6 +376,24 @@ export default function App() {
     }
   };
 
+  const confirmDangerousAction = async () => {
+    if (!confirmation || confirmingAction) return;
+    setConfirmingAction(true);
+    try {
+      if (confirmation.kind === "clear-kill") {
+        if (await setKillState(false)) setConfirmation(null);
+      } else {
+        await closePosition(confirmation.position);
+        setConfirmation(null);
+      }
+    } catch {
+      // The action already publishes a detailed notice. Keep the dialog open
+      // so the operator can review the failure or cancel explicitly.
+    } finally {
+      setConfirmingAction(false);
+    }
+  };
+
   return (
     <div className="app">
       <a className="skip-link" href="#main-content">跳到主要内容</a>
@@ -365,7 +428,7 @@ export default function App() {
             onModeChange={(mode) => void switchMode(mode)}
             onToggleAutomation={() => void toggleAutomation()}
             onRun={() => void runOnce()}
-            onToggleKill={() => void toggleKill()}
+            onToggleKill={requestToggleKill}
             onOpenSettings={() => {
               setSettingsSection("general");
               setSettingsOpen(true);
@@ -393,6 +456,27 @@ export default function App() {
           </div>
 
           <main id="main-content" className="dashboard-stack">
+            {runDisabledReason ? (
+              <div className="execution-gate" role="status">
+                <ShieldAlert size={17} />
+                <span><strong>运行分析暂不可用</strong>{runDisabledReason}</span>
+              </div>
+            ) : null}
+
+            <div className={`data-trust-bar ${criticalStale ? "is-stale" : criticalInitialLoading ? "is-loading" : "is-fresh"}`}>
+              <div>
+                {criticalStale ? <AlertTriangle size={16} /> : <CheckCircle2 size={16} />}
+                <span>
+                  <strong>{criticalStale ? "关键账户数据可能已过期" : criticalInitialLoading ? "正在进行首次账户同步" : "关键账户数据已同步"}</strong>
+                  最后成功更新：{formatUpdatedAt(criticalLastUpdatedAt)}
+                </span>
+              </div>
+              <button className="data-trust-bar__refresh" type="button" disabled={refreshingCritical} onClick={() => void refreshCritical()}>
+                <RefreshCw size={14} className={refreshingCritical ? "is-spinning" : ""} />
+                {refreshingCritical ? "同步中" : "立即同步"}
+              </button>
+            </div>
+
             <OverviewStrip
               health={health.data}
               pending={pending.data ?? []}
@@ -403,33 +487,22 @@ export default function App() {
               streamStatus={streamStatus}
             />
 
-			<section id="token-usage" className="workspace-section" aria-label="模型成本控制">
-				<SectionHeading
-					index="01 / AI COST CONTROL"
-					title="模型成本控制"
-					description="按供应商、模型、Agent、币种与任务来源追踪真实用量和预算。"
-				/>
-				<TokenUsagePanel />
-			</section>
-
-            <section id="market" className="workspace-section" aria-label="市场情报">
+            <section id="operations" className="workspace-section" aria-label="交易与执行">
               <SectionHeading
-				index="02 / MARKET INTELLIGENCE"
-                title="市场情报"
-                description="比较多个资产的相对强弱、实时价格与跨场所差异。"
+                index="01 / TRADING DESK"
+                title="交易与执行"
+                description="先确认实时持仓和待审批提案，再沿时间线追踪每一轮执行。"
               />
-              <MarketPanel
-                watchlist={runtimeSettings.data?.watchlist ?? null}
-                onSelectionChange={setMarketSymbols}
-              />
-            </section>
-
-            <section id="operations" className="workspace-section" aria-label="决策与执行">
-              <SectionHeading
-				index="03 / DECISION FLOW"
-                title="决策与执行"
-                description="先处理需要人工判断的提案，再沿时间线追踪每一轮运行。"
-              />
+              <div className="dashboard-operations">
+                <PositionsPanel
+                  positions={positions.data ?? []}
+                  loading={positions.loading}
+                  error={positions.error}
+                  closingKey={confirmation?.kind === "close-position" && confirmingAction ? positionKey(confirmation.position) : null}
+                  onRequestClose={(position) => setConfirmation({ kind: "close-position", position })}
+                  onRetry={() => void positions.refresh()}
+                />
+              </div>
               <div className="dashboard-hero">
                 <PendingApprovals
                   items={pending.data ?? []}
@@ -442,20 +515,40 @@ export default function App() {
 
             <section id="portfolio" className="workspace-section" aria-label="资产与风险">
               <SectionHeading
-				index="04 / PORTFOLIO CONTROL"
+                index="02 / PORTFOLIO CONTROL"
                 title="资产与风险"
-                description="从当前持仓进入，检查风险预算、回撤与组合集中度。"
+                description="检查风险预算、回撤、保证金健康度与组合集中度。"
               />
               <div className="dashboard-metrics">
-                <PositionsPanel positions={positions.data ?? []} onClose={closePosition} />
                 <RiskPanel risk={risk.data} />
                 <PortfolioPanel portfolio={portfolio.data} />
               </div>
             </section>
 
+            <section id="market" className="workspace-section" aria-label="市场情报">
+              <SectionHeading
+                index="03 / MARKET INTELLIGENCE"
+                title="市场情报"
+                description="比较多个资产的相对强弱、实时价格与跨场所差异。"
+              />
+              <MarketPanel
+                watchlist={runtimeSettings.data?.watchlist ?? null}
+                onSelectionChange={setMarketSymbols}
+              />
+            </section>
+
+			<section id="token-usage" className="workspace-section" aria-label="模型成本控制">
+				<SectionHeading
+					index="04 / AI COST CONTROL"
+					title="模型成本控制"
+					description="先查看今日预算摘要，需要时再展开供应商、模型与调用明细。"
+				/>
+				<TokenUsagePanel />
+			</section>
+
             <section id="backtest" className="workspace-section" aria-label="策略实验室">
               <SectionHeading
-				index="05 / STRATEGY LAB"
+                index="05 / STRATEGY LAB"
                 title="策略实验室"
                 description="用合成或真实历史数据验证参数，在进入决策流程前理解策略表现。"
               />
@@ -496,6 +589,36 @@ export default function App() {
           </aside>
         </div>
       ) : null}
+
+      <ConfirmDialog
+        open={confirmation !== null}
+        title={confirmation?.kind === "close-position"
+          ? `确认平仓 ${confirmation.position.symbol}？`
+          : "确认解除安全停机？"}
+        description={confirmation?.kind === "close-position"
+          ? "将按当前市场价格关闭该仓位。订单提交后可能立即成交，无法撤销。"
+          : "解除后系统会恢复允许的分析与交易流程。请先确认触发停机的问题已经处理。"}
+        details={confirmation?.kind === "close-position" ? (
+          <div className="confirm-position-details">
+            <span><b>场所</b>{confirmation.position.venue}</span>
+            <span><b>方向</b>{sideLabel(confirmation.position.side)}</span>
+            <span><b>数量</b>{formatCompact(confirmation.position.size_base, 8)}</span>
+            <span><b>当前价</b>{formatAmount(confirmation.position.mark_price ?? confirmation.position.entry_price)}</span>
+          </div>
+        ) : (
+          <div className="confirm-position-details">
+            <span><b>当前模式</b>{runtimeSettings.data?.mode ?? health.data?.mode ?? "--"}</span>
+            <span><b>当前持仓</b>{positions.data?.length ?? 0} 笔</span>
+          </div>
+        )}
+        confirmLabel={confirmation?.kind === "close-position" ? "确认平仓" : "解除停机"}
+        busyLabel={confirmation?.kind === "close-position" ? "正在平仓…" : "正在解除…"}
+        busy={confirmingAction}
+        onCancel={() => {
+          if (!confirmingAction) setConfirmation(null);
+        }}
+        onConfirm={() => void confirmDangerousAction()}
+      />
     </div>
   );
 }

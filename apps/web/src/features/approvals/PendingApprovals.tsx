@@ -40,7 +40,11 @@ export function PendingApprovals({ items, loading, onDecide }: PendingApprovalsP
   }
 
   return (
-    <Panel title="审批队列" icon={<ShieldAlert size={16} />}>
+    <Panel
+      title="审批队列"
+      icon={<ShieldAlert size={16} />}
+      className={!items.length ? "panel--compact-empty" : ""}
+    >
       {error ? <div className="inline-alert">{error}</div> : null}
       {items.length ? (
         <div className="approval-list">
@@ -157,7 +161,10 @@ export function PendingApprovals({ items, loading, onDecide }: PendingApprovalsP
           })}
         </div>
       ) : (
-        <EmptyState>{loading ? "加载中" : "暂无待审批"}</EmptyState>
+        <EmptyState compact>
+          <strong>{loading ? "正在同步审批队列" : "暂无待审批"}</strong>
+          <span>{loading ? "安全状态确认后即可继续操作。" : "产生需要人工确认的交易提案后会出现在这里。"}</span>
+        </EmptyState>
       )}
     </Panel>
   );

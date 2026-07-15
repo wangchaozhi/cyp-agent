@@ -70,7 +70,7 @@ export function PortfolioPanel({ portfolio }: { portfolio: PortfolioSnapshot | n
         <ClusterExposure label="alt 多" value={portfolio.clusters.alt.long} limit={portfolio.correlated_limit} />
         <ClusterExposure label="alt 空" value={portfolio.clusters.alt.short} limit={portfolio.correlated_limit} />
         <ExposureHeatmap items={portfolio.by_symbol ?? []} gross={toNumber(portfolio.gross)} />
-        {!portfolio.n_positions ? <EmptyState>无持仓</EmptyState> : null}
+        {!portfolio.n_positions ? <p className="panel-note">当前无持仓，开仓后将在这里显示币种集中度和相关性簇敞口。</p> : null}
       </div>
     </Panel>
   );

@@ -137,119 +137,7 @@ export function SettingsPanel({ settings, venues, focusSection = "general", onSa
 
         <AnalysisSymbolsSettings settings={settings} focus={focusSection === "symbols"} onSave={onSave} />
 
-        <ScanFrequencySettings settings={settings} onSave={onSave} />
-
         <AutomationSettingsPanel value={settings.automation} liveReadOnly={settings.mode === "live"} onSave={onSave} />
-
-        <div className="settings-section">
-          <div className="settings-section__title">
-            <ServerCog size={14} />
-            <span>模型设置</span>
-          </div>
-          <div className="settings-form">
-            {error ? <div className="inline-alert">{error}</div> : null}
-            <label>
-              <span>供应商</span>
-              <select
-                value={currentForm.llm_provider}
-                onChange={(event) => updateField("llm_provider", event.target.value)}
-              >
-                <option value="anthropic">Anthropic</option>
-                <option value="deepseek">DeepSeek</option>
-              </select>
-            </label>
-            <label>
-              <span>主模型</span>
-              <input
-                value={currentForm.llm_model}
-                placeholder={currentForm.llm_provider === "deepseek" ? "deepseek-v4-pro" : "claude-opus-4-8"}
-                onChange={(event) => updateField("llm_model", event.target.value)}
-              />
-            </label>
-            <label>
-              <span>快速模型</span>
-              <input
-                value={currentForm.llm_model_fast}
-                placeholder={currentForm.llm_provider === "deepseek" ? "deepseek-v4-flash" : "claude-haiku-4-5-20251001"}
-                onChange={(event) => updateField("llm_model_fast", event.target.value)}
-              />
-            </label>
-            <label>
-              <span>Base URL</span>
-              <input
-                value={currentForm.llm_base_url}
-                placeholder={currentForm.llm_provider === "deepseek" ? "https://api.deepseek.com" : "默认"}
-                disabled
-              />
-            </label>
-            <label>
-              <span>Anthropic Key</span>
-              <input
-                type="password"
-                value={currentForm.anthropic_api_key}
-                placeholder={settings.llm_provider === "anthropic" && settings.llm_enabled ? "已配置，留空不变" : "sk-ant-..."}
-                onChange={(event) => updateField("anthropic_api_key", event.target.value)}
-              />
-            </label>
-            <label>
-              <span>DeepSeek Key</span>
-              <input
-                type="password"
-                value={currentForm.deepseek_api_key}
-                placeholder={settings.llm_provider === "deepseek" && settings.llm_enabled ? "已配置，留空不变" : "sk-..."}
-                onChange={(event) => updateField("deepseek_api_key", event.target.value)}
-              />
-            </label>
-            <label>
-              <span>API 写操作令牌</span>
-              <input
-                type="password"
-                value={currentForm.api_token}
-                placeholder={settings.api_auth_enabled ? "输入 CYP_API_TOKEN" : "本机回环访问可留空"}
-                onChange={(event) => updateField("api_token", event.target.value)}
-              />
-            </label>
-            <button className="command-button command-button--primary" type="button" onClick={save} disabled={saving}>
-              {saving ? "保存中" : "保存设置"}
-            </button>
-            <p className="muted-line">Base URL 仅可通过启动配置修改；模型密钥不会回显，API 令牌只保存在当前浏览器。</p>
-          </div>
-        </div>
-
-        <div className="settings-section">
-          <div className="settings-section__title">
-            <ServerCog size={14} />
-            <span>运行状态</span>
-          </div>
-          <div className="metric-stack">
-            <MetricRow label="审批" value={settings.approval} />
-            <MetricRow label="执行场所" value={settings.execution_venue} />
-            <MetricRow label="行情源" value={settings.data_source} />
-            <MetricRow label="扫描 / 监控" value={`${formatSeconds(settings.intervals.scan)} / ${formatSeconds(settings.intervals.monitor)}`} />
-            <MetricRow label="并发 / 日志" value={`${settings.runtime.max_concurrency} / ${settings.runtime.log_level}`} />
-            <MetricRow
-              label="K 线归档"
-              value={settings.runtime.ohlcv_archive_enabled ? `PostgreSQL / ${settings.runtime.ohlcv_retention_days} 天` : "已关闭"}
-            />
-            <MetricRow label="合约策略" value={settings.allow_perp ? "允许" : "关闭"} />
-          </div>
-					<a className="command-button settings-audit-download" href="/api/audit/export" download>
-						<Download size={14} />
-						导出订单与成交审计
-					</a>
-        </div>
-
-        <div className="settings-section">
-          <div className="settings-section__title">
-            <KeyRound size={14} />
-            <span>凭据</span>
-          </div>
-          <div className="metric-stack">
-            <MetricRow label={`CEX (${settings.cex_id})`} value={settings.cex_trading_configured ? "已配置" : "未配置"} />
-            <MetricRow label="OKX" value={`${settings.okx.configured ? "已配置" : "未配置"} / ${settings.okx.demo ? "Demo" : "实盘"}`} />
-            <MetricRow label="LLM Key" value={settings.llm_enabled ? "已配置" : "未配置"} />
-          </div>
-        </div>
 
         <div className="settings-section settings-section--wide">
           <div className="settings-section__title">
@@ -278,45 +166,173 @@ export function SettingsPanel({ settings, venues, focusSection = "general", onSa
           {guard.reasons.length ? <p className="muted-line settings-reasons">{guard.reasons.join("；")}</p> : null}
         </div>
 
-        <div className="settings-section settings-section--wide">
-          <div className="table-wrap settings-venue-table">
-            <table>
-              <thead>
-                <tr>
-                  <th>场所</th>
-                  <th>能力</th>
-                  <th>配置</th>
-                  <th>权限</th>
-                </tr>
-              </thead>
-              <tbody>
-                {venues.length ? (
-                  venues.map((venue) => (
-                    <tr key={venue.id}>
-                      <td>
-                        <strong>{venue.id}</strong>
-                        <small>{venue.kind.toUpperCase()}</small>
-                      </td>
-                      <td>{venueModeLabel(venue)}</td>
-                      <td>
-                        <span className={`settings-chip settings-chip--${venueTone(venue)}`}>
-                          {venue.configured ? "已配置" : "未配置"}
-                        </span>
-                      </td>
-                      <td>{venue.read_only ? "只读" : "可交易"}</td>
-                    </tr>
-                  ))
-                ) : (
-                  <tr>
-                    <td colSpan={4} className="tone-muted">
-                      加载中
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+        <details className="settings-disclosure settings-disclosure--wide">
+          <summary className="settings-disclosure__summary">
+            <span className="settings-disclosure__label"><ServerCog size={14} />高级配置</span>
+            <small>分析频率与模型接入</small>
+          </summary>
+          <div className="settings-disclosure__content">
+            <ScanFrequencySettings settings={settings} onSave={onSave} />
+
+            <div className="settings-section">
+              <div className="settings-section__title">
+                <ServerCog size={14} />
+                <span>模型设置</span>
+              </div>
+              <div className="settings-form">
+                {error ? <div className="inline-alert">{error}</div> : null}
+                <label>
+                  <span>供应商</span>
+                  <select
+                    value={currentForm.llm_provider}
+                    onChange={(event) => updateField("llm_provider", event.target.value)}
+                  >
+                    <option value="anthropic">Anthropic</option>
+                    <option value="deepseek">DeepSeek</option>
+                  </select>
+                </label>
+                <label>
+                  <span>主模型</span>
+                  <input
+                    value={currentForm.llm_model}
+                    placeholder={currentForm.llm_provider === "deepseek" ? "deepseek-v4-pro" : "claude-opus-4-8"}
+                    onChange={(event) => updateField("llm_model", event.target.value)}
+                  />
+                </label>
+                <label>
+                  <span>快速模型</span>
+                  <input
+                    value={currentForm.llm_model_fast}
+                    placeholder={currentForm.llm_provider === "deepseek" ? "deepseek-v4-flash" : "claude-haiku-4-5-20251001"}
+                    onChange={(event) => updateField("llm_model_fast", event.target.value)}
+                  />
+                </label>
+                <label>
+                  <span>Base URL</span>
+                  <input
+                    value={currentForm.llm_base_url}
+                    placeholder={currentForm.llm_provider === "deepseek" ? "https://api.deepseek.com" : "默认"}
+                    disabled
+                  />
+                </label>
+                <label>
+                  <span>Anthropic Key</span>
+                  <input
+                    type="password"
+                    value={currentForm.anthropic_api_key}
+                    placeholder={settings.llm_provider === "anthropic" && settings.llm_enabled ? "已配置，留空不变" : "sk-ant-..."}
+                    onChange={(event) => updateField("anthropic_api_key", event.target.value)}
+                  />
+                </label>
+                <label>
+                  <span>DeepSeek Key</span>
+                  <input
+                    type="password"
+                    value={currentForm.deepseek_api_key}
+                    placeholder={settings.llm_provider === "deepseek" && settings.llm_enabled ? "已配置，留空不变" : "sk-..."}
+                    onChange={(event) => updateField("deepseek_api_key", event.target.value)}
+                  />
+                </label>
+                <label>
+                  <span>API 写操作令牌</span>
+                  <input
+                    type="password"
+                    value={currentForm.api_token}
+                    placeholder={settings.api_auth_enabled ? "输入 CYP_API_TOKEN" : "本机回环访问可留空"}
+                    onChange={(event) => updateField("api_token", event.target.value)}
+                  />
+                </label>
+                <button className="command-button command-button--primary" type="button" onClick={save} disabled={saving}>
+                  {saving ? "保存中" : "保存设置"}
+                </button>
+                <p className="muted-line">Base URL 仅可通过启动配置修改；模型密钥不会回显，API 令牌只保存在当前浏览器。</p>
+              </div>
+            </div>
           </div>
-        </div>
+        </details>
+
+        <details className="settings-disclosure settings-disclosure--wide">
+          <summary className="settings-disclosure__summary">
+            <span className="settings-disclosure__label"><KeyRound size={14} />运行诊断与凭据</span>
+            <small>运行参数、接入状态与场所能力</small>
+          </summary>
+          <div className="settings-disclosure__content">
+            <div className="settings-section">
+              <div className="settings-section__title">
+                <ServerCog size={14} />
+                <span>运行状态</span>
+              </div>
+              <div className="metric-stack">
+                <MetricRow label="审批" value={settings.approval} />
+                <MetricRow label="执行场所" value={settings.execution_venue} />
+                <MetricRow label="行情源" value={settings.data_source} />
+                <MetricRow label="扫描 / 监控" value={`${formatSeconds(settings.intervals.scan)} / ${formatSeconds(settings.intervals.monitor)}`} />
+                <MetricRow label="并发 / 日志" value={`${settings.runtime.max_concurrency} / ${settings.runtime.log_level}`} />
+                <MetricRow
+                  label="K 线归档"
+                  value={settings.runtime.ohlcv_archive_enabled ? `PostgreSQL / ${settings.runtime.ohlcv_retention_days} 天` : "已关闭"}
+                />
+                <MetricRow label="合约策略" value={settings.allow_perp ? "允许" : "关闭"} />
+              </div>
+              <a className="command-button settings-audit-download" href="/api/audit/export" download>
+                <Download size={14} />
+                导出订单与成交审计
+              </a>
+            </div>
+
+            <div className="settings-section">
+              <div className="settings-section__title">
+                <KeyRound size={14} />
+                <span>凭据</span>
+              </div>
+              <div className="metric-stack">
+                <MetricRow label={`CEX (${settings.cex_id})`} value={settings.cex_trading_configured ? "已配置" : "未配置"} />
+                <MetricRow label="OKX" value={`${settings.okx.configured ? "已配置" : "未配置"} / ${settings.okx.demo ? "Demo" : "实盘"}`} />
+                <MetricRow label="LLM Key" value={settings.llm_enabled ? "已配置" : "未配置"} />
+              </div>
+            </div>
+
+            <div className="settings-section settings-section--wide">
+              <div className="table-wrap settings-venue-table">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>场所</th>
+                      <th>能力</th>
+                      <th>配置</th>
+                      <th>权限</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {venues.length ? (
+                      venues.map((venue) => (
+                        <tr key={venue.id}>
+                          <td>
+                            <strong>{venue.id}</strong>
+                            <small>{venue.kind.toUpperCase()}</small>
+                          </td>
+                          <td>{venueModeLabel(venue)}</td>
+                          <td>
+                            <span className={`settings-chip settings-chip--${venueTone(venue)}`}>
+                              {venue.configured ? "已配置" : "未配置"}
+                            </span>
+                          </td>
+                          <td>{venue.read_only ? "只读" : "可交易"}</td>
+                        </tr>
+                      ))
+                    ) : (
+                      <tr>
+                        <td colSpan={4} className="tone-muted">
+                          加载中
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </details>
       </div>
     </Panel>
   );

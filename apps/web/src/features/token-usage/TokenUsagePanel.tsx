@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Bot, CircleDollarSign, Cpu, Gauge, Layers3, Zap } from "lucide-react";
+import { Bot, ChevronDown, CircleDollarSign, Cpu, Gauge, Layers3, Zap } from "lucide-react";
 
 import { cypApi } from "../../shared/api/client";
 import type { TokenUsageDimension, TokenUsageTrend } from "../../shared/api/types";
@@ -96,6 +96,7 @@ function DimensionList({ title, items }: { title: string; items: TokenUsageDimen
 
 export function TokenUsagePanel() {
 	const [days, setDays] = useState<(typeof ranges)[number]>(7);
+	const [detailsOpen, setDetailsOpen] = useState(false);
 	const usage = usePollingResource(() => cypApi.tokenUsage(days), 30_000);
 
 	useEffect(() => {
@@ -106,6 +107,7 @@ export function TokenUsagePanel() {
 	const today = report?.today;
 	const utilization = Math.min(100, Math.max(0, (today?.utilization ?? 0) * 100));
 	const tone = today?.paused ? "bad" : today?.level === "critical" || today?.level === "warning" ? "warn" : "ok";
+	const initialLoading = usage.loading && !report;
 
 	return (
 		<Panel
@@ -113,16 +115,26 @@ export function TokenUsagePanel() {
 			icon={<Cpu />}
 			className="token-usage-panel"
 			actions={(
-				<div className="market-range" aria-label="统计范围">
-					{ranges.map((range) => <button key={range} type="button" className={days === range ? "is-active" : ""} onClick={() => setDays(range)}>{range}天</button>)}
+				<div className="token-panel-actions">
+					<div className="market-range" aria-label="统计范围">
+						{ranges.map((range) => <button key={range} type="button" className={days === range ? "is-active" : ""} onClick={() => setDays(range)}>{range}天</button>)}
+					</div>
+					<button
+						className={`token-details-toggle ${detailsOpen ? "is-open" : ""}`}
+						type="button"
+						aria-expanded={detailsOpen}
+						onClick={() => setDetailsOpen((current) => !current)}
+					>
+						{detailsOpen ? "收起" : "查看明细"}<ChevronDown size={14} />
+					</button>
 				</div>
 			)}
 		>
 			{usage.error ? <div className="inline-alert">Token 统计读取失败：{usage.error}</div> : null}
-			<div className="token-summary-grid">
-				<article><Zap /><span>今日 Token</span><strong>{formatTokens(today?.total_tokens ?? 0)}</strong><small>输入 {formatTokens(today?.input_tokens ?? 0)} · 输出 {formatTokens(today?.output_tokens ?? 0)}</small></article>
-				<article><CircleDollarSign /><span>今日成本</span><strong>{formatUSD(today?.cost_usd ?? 0)}</strong><small>日预算 {formatUSD(today?.cost_budget_usd ?? 0)}</small></article>
-				<article><Bot /><span>调用次数</span><strong>{today?.calls ?? 0}</strong><small>失败 {today?.errors ?? 0} · 拦截 {today?.budget_rejections ?? 0}</small></article>
+			<div className="token-summary-grid" aria-busy={initialLoading || undefined}>
+				<article><Zap /><span>今日 Token</span><strong>{initialLoading ? "--" : formatTokens(today?.total_tokens ?? 0)}</strong><small>输入 {formatTokens(today?.input_tokens ?? 0)} · 输出 {formatTokens(today?.output_tokens ?? 0)}</small></article>
+				<article><CircleDollarSign /><span>今日成本</span><strong>{initialLoading ? "--" : formatUSD(today?.cost_usd ?? 0)}</strong><small>日预算 {formatUSD(today?.cost_budget_usd ?? 0)}</small></article>
+				<article><Bot /><span>调用次数</span><strong>{initialLoading ? "--" : today?.calls ?? 0}</strong><small>失败 {today?.errors ?? 0} · 拦截 {today?.budget_rejections ?? 0}</small></article>
 				<article><Gauge /><span>成功率</span><strong>{today?.calls ? `${((today.success_rate ?? 0) * 100).toFixed(1)}%` : "--"}</strong><small>{today?.timezone ?? "Asia/Shanghai"} 自然日</small></article>
 			</div>
 
@@ -132,37 +144,41 @@ export function TokenUsagePanel() {
 				<small>Token {formatTokens(today?.total_tokens ?? 0)} / {formatTokens(today?.token_budget ?? 0)}；70% 提醒，90% 告警，100% 仅暂停新模型分析。</small>
 			</div>
 
-			<div className="token-analysis-grid">
-				<div className="token-trend-card">
-					<div className="token-subheading"><span><Layers3 size={14} />使用趋势</span><small>{report?.bucket === "day" ? "按日" : "按小时"} · 最近 {days} 天</small></div>
-					<UsageChart points={report?.trend ?? []} bucket={report?.bucket ?? "hour"} />
-				</div>
-				<div className="token-dimensions">
-					<DimensionList title="供应商" items={report?.by_provider ?? []} />
-					<DimensionList title="模型" items={report?.by_model ?? []} />
-					<DimensionList title="Agent" items={report?.by_agent ?? []} />
-					<DimensionList title="币种" items={report?.by_symbol ?? []} />
-					<DimensionList title="来源" items={report?.by_source ?? []} />
-				</div>
-			</div>
+			{detailsOpen ? (
+				<div className="token-details" role="region" aria-label="模型调用明细">
+					<div className="token-analysis-grid">
+						<div className="token-trend-card">
+							<div className="token-subheading"><span><Layers3 size={14} />使用趋势</span><small>{report?.bucket === "day" ? "按日" : "按小时"} · 最近 {days} 天</small></div>
+							<UsageChart points={report?.trend ?? []} bucket={report?.bucket ?? "hour"} />
+						</div>
+						<div className="token-dimensions">
+							<DimensionList title="供应商" items={report?.by_provider ?? []} />
+							<DimensionList title="模型" items={report?.by_model ?? []} />
+							<DimensionList title="Agent" items={report?.by_agent ?? []} />
+							<DimensionList title="币种" items={report?.by_symbol ?? []} />
+							<DimensionList title="来源" items={report?.by_source ?? []} />
+						</div>
+					</div>
 
-			<div className="token-recent">
-				<div className="token-subheading"><span>最近调用明细</span><small>只保存统计元数据，不保存 Prompt 和回复正文</small></div>
-				{report?.recent.length ? (
-					<div className="table-wrap"><table><thead><tr><th>时间 / Run</th><th>供应商 / 模型</th><th>Agent / 币种</th><th>来源</th><th>Token</th><th>成本</th><th>耗时</th><th>状态</th></tr></thead><tbody>
-						{report.recent.map((event) => <tr key={`${event.id}-${event.ts}`}>
-							<td><strong>{new Date(event.ts).toLocaleString("zh-CN", { hour12: false })}</strong><small>{event.run_id || "未绑定运行"}</small></td>
-							<td><strong>{event.provider}</strong><small>{event.model}</small></td>
-							<td><strong>{event.agent || "未归因"}</strong><small>{event.symbol || "-"}</small></td>
-							<td>{event.source === "automatic" ? "自动" : event.source === "manual" ? "人工" : event.source}</td>
-							<td>{formatTokens(event.input_tokens + event.output_tokens)}{event.token_estimated ? <small>估算</small> : null}</td>
-							<td>{formatUSD(event.cost_usd)}{event.cost_estimated ? <small>估算</small> : null}</td>
-							<td>{event.duration_ms} ms</td>
-							<td><span className={`token-status token-status--${event.status}`}>{statusLabel(event.status)}</span></td>
-						</tr>)}
-					</tbody></table></div>
-				) : <EmptyState>当前范围内暂无调用明细。</EmptyState>}
-			</div>
+					<div className="token-recent">
+						<div className="token-subheading"><span>最近调用明细</span><small>只保存统计元数据，不保存 Prompt 和回复正文</small></div>
+						{report?.recent.length ? (
+							<div className="table-wrap"><table><thead><tr><th>时间 / Run</th><th>供应商 / 模型</th><th>Agent / 币种</th><th>来源</th><th>Token</th><th>成本</th><th>耗时</th><th>状态</th></tr></thead><tbody>
+								{report.recent.map((event) => <tr key={`${event.id}-${event.ts}`}>
+									<td><strong>{new Date(event.ts).toLocaleString("zh-CN", { hour12: false })}</strong><small>{event.run_id || "未绑定运行"}</small></td>
+									<td><strong>{event.provider}</strong><small>{event.model}</small></td>
+									<td><strong>{event.agent || "未归因"}</strong><small>{event.symbol || "-"}</small></td>
+									<td>{event.source === "automatic" ? "自动" : event.source === "manual" ? "人工" : event.source}</td>
+									<td>{formatTokens(event.input_tokens + event.output_tokens)}{event.token_estimated ? <small>估算</small> : null}</td>
+									<td>{formatUSD(event.cost_usd)}{event.cost_estimated ? <small>估算</small> : null}</td>
+									<td>{event.duration_ms} ms</td>
+									<td><span className={`token-status token-status--${event.status}`}>{statusLabel(event.status)}</span></td>
+								</tr>)}
+							</tbody></table></div>
+						) : <EmptyState compact>当前范围内暂无调用明细。</EmptyState>}
+					</div>
+				</div>
+			) : null}
 		</Panel>
 	);
 }

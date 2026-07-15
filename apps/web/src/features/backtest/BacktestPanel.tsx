@@ -159,24 +159,32 @@ export function BacktestPanel() {
           </label>
         ) : null}
 
-        {NUMBER_FIELDS.map((field) => (
-          <label key={field.name}>
-            <span>{field.label}</span>
-            <input
-              type="number"
-              min={field.min}
-              max={field.max}
-              step={field.step}
-              value={request[field.name]}
-              onChange={(event) => updateNumber(field.name, event.currentTarget.valueAsNumber)}
-            />
-          </label>
-        ))}
-
         <button className="command-button command-button--primary backtest-run" type="submit" disabled={loading}>
           <Play size={15} />
           {loading ? "运行中" : "运行回测"}
         </button>
+
+        <details className="backtest-advanced">
+          <summary>
+            <strong>高级参数</strong>
+            <span>数据长度、信号窗口、模拟假设与交易成本</span>
+          </summary>
+          <div className="backtest-advanced__fields">
+            {NUMBER_FIELDS.map((field) => (
+              <label key={field.name}>
+                <span>{field.label}</span>
+                <input
+                  type="number"
+                  min={field.min}
+                  max={field.max}
+                  step={field.step}
+                  value={request[field.name]}
+                  onChange={(event) => updateNumber(field.name, event.currentTarget.valueAsNumber)}
+                />
+              </label>
+            ))}
+          </div>
+        </details>
       </form>
 
       {error ? <div className="inline-alert">{error}</div> : null}
